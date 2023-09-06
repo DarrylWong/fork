@@ -17,6 +17,7 @@ import (
 	"context"
 	gosql "database/sql"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"math"
 	"math/bits"
 	"sort"
@@ -215,6 +216,10 @@ const (
 	// defaultDNSCacheRefresh is used to change the default --dns-refresh interval
 	defaultDNSCacheRefresh = 30 * time.Second
 )
+
+// MaxTransientErrorRetries is used to limit the amount of times workload retries
+// transient errors.
+const MaxTransientErrorRetries = 2
 
 // TypedTuples returns a BatchedTuples where each batch has size 1. It's
 // intended to be easier to use than directly specifying a BatchedTuples, but
@@ -491,5 +496,19 @@ func ApproxDatumSize(x interface{}) int64 {
 		return 12
 	default:
 		panic(errors.AssertionFailedf("unsupported type %T: %v", x, x))
+	}
+}
+
+// IsAmbiguousError returns whether an error is a retryable transient error.
+func IsAmbiguousError(err error) bool {
+	if err == nil {
+		return false
+	}
+	pgerr := pgerror.Flatten(err)
+	switch pgerr.Code {
+	case "40003":
+		return strings.Contains(pgerr.Message, "result is ambiguous")
+	default:
+		return false
 	}
 }

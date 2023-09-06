@@ -96,6 +96,7 @@ type kv struct {
 	keySize                              int
 	insertCount                          int
 	useBackgroundTxnQoS                  bool
+	maxRetries                           int64
 }
 
 func init() {
@@ -181,6 +182,8 @@ var kvMeta = workload.Meta{
 			`Delay before sfu write transaction commits or aborts`)
 		g.flags.BoolVar(&g.useBackgroundTxnQoS, `background-qos`, false,
 			`Set default_transaction_quality_of_service session variable to "background".`)
+		g.flags.Int64Var(&g.maxRetries, "max-retries", 0,
+			`Maximum number of ambiguous error retries.`)
 		g.connFlags = workload.NewConnFlags(&g.flags)
 		return g
 	},
@@ -270,6 +273,10 @@ func (w *kv) validateConfig() (err error) {
 			return errors.Errorf(
 				"zipfian --write-seq is incompatible with a --sequential or default (random) key sequence")
 		}
+	}
+	if w.maxRetries < 0 {
+		return errors.Errorf("Value of `--max-retries` (%d) must not be negative",
+			w.maxRetries)
 	}
 	// We create generator and discard it to have a single piece of code that
 	// handles generator type which affects target key range.
@@ -567,6 +574,7 @@ type kvOp struct {
 	g               keyGenerator
 	t               keyTransformer
 	numEmptyResults *atomic.Int64
+	numRetries      *atomic.Int64
 }
 
 func (o *kvOp) run(ctx context.Context) (retErr error) {
@@ -578,6 +586,12 @@ func (o *kvOp) run(ctx context.Context) (retErr error) {
 
 	if o.qosStmt != nil {
 		_, err := o.qosStmt.Exec(ctx)
+		for ; workload.IsAmbiguousError(err) && o.config.maxRetries > 0; o.numRetries.Add(1) {
+			if o.retryLimitExceeded() {
+				return errors.Wrapf(err, "Ambiguous error retry limit exceeded")
+			}
+			_, err = o.qosStmt.Exec(ctx)
+		}
 		if err != nil {
 			return err
 		}
@@ -590,6 +604,12 @@ func (o *kvOp) run(ctx context.Context) (retErr error) {
 		}
 		start := timeutil.Now()
 		rows, err := o.readStmt.Query(ctx, args...)
+		for ; workload.IsAmbiguousError(err) && o.config.maxRetries > 0; o.numRetries.Add(1) {
+			if o.retryLimitExceeded() {
+				return errors.Wrapf(err, "Ambiguous error retry limit exceeded")
+			}
+			_, err = o.readStmt.Query(ctx, args...)
+		}
 		if err != nil {
 			return err
 		}
@@ -614,6 +634,12 @@ func (o *kvOp) run(ctx context.Context) (retErr error) {
 			args[i] = o.g.readKey()
 		}
 		_, err := o.delStmt.Exec(ctx, args...)
+		for ; workload.IsAmbiguousError(err) && o.config.maxRetries > 0; o.numRetries.Add(1) {
+			if o.retryLimitExceeded() {
+				return errors.Wrapf(err, "Ambiguous error retry limit exceeded")
+			}
+			_, err = o.delStmt.Exec(ctx, args...)
+		}
 		if err != nil {
 			return err
 		}
@@ -984,4 +1010,11 @@ func (w *kv) randFillBlock(r *rand.Rand, buf []byte, uniqueSize int) {
 			buf[i] = byte(r.Int() & 0xff)
 		}
 	}
+}
+
+// retryLimitExceeded returns if the workload has exceeded the retry limit
+// for ambiguous errors.
+func (o *kvOp) retryLimitExceeded() bool {
+	retries := o.numRetries.Load()
+	return retries >= o.config.maxRetries
 }
