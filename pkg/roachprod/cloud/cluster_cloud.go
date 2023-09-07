@@ -123,6 +123,9 @@ func (c *Cluster) GCAt() time.Time {
 	// NB: GC is performed every hour. We calculate the lifetime of the cluster
 	// taking the GC time into account to accurately reflect when the cluster
 	// will be destroyed.
+	if c.IsEmptyCluster() {
+		return c.CreatedAt.Add(2*time.Hour - 1).Truncate(time.Hour)
+	}
 	return c.ExpiresAt().Add(time.Hour - 1).Truncate(time.Hour)
 }
 
