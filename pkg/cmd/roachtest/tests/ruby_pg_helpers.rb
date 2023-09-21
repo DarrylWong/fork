@@ -11,7 +11,7 @@ require 'openssl'
 require_relative 'helpers/scheduler.rb'
 require_relative 'helpers/tcp_gate_scheduler.rb'
 
-DEFAULT_TEST_DIR_STR = File.join(Dir.pwd, "tmp_test_specs")
+DEFAULT_TEST_DIR_STR = Dir.pwd
 TEST_DIR_STR = ENV['RUBY_PG_TEST_DIR'] || DEFAULT_TEST_DIR_STR
 TEST_DIRECTORY = Pathname.new(TEST_DIR_STR)
 DATA_OBJ_MEMSIZE = 40
@@ -25,7 +25,25 @@ module PG::TestingHelpers
 		if mod.respond_to?( :around )
 
 			mod.before( :all ) do
-				@conn = connect_testing_db
+        @port = $pg_server.port
+        @conninfo = $pg_server.conninfo
+        @unix_socket = $pg_server.unix_socket
+        @conn = $pg_server.connect
+
+        # Find a local port that is not in use
+        @port_down = @port + 10
+        loop do
+          @port_down = @port_down + 1
+          begin
+            TCPSocket.new("::1", @port_down)
+          rescue SystemCallError
+            begin
+              TCPSocket.new("127.0.0.1", @port_down)
+            rescue SystemCallError
+              break
+            end
+          end
+        end
 			end
 
 			mod.around( :each ) do |example|
@@ -95,96 +113,99 @@ module PG::TestingHelpers
 	module_function
 	###############
 
-	### Create a string that contains the ANSI codes specified and return it
-	def ansi_code( *attributes )
-		attributes.flatten!
-		attributes.collect! {|at| at.to_s }
+	module Loggable
+		### Create a string that contains the ANSI codes specified and return it
+		def ansi_code( *attributes )
+			attributes.flatten!
+			attributes.collect! {|at| at.to_s }
 
-		return '' unless /(?:vt10[03]|xterm(?:-color)?|linux|screen)/i =~ ENV['TERM']
-		attributes = ANSI_ATTRIBUTES.values_at( *attributes ).compact.join(';')
+			return '' unless /(?:vt10[03]|xterm(?:-color)?|linux|screen)/i =~ ENV['TERM']
+			attributes = ANSI_ATTRIBUTES.values_at( *attributes ).compact.join(';')
 
-		# $stderr.puts "  attr is: %p" % [attributes]
-		if attributes.empty?
-			return ''
-		else
-			return "\e[%sm" % attributes
+			# $stderr.puts "  attr is: %p" % [attributes]
+			if attributes.empty?
+				return ''
+			else
+				return "\e[%sm" % attributes
+			end
+		end
+
+
+		### Colorize the given +string+ with the specified +attributes+ and return it, handling
+		### line-endings, color reset, etc.
+		def colorize( *args )
+			string = ''
+
+			if block_given?
+				string = yield
+			else
+				string = args.shift
+			end
+
+			ending = string[/(\s)$/] || ''
+			string = string.rstrip
+
+			return ansi_code( args.flatten ) + string + ansi_code( 'reset' ) + ending
+		end
+
+
+		### Output a message with highlighting.
+		def message( *msg )
+			$stderr.puts( colorize(:bold) { msg.flatten.join(' ') } )
+		end
+
+
+		### Output a logging message if $VERBOSE is true
+		def trace( *msg )
+			return unless $VERBOSE
+			output = colorize( msg.flatten.join(' '), 'yellow' )
+			$stderr.puts( output )
+		end
+
+
+		### Return the specified args as a string, quoting any that have a space.
+		def quotelist( *args )
+			return args.flatten.collect {|part| part.to_s =~ /\s/ ? part.to_s.inspect : part.to_s }
+		end
+
+
+		### Run the specified command +cmd+ with system(), failing if the execution
+		### fails.
+		def run( *cmd )
+			cmd.flatten!
+
+			if cmd.length > 1
+				trace( quotelist(*cmd) )
+			else
+				trace( cmd )
+			end
+
+			system( *cmd )
+			raise "Command failed: [%s]" % [cmd.join(' ')] unless $?.success?
+		end
+
+
+		### Run the specified command +cmd+ after redirecting stdout and stderr to the specified
+		### +logpath+, failing if the execution fails.
+		def log_and_run( logpath, *cmd )
+			cmd.flatten!
+
+			if cmd.length > 1
+				trace( quotelist(*cmd) )
+			else
+				trace( cmd )
+			end
+
+			# Eliminate the noise of creating/tearing down the database by
+			# redirecting STDERR/STDOUT to a logfile
+			logfh = File.open( logpath, File::WRONLY|File::CREAT|File::APPEND )
+			system( *cmd, [STDOUT, STDERR] => logfh )
+
+			raise "Command failed: [%s]" % [cmd.join(' ')] unless $?.success?
 		end
 	end
 
-
-	### Colorize the given +string+ with the specified +attributes+ and return it, handling
-	### line-endings, color reset, etc.
-	def colorize( *args )
-		string = ''
-
-		if block_given?
-			string = yield
-		else
-			string = args.shift
-		end
-
-		ending = string[/(\s)$/] || ''
-		string = string.rstrip
-
-		return ansi_code( args.flatten ) + string + ansi_code( 'reset' ) + ending
-	end
-
-
-	### Output a message with highlighting.
-	def message( *msg )
-		$stderr.puts( colorize(:bold) { msg.flatten.join(' ') } )
-	end
-
-
-	### Output a logging message if $VERBOSE is true
-	def trace( *msg )
-		return unless $VERBOSE
-		output = colorize( msg.flatten.join(' '), 'yellow' )
-		$stderr.puts( output )
-	end
-
-
-	### Return the specified args as a string, quoting any that have a space.
-	def quotelist( *args )
-		return args.flatten.collect {|part| part.to_s =~ /\s/ ? part.to_s.inspect : part.to_s }
-	end
-
-
-	### Run the specified command +cmd+ with system(), failing if the execution
-	### fails.
-	def run( *cmd )
-		cmd.flatten!
-
-		if cmd.length > 1
-			trace( quotelist(*cmd) )
-		else
-			trace( cmd )
-		end
-
-		system( *cmd )
-		raise "Command failed: [%s]" % [cmd.join(' ')] unless $?.success?
-	end
-
-
-	### Run the specified command +cmd+ after redirecting stdout and stderr to the specified
-	### +logpath+, failing if the execution fails.
-	def log_and_run( logpath, *cmd )
-		cmd.flatten!
-
-		if cmd.length > 1
-			trace( quotelist(*cmd) )
-		else
-			trace( cmd )
-		end
-
-		# Eliminate the noise of creating/tearing down the database by
-		# redirecting STDERR/STDOUT to a logfile
-		logfh = File.open( logpath, File::WRONLY|File::CREAT|File::APPEND )
-		system( *cmd, [STDOUT, STDERR] => logfh )
-
-		raise "Command failed: [%s]" % [cmd.join(' ')] unless $?.success?
-	end
-
+	extend Loggable
 
 	### Check the current directory for directories that look like they're
 	### testing directories from previous tests, and tell any postgres instances
@@ -212,62 +233,83 @@ module PG::TestingHelpers
 		end
 	end
 
-	def define_testing_conninfo
-    ENV['PGPORT'] ||= "26257"
-		@port = ENV['PGPORT'].to_i
-		ENV['PGHOST'] = 'localhost'
-    ENV['PGUSER'] = 'root'
-		@conninfo = "user=root host=localhost port=#{@port} dbname=test"
-		@unix_socket = TEST_DIRECTORY.to_s
-	end
+  class PostgresServer
+    include Loggable
 
-	### Set up a CockroachDB database instance for testing.
-	def setup_testing_db( description )
-		stop_existing_postmasters()
+    attr_reader :port
+    attr_reader :conninfo
+    attr_reader :unix_socket
 
-		trace "Setting up test database for #{description}"
-		@test_pgdata = TEST_DIRECTORY + 'data'
-		@test_pgdata.mkpath
+    ### Set up a CockroachDB database instance for testing.
+    def initialize( name, port: 26257, postgresql_conf: '' )
+      trace "Setting up test database for #{name} on port #{port}"
+      @name = name
+      @port = port
+      @conninfo = "user=root host=localhost port=#{@port} dbname=test"
+      @test_dir = TEST_DIRECTORY + "tmp_test_#{@name}"
+      @test_pgdata = @test_dir + 'data'
+      @test_pgdata.mkpath
+      @pg_bin_dir = nil
+      @unix_socket = @test_dir.to_s
 
-		define_testing_conninfo
+      @logfile = @test_dir + 'setup.log'
+      trace "Command output logged to #{@logfile}"
 
-		@logfile = TEST_DIRECTORY + 'setup.log'
-		trace "Command output logged to #{@logfile}"
+      begin
+        unless (@test_pgdata+"postgresql.conf").exist?
+          FileUtils.rm_rf( @test_pgdata, :verbose => $DEBUG )
+          trace "GG"
+          trace "Running initdb"
+        end
 
-		begin
-			unless (@test_pgdata+"postgresql.conf").exist?
-				FileUtils.rm_rf( @test_pgdata, :verbose => $DEBUG )
-				trace "GG"
-				trace "Running initdb"
-			end
+      rescue => err
+        $stderr.puts "%p during test setup: %s" % [ err.class, err.message ]
+        $stderr.puts "See #{@logfile} for details."
+        $stderr.puts err.backtrace if $DEBUG
+        fail
+      end
+    end
 
-			trace "Creating the test DB"
-			log_and_run @logfile, '/home/ubuntu/cockroach', 'sql', '--insecure', '-e', 'DROP DATABASE IF EXISTS test'
-			log_and_run @logfile, '/home/ubuntu/cockroach', 'sql', '--insecure', '-e', 'CREATE DATABASE test'
+    def generate_ssl_certs(output_dir)
+      gen = CertGenerator.new(output_dir)
 
-		rescue => err
-			$stderr.puts "%p during test setup: %s" % [ err.class, err.message ]
-			$stderr.puts "See #{@logfile} for details."
-			$stderr.puts err.backtrace if $DEBUG
-			fail
-		end
-	end
+      trace "create ca-key"
+      ca_key = gen.create_key('ruby-pg-ca-key')
+      ca_cert = gen.create_ca_cert('ruby-pg-ca-cert', ca_key, '/CN=ruby-pg root key')
 
-	def connect_testing_db
-		define_testing_conninfo
-		conn = PG.connect( @conninfo )
-		conn.set_notice_processor do |message|
-			$stderr.puts( description + ':' + message ) if $DEBUG
-		end
+      trace "create server cert"
+      key = gen.create_key('ruby-pg-server-key')
+      csr = gen.create_signing_request('ruby-pg-server-csr', '/CN=localhost', key)
+      gen.create_cert_from_csr('ruby-pg-server-cert', csr, ca_cert, ca_key, dns_names: %w[localhost] )
 
-		return conn
-	end
+      trace "create client cert"
+      key = gen.create_key('ruby-pg-client-key')
+      csr = gen.create_signing_request('ruby-pg-client-csr', '/CN=ruby-pg client', key)
+      gen.create_cert_from_csr('ruby-pg-client-cert', csr, ca_cert, ca_key)
+    end
 
-	def teardown_testing_db
-		trace "Tearing down test database"
-		# This is changed to a no-op so that we can inspect the database after the
-		# test runs.
-	end
+    def create_test_db
+      trace "Creating the test DB"
+      log_and_run @logfile, '/home/ubuntu/cockroach', 'sql', '--insecure', '-e', 'DROP DATABASE IF EXISTS test'
+      log_and_run @logfile, '/home/ubuntu/cockroach', 'sql', '--insecure', '-e', 'CREATE DATABASE test'
+    end
+
+    def connect
+      conn = PG.connect( @conninfo )
+
+      conn.set_notice_processor do |message|
+        $stderr.puts( @name + ':' + message ) if $DEBUG
+      end
+
+      return conn
+    end
+
+    def teardown
+      trace "Tearing down test database"
+      # This is changed to a no-op so that we can inspect the database after the
+      # test runs.
+    end
+  end
 
 	class CertGenerator
 		attr_reader :output_dir
@@ -376,24 +418,6 @@ module PG::TestingHelpers
 
 			csr_cert
 		end
-	end
-
-	def generate_ssl_certs(output_dir)
-		gen = CertGenerator.new(output_dir)
-
-		trace "create ca-key"
-		ca_key = gen.create_key('ruby-pg-ca-key')
-		ca_cert = gen.create_ca_cert('ruby-pg-ca-cert', ca_key, '/CN=ruby-pg root key')
-
-		trace "create server cert"
-		key = gen.create_key('ruby-pg-server-key')
-		csr = gen.create_signing_request('ruby-pg-server-csr', '/CN=localhost', key)
-		gen.create_cert_from_csr('ruby-pg-server-cert', csr, ca_cert, ca_key, dns_names: %w[localhost] )
-
-		trace "create client cert"
-		key = gen.create_key('ruby-pg-client-key')
-		csr = gen.create_signing_request('ruby-pg-client-csr', '/CN=ruby-pg client', key)
-		gen.create_cert_from_csr('ruby-pg-client-cert', csr, ca_cert, ca_key)
 	end
 
 	def check_for_lingering_connections( conn )
@@ -541,9 +565,16 @@ RSpec.configure do |config|
 
 	### Automatically set up and tear down the database
 	config.before(:suite) do |*args|
-		PG::TestingHelpers.setup_testing_db("the spec suite")
+      PG::TestingHelpers.stop_existing_postmasters
+
+      ENV['PGHOST'] = 'localhost'
+      ENV['PGPORT'] ||= "26257"
+      port = ENV['PGPORT'].to_i
+      ENV['PGUSER'] = 'root'
+      $pg_server = PG::TestingHelpers::PostgresServer.new("specs", port: port)
+      $pg_server.create_test_db
 	end
 	config.after(:suite) do
-		PG::TestingHelpers.teardown_testing_db
+		$pg_server.teardown
 	end
 end
