@@ -14,9 +14,11 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"strings"
 
 	"github.com/cockroachdb/cockroach/pkg/build/bazel"
 	"github.com/cockroachdb/cockroach/pkg/util/buildutil"
+	"github.com/cockroachdb/cockroach/pkg/util/envutil"
 	"github.com/cockroachdb/cockroach/pkg/util/randutil"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 )
@@ -32,6 +34,8 @@ func IsMetamorphicBuild() bool {
 }
 
 var metamorphicBuild bool
+
+var disabledMetamorphicConstants map[string]bool
 
 const (
 	metamorphicBuildProbability = 0.8
@@ -67,12 +71,13 @@ const (
 //
 // The given name is used for logging.
 func ConstantWithMetamorphicTestValue(name string, defaultValue, metamorphicValue int) int {
-	if metamorphicBuild {
+	if metamorphicBuild && !disabledMetamorphicConstants[name] {
 		rng.Lock()
 		defer rng.Unlock()
 		if rng.r.Float64() < metamorphicValueProbability {
 			logMetamorphicValue(name, metamorphicValue)
 			return metamorphicValue
+
 		}
 	}
 	return defaultValue
@@ -88,6 +93,7 @@ var rng struct {
 // sub-processes. If it exists and is set to something truthy as defined by
 // strconv.ParseBool then metamorphic testing will not be enabled.
 const DisableMetamorphicEnvVar = "COCKROACH_INTERNAL_DISABLE_METAMORPHIC_TESTING"
+const MetamorphicExclusionListEnvVar = "COCKROACH_METAMORPHIC_EXCLUSION_LIST"
 
 // Returns true iff the current process is eligible to enable metamorphic
 // variables. When run under Bazel, checking if we are in the Go test wrapper
@@ -111,6 +117,17 @@ func init() {
 		if !disableMetamorphicTesting {
 			rng.r, _ = randutil.NewTestRand()
 			metamorphicBuild = rng.r.Float64() < metamorphicBuildProbability
+
+			disabledMetamorphicConstants = make(map[string]bool)
+			if exclusionList, found := envutil.EnvString(MetamorphicExclusionListEnvVar, 0); found {
+				constants := strings.Split(exclusionList, ",")
+				for _, c := range constants {
+					disabledMetamorphicConstants[c] = true
+
+					/* REMOVE */
+					fmt.Printf("DISABLING: %s\n", c)
+				}
+			}
 		}
 	}
 }
@@ -121,7 +138,7 @@ func init() {
 //
 // The given name is used for logging.
 func ConstantWithMetamorphicTestRange(name string, defaultValue, min, max int) int {
-	if metamorphicBuild {
+	if metamorphicBuild && !disabledMetamorphicConstants[name] {
 		rng.Lock()
 		defer rng.Unlock()
 		if rng.r.Float64() < metamorphicValueProbability {
@@ -145,7 +162,11 @@ func ConstantWithMetamorphicTestBool(name string, defaultValue bool) bool {
 }
 
 func constantWithMetamorphicTestBoolInternal(name string, defaultValue bool, doLog bool) bool {
-	if metamorphicBuild {
+	/* REMOVE */
+	if disabledMetamorphicConstants[name] {
+		fmt.Printf("%s is disabled\n", name)
+	}
+	if metamorphicBuild && !disabledMetamorphicConstants[name] {
 		rng.Lock()
 		defer rng.Unlock()
 		if rng.r.Float64() < metamorphicBoolProbability {
@@ -175,7 +196,7 @@ func ConstantWithMetamorphicTestBoolWithoutLogging(name string, defaultValue boo
 func ConstantWithMetamorphicTestChoice(
 	name string, defaultValue interface{}, otherValues ...interface{},
 ) interface{} {
-	if metamorphicBuild {
+	if metamorphicBuild && !disabledMetamorphicConstants[name] {
 		values := append([]interface{}{defaultValue}, otherValues...)
 		rng.Lock()
 		defer rng.Unlock()

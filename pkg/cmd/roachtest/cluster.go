@@ -1980,6 +1980,8 @@ func (c *clusterImpl) StartE(
 		settings.Env = append(settings.Env, fmt.Sprintf("BAZEL_COVER_DIR=%s", c.goCoverDir))
 	}
 
+	setUnlessExists("COCKROACH_METAMORPHIC_EXCLUSION_LIST", strings.Join(settings.MetamorphicExclusionList, ","))
+
 	clusterSettingsOpts := []install.ClusterSettingOption{
 		install.TagOption(settings.Tag),
 		install.PGUrlCertsDirOption(settings.PGUrlCertsDir),

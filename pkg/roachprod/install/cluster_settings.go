@@ -23,6 +23,11 @@ type ClusterSettings struct {
 	NumRacks      int
 	// DebugDir is used to stash debug information.
 	DebugDir string
+
+	// MetamorphicExclusionList are the metamorphic constants that should
+	// be disabled.
+	MetamorphicExclusionList []string
+
 	// ClusterSettings are, eh, actual cluster settings, i.e.
 	// SET CLUSTER SETTING foo = 'bar'. The name clash is unfortunate.
 	ClusterSettings map[string]string
