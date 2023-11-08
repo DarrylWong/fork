@@ -15,7 +15,10 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
+<<<<<<< HEAD
 	"github.com/cockroachdb/cockroach/pkg/roachprod/config"
+=======
+>>>>>>> 74588be4bec (roachprod: remove default port assumption in start and start-sql)
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 )
