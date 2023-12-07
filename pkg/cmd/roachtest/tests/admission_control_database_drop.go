@@ -22,7 +22,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/clusterupgrade"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
-	"github.com/cockroachdb/cockroach/pkg/roachprod/config"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/prometheus"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/vm"
@@ -97,11 +96,7 @@ func registerDatabaseDrop(r registry.Registry) {
 					start: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 						settings := install.MakeClusterSettings(install.NumRacksOption(crdbNodes))
 						startOpts := option.DefaultStartOptsNoBackups()
-<<<<<<< HEAD
 						roachtestutil.SetDefaultSQLPort(c, startOpts.RoachprodOpts)
-=======
-						startOpts.RoachprodOpts.SQLPort = config.DefaultSQLPort
->>>>>>> 74588be4bec (roachprod: remove default port assumption in start and start-sql)
 						if err := c.StartE(ctx, t.L(), startOpts, settings, c.Range(1, crdbNodes)); err != nil {
 							t.Fatal(err)
 						}
@@ -204,13 +199,8 @@ func registerDatabaseDrop(r registry.Registry) {
 			runTPCE(ctx, t, c, tpceOptions{
 				start: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 					startOpts := option.DefaultStartOptsNoBackups()
-<<<<<<< HEAD
 					roachtestutil.SetDefaultSQLPort(c, startOpts.RoachprodOpts)
 					roachtestutil.SetDefaultAdminUIPort(c, startOpts.RoachprodOpts)
-=======
-					startOpts.RoachprodOpts.SQLPort = config.DefaultSQLPort
-					startOpts.RoachprodOpts.AdminUIPort = config.DefaultAdminUIPort
->>>>>>> 74588be4bec (roachprod: remove default port assumption in start and start-sql)
 					settings := install.MakeClusterSettings(install.NumRacksOption(crdbNodes))
 					if err := c.StartE(ctx, t.L(), startOpts, settings, c.Range(1, crdbNodes)); err != nil {
 						t.Fatal(err)

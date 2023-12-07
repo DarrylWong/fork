@@ -44,7 +44,7 @@ func runStatusServer(ctx context.Context, t test.Test, c cluster.Cluster) {
 		// talk to the servers before they are responding to status requests
 		// (resulting in 404's).
 		if err := retry.ForDuration(10*time.Second, func() error {
-			return httputil.GetJSON(http.Client{}, url, &details)
+			return httputil.GetJSON(*httputil.DefaultClient.Client, url, &details)
 		}); err != nil {
 			t.Fatal(err)
 		}

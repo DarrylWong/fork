@@ -2341,9 +2341,11 @@ func (c *clusterImpl) pgURLErr(
 	external bool,
 	tenant string,
 	sqlInstance int,
+	passwordAuth bool,
 ) ([]string, error) {
 	urls, err := roachprod.PgURL(ctx, l, c.MakeNodes(node), c.localCertsDir, roachprod.PGURLOptions{
 		External:           external,
+		PasswordAuth:       passwordAuth,
 		Secure:             c.localCertsDir != "",
 		VirtualClusterName: tenant,
 		SQLInstance:        sqlInstance,
@@ -2359,9 +2361,14 @@ func (c *clusterImpl) pgURLErr(
 
 // InternalPGUrl returns the internal Postgres endpoint for the specified nodes.
 func (c *clusterImpl) InternalPGUrl(
-	ctx context.Context, l *logger.Logger, node option.NodeListOption, tenant string, sqlInstance int,
+	ctx context.Context,
+	l *logger.Logger,
+	node option.NodeListOption,
+	tenant string,
+	sqlInstance int,
+	passwordAuth bool,
 ) ([]string, error) {
-	return c.pgURLErr(ctx, l, node, false, tenant, sqlInstance)
+	return c.pgURLErr(ctx, l, node, false, tenant, sqlInstance, passwordAuth)
 }
 
 // Silence unused warning.
@@ -2369,9 +2376,14 @@ var _ = (&clusterImpl{}).InternalPGUrl
 
 // ExternalPGUrl returns the external Postgres endpoint for the specified nodes.
 func (c *clusterImpl) ExternalPGUrl(
-	ctx context.Context, l *logger.Logger, node option.NodeListOption, tenant string, sqlInstance int,
+	ctx context.Context,
+	l *logger.Logger,
+	node option.NodeListOption,
+	tenant string,
+	sqlInstance int,
+	passwordAuth bool,
 ) ([]string, error) {
-	return c.pgURLErr(ctx, l, node, true, tenant, sqlInstance)
+	return c.pgURLErr(ctx, l, node, true, tenant, sqlInstance, passwordAuth)
 }
 
 func addrToAdminUIAddr(addr string) (string, error) {
@@ -2480,7 +2492,7 @@ func (c *clusterImpl) addr(
 	ctx context.Context, l *logger.Logger, node option.NodeListOption, external bool,
 ) ([]string, error) {
 	var addrs []string
-	urls, err := c.pgURLErr(ctx, l, node, external, "" /* tenant */, 0 /* sqlInstance */)
+	urls, err := c.pgURLErr(ctx, l, node, external, "" /* tenant */, 0 /* sqlInstance */, false)
 	if err != nil {
 		return nil, err
 	}
@@ -2538,7 +2550,7 @@ func (c *clusterImpl) ConnE(
 	for _, opt := range opts {
 		opt(connOptions)
 	}
-	urls, err := c.ExternalPGUrl(ctx, l, c.Node(node), connOptions.TenantName, connOptions.SQLInstance)
+	urls, err := c.ExternalPGUrl(ctx, l, c.Node(node), connOptions.TenantName, connOptions.SQLInstance, false)
 	if err != nil {
 		return nil, err
 	}
