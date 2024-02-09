@@ -82,10 +82,6 @@ func runNetworkAuthentication(ctx context.Context, t test.Test, c cluster.Cluste
 	startOpts.RoachprodOpts.ExtraArgs = append(startOpts.RoachprodOpts.ExtraArgs, "--locality=node=other", "--accept-sql-without-tls")
 	c.Start(ctx, t.L(), startOpts, settings, c.Range(2, n-1))
 
-	t.L().Printf("retrieving server addresses...")
-	serverAddrs, err := c.InternalAddr(ctx, t.L(), serverNodes)
-	require.NoError(t, err)
-
 	t.L().Printf("fetching certs...")
 	certsDir := "/home/ubuntu/certs"
 	localCertsDir, err := filepath.Abs("./network-certs")
@@ -113,9 +109,9 @@ func runNetworkAuthentication(ctx context.Context, t test.Test, c cluster.Cluste
 	require.NoError(t, err)
 
 	t.L().Printf("creating test user...")
-	_, err = db.Exec(`CREATE USER testuser WITH PASSWORD 'password' VALID UNTIL '2060-01-01'`)
-	require.NoError(t, err)
-	_, err = db.Exec(`GRANT admin TO testuser`)
+	urls, err := roachtestutil.CreateNewAdminUser(
+		ctx, c, t.L(), c.Node(1), "testuser", "password", install.AuthUserCert, "VALID UNTIL '2060-01-01'",
+	)
 	require.NoError(t, err)
 
 	const expectedLeaseholder = 1
@@ -208,8 +204,8 @@ SELECT $1::INT = ALL (
 					// Wait for .5 second between connection attempts.
 				}
 
-				// Construct a connection URL to server i.
-				url := fmt.Sprintf("postgres://testuser:password@%s/defaultdb?sslmode=require", serverAddrs[server-1])
+				// Connection URL to server i.
+				url := urls[server-1]
 
 				// Attempt a client connection to that server.
 				t.L().Printf("server %d, attempt %d; url: %s\n", server, attempt, url)

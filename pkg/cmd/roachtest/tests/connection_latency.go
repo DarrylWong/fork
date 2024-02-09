@@ -18,6 +18,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
@@ -42,43 +43,29 @@ func runConnectionLatencyTest(
 	err = c.StartE(ctx, t.L(), option.DefaultStartOptsNoBackups(), settings)
 	require.NoError(t, err)
 
-	urlTemplate := func(user string) string {
-		if password {
-			return fmt.Sprintf("postgres://testuser:123@%s:{pgport:1}?sslmode=require&sslrootcert=certs/ca.crt", user)
-		}
-
-		return fmt.Sprintf("postgres://testuser@%s:{pgport:1}?sslcert=certs/client.testuser.crt&sslkey=certs/client.testuser.key&sslrootcert=certs/ca.crt&sslmode=require", user)
-	}
+	var urls []string
 
 	var passwordFlag string
 	// Only create the user once.
 	t.L().Printf("creating testuser")
 	if password {
-		err = c.RunE(ctx, option.WithNodes(c.Node(1)), `./cockroach sql --certs-dir certs --port={pgport:1} -e "CREATE USER testuser WITH PASSWORD '123' CREATEDB"`)
+		urls, err = roachtestutil.CreateNewUser(ctx, c, t.L(), c.Node(1), "testuser", "123", install.AuthUserPassword, "CREATEDB")
 		require.NoError(t, err)
-		err = c.RunE(ctx, option.WithNodes(c.Node(1)), fmt.Sprintf("./workload init connectionlatency --user testuser --password '123' --secure '%s'", urlTemplate("localhost")))
+		err = c.RunE(ctx, option.WithNodes(c.Node(1)), fmt.Sprintf("./workload init connectionlatency --user testuser --password '123' --secure '%s'", urls[0]))
 		require.NoError(t, err)
 		passwordFlag = "--password 123 "
 	} else {
-		// NB: certs for `testuser` are created by `roachprod start --secure`.
-		err = c.RunE(ctx, option.WithNodes(c.Node(1)), `./cockroach sql --certs-dir certs --port={pgport:1} -e "CREATE USER testuser CREATEDB"`)
+		urls, err = roachtestutil.CreateNewUser(ctx, c, t.L(), c.Node(1), "testuser", "" /* password */, install.AuthUserCert /* admin */, "CREATEDB")
 		require.NoError(t, err)
-		require.NoError(t, err)
-		err = c.RunE(ctx, option.WithNodes(c.Node(1)), fmt.Sprintf("./workload init connectionlatency --user testuser --secure '%s'", urlTemplate("localhost")))
+		err = c.RunE(ctx, option.WithNodes(c.Node(1)), fmt.Sprintf("./workload init connectionlatency --user testuser --secure '%s'", urls[0]))
 		require.NoError(t, err)
 	}
 
 	runWorkload := func(roachNodes, loadNode option.NodeListOption, locality string) {
 		var urlString string
-		var urls []string
-		externalIps, err := c.ExternalIP(ctx, t.L(), roachNodes)
-		require.NoError(t, err)
-
-		for _, u := range externalIps {
-			url := urlTemplate(u)
-			urls = append(urls, fmt.Sprintf("'%s'", url))
+		for _, node := range roachNodes {
+			urlString = urlString + " " + urls[node]
 		}
-		urlString = strings.Join(urls, " ")
 
 		t.L().Printf("running workload in %q against urls:\n%s", locality, strings.Join(urls, "\n"))
 

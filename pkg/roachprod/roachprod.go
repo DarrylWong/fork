@@ -918,6 +918,9 @@ type PGURLOptions struct {
 	External           bool
 	VirtualClusterName string
 	SQLInstance        int
+	User               string
+	Password           string
+	Database           string
 	Auth               install.PGAuthMode
 }
 
@@ -957,7 +960,7 @@ func PgURL(
 		if ip == "" {
 			return nil, errors.Errorf("empty ip: %v", ips)
 		}
-		urls = append(urls, c.NodeURL(ip, desc.Port, opts.VirtualClusterName, desc.ServiceMode, opts.Auth))
+		urls = append(urls, c.NodeURL(ip, desc.Port, opts.VirtualClusterName, desc.ServiceMode, opts.Auth, install.NodeURLOpts{User: opts.User, Password: opts.Password, Database: opts.Database}))
 	}
 	if len(urls) != len(nodes) {
 		return nil, errors.Errorf("have nodes %v, but urls %v from ips %v", nodes, urls, ips)
