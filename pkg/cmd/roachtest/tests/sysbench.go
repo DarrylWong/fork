@@ -18,9 +18,9 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
-	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
+	"github.com/cockroachdb/cockroach/pkg/roachprod"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/errors"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/stretchr/testify/require"
@@ -112,11 +112,11 @@ func runSysbench(ctx context.Context, t test.Test, c cluster.Cluster, opts sysbe
 		t.Fatal(err)
 	}
 	// cockroach gen haproxy does not support specifying a non root user
-	pgurl, err := roachtestutil.DefaultPGUrl(ctx, c, t.L(), c.Node(1), install.AuthRootCert)
+	pgurls, err := c.InternalPGUrl(ctx, t.L(), c.Node(1), roachprod.PGURLOptions{Auth: install.AuthRootCert})
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.Run(ctx, option.WithNodes(loadNode), fmt.Sprintf("./cockroach gen haproxy --url %s", pgurl))
+	c.Run(ctx, option.WithNodes(loadNode), fmt.Sprintf("./cockroach gen haproxy --url %s", pgurls[0]))
 	c.Run(ctx, option.WithNodes(loadNode), "haproxy -f haproxy.cfg -D")
 
 	t.Status("installing sysbench")
@@ -127,11 +127,7 @@ func runSysbench(ctx context.Context, t test.Test, c cluster.Cluster, opts sysbe
 	m := c.NewMonitor(ctx, roachNodes)
 	m.Go(func(ctx context.Context) error {
 		t.Status("preparing workload")
-		pgurl, err := roachtestutil.DefaultPGUrl(ctx, c, t.L(), c.Node(1), install.AuthRootCert)
-		if err != nil {
-			t.Fatal(err)
-		}
-		c.Run(ctx, option.WithNodes(c.Node(1)), fmt.Sprintf(`./cockroach sql --url=%s -e "CREATE DATABASE sysbench"`, pgurl))
+		c.Run(ctx, option.WithNodes(c.Node(1)), `./cockroach sql --url={pgurl:1} -e "CREATE DATABASE sysbench"`)
 		c.Run(ctx, option.WithNodes(loadNode), opts.cmd(false /* haproxy */)+" prepare")
 
 		t.Status("running workload")

@@ -13,7 +13,6 @@ package tests
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"strings"
 	"time"
 
@@ -21,8 +20,8 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
-	"github.com/cockroachdb/cockroach/pkg/roachprod"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
@@ -146,25 +145,21 @@ func runCopyFromCRDB(ctx context.Context, t test.Test, c cluster.Cluster, sf int
 	db, err := c.ConnE(ctx, t.L(), 1)
 	require.NoError(t, err)
 	stmts := []string{
-		"CREATE USER importer WITH PASSWORD '123'",
 		fmt.Sprintf("ALTER ROLE importer SET copy_from_atomic_enabled = %t", atomic),
 	}
+	urls, err := roachtestutil.CreateNewUser(ctx, c, t.L(), c.Node(1), "importer", "123", install.AuthUserPassword)
+	require.NoError(t, err)
 	for _, stmt := range stmts {
 		_, err = db.ExecContext(ctx, stmt)
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	urls, err := c.InternalPGUrl(ctx, t.L(), c.Node(1), roachprod.PGURLOptions{Auth: install.AuthUserPassword})
 	require.NoError(t, err)
 	m := c.NewMonitor(ctx, c.All())
 	m.Go(func(ctx context.Context) error {
 		// psql w/ url first doesn't support --db arg so have to do this.
 		urlstr := strings.Replace(urls[0], "?", "/defaultdb?", 1)
-		u, err := url.Parse(urlstr)
-		require.NoError(t, err)
-		u.User = url.UserPassword("importer", "123")
-		urlstr = u.String()
 		c.Run(ctx, option.WithNodes(c.Node(1)), fmt.Sprintf("psql '%s' -c 'SELECT 1'", urlstr))
 		c.Run(ctx, option.WithNodes(c.Node(1)), fmt.Sprintf("psql '%s' -c '%s'", urlstr, lineitemSchema))
 		runTest(ctx, t, c, fmt.Sprintf("psql '%s'", urlstr))

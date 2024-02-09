@@ -2578,7 +2578,7 @@ func (c *SyncedCluster) pgurls(
 		if err != nil {
 			return nil, err
 		}
-		m[node] = c.NodeURL(host, desc.Port, virtualClusterName, desc.ServiceMode, AuthRootCert)
+		m[node] = c.NodeURL(host, desc.Port, virtualClusterName, desc.ServiceMode, AuthRootCert, NodeURLOpts{})
 	}
 	return m, nil
 }
