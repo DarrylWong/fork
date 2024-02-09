@@ -152,6 +152,8 @@ func (tn *tenantNode) createTenantCert(
 		"./cockroach cert create-tenant-client --certs-dir=certs --ca-key=certs/ca.key %d %s --overwrite",
 		tn.tenantID, strings.Join(names, " "))
 	c.Run(ctx, option.WithNodes(c.Node(tn.node)), cmd)
+	res, _ := c.RunWithDetailsSingleNode(ctx, t.L(), option.WithNodes(c.Node(tn.node)), "ls certs")
+	fmt.Printf("darryl: res=%+v\n\n", res)
 }
 
 func (tn *tenantNode) stop(ctx context.Context, t test.Test, c cluster.Cluster) {
@@ -212,22 +214,31 @@ func (tn *tenantNode) start(ctx context.Context, t test.Test, c cluster.Cluster,
 	u.Host = externalIPs[0] + ":" + strconv.Itoa(tn.sqlPort)
 
 	tn.pgURL = u.String()
+	fmt.Printf("darryl: pgurl=%s", tn.pgURL)
 
 	// pgURL has full paths to local certs embedded, i.e.
 	// /tmp/roachtest-certs3630333874/certs, on the cluster we want just certs
 	// (i.e. to run workload on the tenant).
 	// TODO(DarrylWong): Multitenant user cert authentication is not yet implemented
-	secureUrls, err := roachprod.PgURL(ctx, t.L(), c.MakeNodes(c.Node(tn.node)), "certs", roachprod.PGURLOptions{
-		External: false,
-		Secure:   true,
-		Auth:     install.AuthRootCert,
-	})
+	//secureUrls, err := roachprod.PgURL(ctx, t.L(), c.MakeNodes(c.Node(tn.node)), "certs", roachprod.PGURLOptions{
+	//	External: false,
+	//	Secure:   true,
+	//	Auth:     install.AuthRootCert,
+	//})
+	//require.NoError(t, err)
+	//u, err = url.Parse(strings.Trim(secureUrls[0], "'"))
+	//require.NoError(t, err)
+	//u.Host = externalIPs[0] + ":" + strconv.Itoa(tn.sqlPort)
+	externalUrls, err = c.ExternalPGUrl(ctx, t.L(), c.Node(tn.node), roachprod.PGURLOptions{Auth: install.AuthTenant})
 	require.NoError(t, err)
-	u, err = url.Parse(strings.Trim(secureUrls[0], "'"))
+	u, err = url.Parse(externalUrls[0])
+	require.NoError(t, err)
+	externalIPs, err = c.ExternalIP(ctx, t.L(), c.Node(tn.node))
 	require.NoError(t, err)
 	u.Host = externalIPs[0] + ":" + strconv.Itoa(tn.sqlPort)
 
 	tn.relativeSecureURL = u.String()
+	fmt.Printf("darryl: relativeSecureURL=%s\n", tn.relativeSecureURL)
 
 	// The tenant is usually responsive ~right away, but it has on occasions
 	// taken more than 3s for it to connect to the KV layer, and it won't open
@@ -376,7 +387,8 @@ func startInMemoryTenant(
 	var tenantConn *gosql.DB
 	testutils.SucceedsSoon(t, func() error {
 		var err error
-		tenantConn, err = c.ConnE(ctx, t.L(), nodes.RandNode()[0], option.TenantName(tenantName))
+		// TODO(DarrylWong): Multitenant user cert authentication is not yet implemented
+		tenantConn, err = c.ConnE(ctx, t.L(), nodes.RandNode()[0], option.TenantName(tenantName), option.AuthMode(install.AuthRootCert))
 		if err != nil {
 			return err
 		}

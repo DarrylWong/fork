@@ -516,18 +516,19 @@ const (
 	// users authenticate.
 	// TODO(darrylwong): Minimize the amount of root user authentication used.
 	AuthRootCert
+	// TODO(darrylwong) figure this out
+	AuthTenant
 
 	DefaultUser     = "roachprod"
 	DefaultPassword = "cockroachdb"
 )
 
 type NodeURLOpts struct {
-	// user and password to use in the node url. If user is unspecified, NodeURL
+	// User and Password to use in NodeURL. If User is unspecified, NodeURL
 	// will use the DefaultUser and DefaultPassword. Values are ignored if
 	// running in insecure mode or if root authentication is used.
 	User     string
 	Password string
-	Database string
 }
 
 // NodeURL constructs a postgres URL. If sharedTenantName is not empty, it will
@@ -545,8 +546,6 @@ func (c *SyncedCluster) NodeURL(
 	u.Scheme = "postgres"
 	u.User = url.User("root")
 	u.Host = fmt.Sprintf("%s:%d", host, port)
-	// TODO: not sure if this is what I want
-	u.Path = opts.Database
 	v := url.Values{}
 	if c.Secure {
 		password := DefaultPassword
@@ -572,6 +571,12 @@ func (c *SyncedCluster) NodeURL(
 			u.User = url.UserPassword(user, password)
 			v.Add("sslcert", fmt.Sprintf("%s/client.%s.crt", c.PGUrlCertsDir, user))
 			v.Add("sslkey", fmt.Sprintf("%s/client.%s.key", c.PGUrlCertsDir, user))
+			v.Add("sslrootcert", fmt.Sprintf("%s/ca.crt", c.PGUrlCertsDir))
+			v.Add("sslmode", "verify-full")
+		case AuthTenant:
+			u.User = url.UserPassword("secure", "roach")
+			v.Add("sslcert", fmt.Sprintf("%s/client-tenant.%s.crt", c.PGUrlCertsDir, "123"))
+			v.Add("sslkey", fmt.Sprintf("%s/client-tenant.%s.key", c.PGUrlCertsDir, "123"))
 			v.Add("sslrootcert", fmt.Sprintf("%s/ca.crt", c.PGUrlCertsDir))
 			v.Add("sslmode", "verify-full")
 		}

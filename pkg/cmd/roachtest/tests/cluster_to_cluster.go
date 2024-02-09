@@ -792,9 +792,10 @@ func (rd *replicationDriver) onFingerprintMismatch(
 	ctx context.Context, startTime, endTime hlc.Timestamp,
 ) {
 	rd.t.L().Printf("conducting table level fingerprints")
-	srcTenantConn := rd.c.Conn(ctx, rd.t.L(), 1, option.TenantName(rd.setup.src.name))
+	// TODO(DarrylWong): Multitenant user cert authentication is not yet implemented
+	srcTenantConn := rd.c.Conn(ctx, rd.t.L(), 1, option.TenantName(rd.setup.src.name), option.AuthMode(install.AuthRootCert))
 	defer srcTenantConn.Close()
-	dstTenantConn := rd.c.Conn(ctx, rd.t.L(), rd.rs.srcNodes+1, option.TenantName(rd.setup.dst.name))
+	dstTenantConn := rd.c.Conn(ctx, rd.t.L(), rd.rs.srcNodes+1, option.TenantName(rd.setup.dst.name), option.AuthMode(install.AuthRootCert))
 	defer dstTenantConn.Close()
 	fingerprintBisectErr := replicationutils.InvestigateFingerprints(ctx, srcTenantConn, dstTenantConn,
 		startTime,

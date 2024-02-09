@@ -45,7 +45,12 @@ func runAcceptanceMultitenant(ctx context.Context, t test.Test, c cluster.Cluste
 
 	t.Status("checking that a client can connect to the tenant server")
 
-	verifySQL(t, tenant.pgURL,
+	tdb, closer := openDBAndMakeSQLRunner(t, tenant.pgURL)
+	defer closer()
+	createTenantAdminRole(t, "tenant", tdb)
+	//tdb.Exec(t, "CREATE USER secure WITH PASSWORD 'roach'")
+
+	verifySQL(t, tenant.relativeSecureURL,
 		mkStmt(`CREATE TABLE foo (id INT PRIMARY KEY, v STRING)`),
 		mkStmt(`INSERT INTO foo VALUES($1, $2)`, 1, "bar"),
 		mkStmt(`SELECT * FROM foo LIMIT 1`).

@@ -632,7 +632,7 @@ func runBackupMVCCRangeTombstones(
 	t.Status("starting csv servers")
 	c.Run(ctx, option.WithNodes(c.All()), `./cockroach workload csv-server --port=8081 &> logs/workload-csv-server.log < /dev/null &`)
 
-	conn := c.Conn(ctx, t.L(), 1, option.TenantName(config.tenantName))
+	conn := c.Conn(ctx, t.L(), 1, option.TenantName(config.tenantName), option.AuthMode(install.AuthRootCert))
 
 	// Configure cluster.
 	t.Status("configuring cluster")
