@@ -500,22 +500,22 @@ func (c *SyncedCluster) CertsDir(node Node) string {
 type PGAuthMode int
 
 const (
-	// AuthRootCert authenticates using the root user and root cert + root client certs.
-	// Root authentication skips verification paths and is not reflective of how real
-	// users authenticate.
-	// TODO(darrylwong): Minimize the amount of root user authentication used.
-	AuthRootCert PGAuthMode = iota
+	// AuthUserCert authenticates using the default user and password, as well
+	// as the root cert and client certs. This uses sslmode=verify-full and will
+	// verify that the certificate is valid. This is the preferred mode of
+	// authentication.
+	AuthUserCert PGAuthMode = iota
 	// AuthUserPassword authenticates using the default user and password. Since
 	// no certs are specified, sslmode is set to require which only checks certs
 	// if they exist. Note this form of auth only works if sslmode=allow is an option,
 	// i.e. cockroach sql. AuthUserCert should be used instead most of the time,
 	// except when certificates don't exist or to specifically test password auth.
 	AuthUserPassword
-	// AuthUserCert authenticates using the default user and password, as well
-	// as the root cert and client certs. This uses sslmode=verify-full and will
-	// verify that the certificate is valid. This is the preferred mode of
-	// authentication.
-	AuthUserCert
+	// AuthRootCert authenticates using the root user and root cert + root client certs.
+	// Root authentication skips verification paths and is not reflective of how real
+	// users authenticate.
+	// TODO(darrylwong): Minimize the amount of root user authentication used.
+	AuthRootCert
 
 	DefaultUser     = "roachprod"
 	DefaultPassword = "cockroachdb"

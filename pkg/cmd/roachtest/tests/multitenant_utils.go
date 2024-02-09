@@ -25,6 +25,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
 	"github.com/cockroachdb/cockroach/pkg/roachprod"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/config"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/sqlutils"
 	"github.com/stretchr/testify/require"
@@ -201,7 +202,8 @@ func (tn *tenantNode) start(ctx context.Context, t test.Test, c cluster.Cluster,
 		extraArgs...,
 	)
 
-	externalUrls, err := c.ExternalPGUrl(ctx, t.L(), c.Node(tn.node), roachprod.PGURLOptions{})
+	// TODO(DarrylWong): Multitenant user cert authentication is not yet implemented
+	externalUrls, err := c.ExternalPGUrl(ctx, t.L(), c.Node(tn.node), roachprod.PGURLOptions{Auth: install.AuthRootCert})
 	require.NoError(t, err)
 	u, err := url.Parse(externalUrls[0])
 	require.NoError(t, err)
@@ -214,9 +216,12 @@ func (tn *tenantNode) start(ctx context.Context, t test.Test, c cluster.Cluster,
 	// pgURL has full paths to local certs embedded, i.e.
 	// /tmp/roachtest-certs3630333874/certs, on the cluster we want just certs
 	// (i.e. to run workload on the tenant).
+	// TODO(DarrylWong): Multitenant user cert authentication is not yet implemented
 	secureUrls, err := roachprod.PgURL(ctx, t.L(), c.MakeNodes(c.Node(tn.node)), "certs", roachprod.PGURLOptions{
 		External: false,
-		Secure:   true})
+		Secure:   true,
+		Auth:     install.AuthRootCert,
+	})
 	require.NoError(t, err)
 	u, err = url.Parse(strings.Trim(secureUrls[0], "'"))
 	require.NoError(t, err)

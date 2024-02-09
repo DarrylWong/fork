@@ -82,7 +82,8 @@ func registerNetworkLogging(r registry.Registry) {
 			"certs", /* certsDir */
 			roachprod.PGURLOptions{
 				External: false,
-				Secure:   true})
+				Secure:   true,
+			})
 		require.NoError(t, err)
 		workloadPGURLs := make([]string, len(secureUrls))
 		for i, url := range secureUrls {
