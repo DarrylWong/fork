@@ -1137,6 +1137,10 @@ func (r *testRunner) runTest(
 		// At this point, we don't have an end time, so default to a 30 minute window from the start time.
 		shout(ctx, l, stdout, "=== RUN   %s  [metrics: https://go.crdb.dev/roachtest-grafana/%s/%s/%d/%d]",
 			testRunID, vm.SanitizeLabel(runID), vm.SanitizeLabel(testRunID), t.start.UnixMilli(), t.start.Add(30*time.Minute).UnixMilli())
+
+		// Store the runID in the testImpl. Ideally the test spec should have no idea about the runID,
+		// but we need this info to make grafana API calls.
+		t.runID = runID
 	} else {
 		shout(ctx, l, stdout, "=== RUN   %s", testRunID)
 	}

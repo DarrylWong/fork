@@ -28,7 +28,9 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/clusterupgrade"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/util/ctxgroup"
@@ -92,6 +94,7 @@ type (
 		crdbNodes option.NodeListOption
 		seed      int64
 		logger    *logger.Logger
+		testSpec  test.Test // Used for adding annotations to grafana.
 
 		binaryVersions  atomic.Value
 		clusterVersions atomic.Value
@@ -116,6 +119,7 @@ func newTestRunner(
 	cancel context.CancelFunc,
 	plan *TestPlan,
 	l *logger.Logger,
+	t test.Test,
 	c cluster.Cluster,
 	crdbNodes option.NodeListOption,
 	randomSeed int64,
@@ -125,6 +129,7 @@ func newTestRunner(
 		cancel:     cancel,
 		plan:       plan,
 		logger:     l,
+		testSpec:   t,
 		cluster:    c,
 		crdbNodes:  crdbNodes,
 		background: newBackgroundRunner(ctx, l),
@@ -242,6 +247,11 @@ func (tr *testRunner) runSingleStep(ctx context.Context, ss *singleStep, l *logg
 	defer func() {
 		prefix := fmt.Sprintf("FINISHED [%s]", timeutil.Since(start))
 		tr.logStep(prefix, ss, l)
+		annotation := fmt.Sprintf("(%d): %s", ss.ID, ss.impl.Description())
+		err := roachtestutil.AddGrafanaAnnotationRange(tr.ctx, tr.cluster, tr.logger, tr.testSpec, start, timeutil.Now(), annotation)
+		if err != nil {
+			l.Printf("Adding Grafana annotation failed: %s", err)
+		}
 	}()
 
 	if err := panicAsError(l, func() error {
@@ -369,7 +379,7 @@ func (tr *testRunner) teardown(stepsChan chan error, testFailed bool) {
 
 func (tr *testRunner) logStep(prefix string, step *singleStep, l *logger.Logger) {
 	dashes := strings.Repeat("-", 10)
-	l.Printf("%[1]s %s (%d): %s %[1]s", dashes, prefix, step.ID, step.impl.Description())
+	l.Printf(fmt.Sprintf("%[1]s %s (%d): %s %[1]s", dashes, prefix, step.ID, step.impl.Description()))
 }
 
 // logVersions writes the current cached versions of the binary and

@@ -80,8 +80,10 @@ type testImpl struct {
 	runner string
 	// runnerID is the test's main goroutine ID.
 	runnerID int64
-	start    time.Time
-	end      time.Time
+	// runID is the ID associated with a set of tests being run by one roachtest run call.
+	runID string
+	start time.Time
+	end   time.Time
 
 	// artifactsDir is the path to the directory holding all the artifacts for
 	// this test. It will contain a test.log file and cluster logs.
@@ -215,6 +217,10 @@ func (t *testImpl) Helper() {}
 
 func (t *testImpl) Name() string {
 	return t.spec.Name
+}
+
+func (t *testImpl) RunID() string {
+	return t.runID
 }
 
 func (t *testImpl) SnapshotPrefix() string {

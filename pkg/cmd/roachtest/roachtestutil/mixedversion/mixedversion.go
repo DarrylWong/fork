@@ -595,7 +595,7 @@ func (t *Test) Run() {
 
 func (t *Test) run(plan *TestPlan) error {
 	return newTestRunner(
-		t.ctx, t.cancel, plan, t.logger, t.cluster, t.crdbNodes, t.seed,
+		t.ctx, t.cancel, plan, t.logger, t.rt, t.cluster, t.crdbNodes, t.seed,
 	).run()
 }
 

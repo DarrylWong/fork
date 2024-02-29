@@ -33,6 +33,7 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/build"
 	"github.com/cockroachdb/cockroach/pkg/cli/exit"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachprod/grafana"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/cloud"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/config"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
@@ -1757,6 +1758,12 @@ func GrafanaURL(
 		return "", err
 	}
 	return urls[0], nil
+}
+
+func AddGrafanaAnnotation(
+	ctx context.Context, secure bool, req grafana.AddAnnotationRequest,
+) (string, error) {
+	return grafana.AddGrafanaAnnotation(ctx, secure, req)
 }
 
 // PrometheusSnapshot takes a snapshot of prometheus and stores the snapshot and

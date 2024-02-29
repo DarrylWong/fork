@@ -40,6 +40,7 @@ type Test interface {
 	// picked randomly.
 	Cockroach() string
 	Name() string
+	RunID() string
 	BuildVersion() *version.Version
 	IsBuildVersion(string) bool // "vXX.YY"
 	SnapshotPrefix() string
