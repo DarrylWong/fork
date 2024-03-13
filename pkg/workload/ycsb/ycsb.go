@@ -38,9 +38,11 @@ import (
 )
 
 const (
-	numTableFields = 10
-	fieldLength    = 100 // In characters
-	zipfIMin       = 0
+	numTableFields = 1
+	fieldLength    = 1000 // In characters
+	//numTableFields = 10
+	//fieldLength    = 100 // In characters
+	zipfIMin = 0
 
 	usertableSchemaRelational = `(
 		ycsb_key VARCHAR(255) PRIMARY KEY NOT NULL,
@@ -500,6 +502,8 @@ func (g *ycsb) Ops(
 		updateStmts[i] = key
 	}
 
+	fmt.Printf("darryl: concurrency = %d\n", g.connFlags.Concurrency)
+
 	for i := 0; i < g.connFlags.Concurrency; i++ {
 		// We want to have 1 connection per worker, however the
 		// multi-connection pool round robins access to different pools so it
@@ -516,6 +520,7 @@ func (g *ycsb) Ops(
 			if plStat.MaxConns()-plStat.AcquiredConns() > 0 {
 				break
 			}
+			fmt.Printf("darryl: pool %+v full\n", *pl.Config())
 		}
 		if try == g.connFlags.Concurrency {
 			return workload.QueryLoad{},
@@ -524,8 +529,10 @@ func (g *ycsb) Ops(
 
 		conn, err := pl.Acquire(ctx)
 		if err != nil {
+			fmt.Printf("darryl: error acquiring connection %d\n", i)
 			return workload.QueryLoad{}, err
 		}
+		fmt.Printf("darryl: worker %d established connection with %s\n", i, pl.Config().ConnConfig.Host)
 
 		rng := rand.New(rand.NewSource(RandomSeed.Seed() + uint64(i)))
 		w := &ycsbWorker{

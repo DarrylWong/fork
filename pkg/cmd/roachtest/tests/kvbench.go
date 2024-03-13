@@ -177,6 +177,15 @@ func registerKVBench(r registry.Registry) {
 			SecondaryIndex:         true,
 			NumShards:              0,
 		},
+		{
+			Nodes:                  35,
+			CPUs:                   8,
+			KeyDistribution:        sequential,
+			EstimatedMaxThroughput: 10000,
+			LatencyThresholdMs:     10.0,
+			SecondaryIndex:         false,
+			NumShards:              0,
+		},
 	}
 
 	for _, b := range specs {

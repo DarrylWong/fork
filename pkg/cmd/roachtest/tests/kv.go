@@ -28,7 +28,9 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
 	"github.com/cockroachdb/cockroach/pkg/kv"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/config"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/prometheus"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
@@ -63,8 +65,11 @@ func registerKV(r registry.Registry) {
 		duration                 time.Duration
 		tracing                  bool // `trace.debug.enable`
 		weekly                   bool
+		manual                   bool
 		owner                    registry.Owner // defaults to KV
 		sharedProcessMT          bool
+		prometheus               bool
+		backup                   bool
 	}
 	computeConcurrency := func(opts kvOptions) int {
 		// Scale the workload concurrency with the number of nodes in the cluster to
@@ -87,9 +92,32 @@ func registerKV(r registry.Registry) {
 	runKV := func(ctx context.Context, t test.Test, c cluster.Cluster, opts kvOptions) {
 		nodes := c.Spec().NodeCount - 1
 		c.Put(ctx, t.DeprecatedWorkload(), "./workload", c.Node(nodes+1))
-
-		// Don't start a scheduled backup on this perf sensitive roachtest that reports to roachperf.
+		// Default to not starting a scheduled backup on this perf sensitive roachtest that reports to roachperf.
 		startOpts := option.NewStartOpts(option.NoBackupSchedule)
+		if opts.backup {
+			startOpts = option.DefaultStartOpts()
+		}
+
+		if opts.prometheus {
+			startOpts.RoachprodOpts.AdminUIPort = config.DefaultAdminUIPort
+			cfg := (&prometheus.Config{}).
+				WithPrometheusNode(c.Node(c.Spec().NodeCount).InstallNodes()[0]).
+				WithCluster(c.All().InstallNodes()).
+				WithNodeExporter(c.Nodes(nodes).InstallNodes())
+
+			if err := c.StartGrafana(ctx, t.L(), cfg); err != nil {
+				t.Fatal(err)
+			}
+		}
+		defer func() {
+			if t.IsDebug() || !opts.prometheus {
+				return // nothing to do
+			}
+			if err := c.StopGrafana(ctx, t.L(), t.ArtifactsDir()); err != nil {
+				t.L().ErrorfCtx(ctx, "error(s) shutting down prom/grafana: %s", err)
+			}
+		}()
+
 		if opts.ssds > 1 && !opts.raid0 {
 			startOpts.RoachprodOpts.StoreCount = opts.ssds
 		}
@@ -256,6 +284,9 @@ func registerKV(r registry.Registry) {
 		// Weekly larger scale configurations.
 		{nodes: 32, cpus: 8, readPercent: 0, weekly: true, duration: time.Hour},
 		{nodes: 32, cpus: 8, readPercent: 95, weekly: true, duration: time.Hour},
+
+		// Large Scale
+		{nodes: 50, cpus: 8, readPercent: 0, manual: true, duration: 3 * time.Hour, prometheus: true, backup: true},
 	} {
 		opts := opts
 
@@ -335,6 +366,8 @@ func registerKV(r registry.Registry) {
 		if opts.weekly {
 			suites = registry.Suites(registry.Weekly)
 			tags["weekly"] = struct{}{}
+		} else if opts.manual {
+			suites = registry.ManualOnly
 		}
 
 		r.Add(registry.TestSpec{

@@ -16,12 +16,15 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachprod/grafana"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/config"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,7 +50,7 @@ func registerYCSB(r registry.Registry) {
 	}
 
 	runYCSB := func(
-		ctx context.Context, t test.Test, c cluster.Cluster, wl string, cpus int, readCommitted, rangeTombstone bool,
+		ctx context.Context, t test.Test, c cluster.Cluster, wl string, cpus int, readCommitted, rangeTombstone bool, stress bool,
 	) {
 		// For now, we only want to run the zfs tests on GCE, since only GCE supports
 		// starting roachprod instances on zfs.
@@ -68,7 +71,34 @@ func registerYCSB(r registry.Registry) {
 		}
 
 		c.Put(ctx, t.DeprecatedWorkload(), "./workload", c.Node(nodes+1))
-		c.Start(ctx, t.L(), option.NewStartOpts(option.NoBackupSchedule), settings, c.Range(1, nodes))
+		startOpts := option.NewStartOpts(option.NoBackupSchedule)
+		if stress {
+			conc = 1200
+			fmt.Printf("concurrency = %d\n", conc)
+			startOpts = option.DefaultStartOpts()
+			startOpts.RoachprodOpts.AdminUIPort = config.DefaultAdminUIPort
+		}
+		c.Start(ctx, t.L(), startOpts, settings, c.Range(1, nodes))
+
+		if stress {
+			startOpts.RoachprodOpts.AdminUIPort = config.DefaultAdminUIPort
+			cfg := (&prometheus.Config{}).
+				WithPrometheusNode(c.Node(c.Spec().NodeCount).InstallNodes()[0]).
+				WithCluster(c.All().InstallNodes()).
+				WithNodeExporter(c.All().InstallNodes())
+
+			if err := c.StartGrafana(ctx, t.L(), cfg); err != nil {
+				t.Fatal(err)
+			}
+		}
+		defer func() {
+			if t.IsDebug() || !stress {
+				return // nothing to do
+			}
+			if err := c.StopGrafana(ctx, t.L(), t.ArtifactsDir()); err != nil {
+				t.L().ErrorfCtx(ctx, "error(s) shutting down prom/grafana: %s", err)
+			}
+		}()
 
 		db := c.Conn(ctx, t.L(), 1)
 		err := enableIsolationLevels(ctx, t, db)
@@ -82,7 +112,12 @@ func registerYCSB(r registry.Registry) {
 		m.Go(func(ctx context.Context) error {
 			var args string
 			args += " --ramp=" + ifLocal(c, "0s", "2m")
-			args += " --duration=" + ifLocal(c, "10s", "30m")
+			if stress {
+				args += " --duration=" + ifLocal(c, "10s", "2h")
+			} else {
+				args += " --duration=" + ifLocal(c, "10s", "30m")
+			}
+
 			if readCommitted {
 				args += " --isolation-level=read_committed"
 			}
@@ -90,10 +125,11 @@ func registerYCSB(r registry.Registry) {
 				args += " " + envFlags
 			}
 			cmd := fmt.Sprintf(
-				"./workload run ycsb --init --insert-count=1000000 --workload=%s --concurrency=%d"+
+				"./workload run ycsb --init --insert-count=1000000 --workload=%s --tolerate-errors --concurrency=%d"+
 					" --splits=%d --histograms="+t.PerfArtifactsDir()+"/stats.json"+args+
 					" {pgurl:1-%d}",
 				wl, conc, nodes, nodes)
+			c.AddGrafanaAnnotation(ctx, t.L(), grafana.AddAnnotationRequest{Text: cmd})
 			c.Run(ctx, option.WithNodes(c.Node(nodes+1)), cmd)
 			return nil
 		})
@@ -115,7 +151,7 @@ func registerYCSB(r registry.Registry) {
 				Benchmark: true,
 				Cluster:   r.MakeClusterSpec(4, spec.CPU(cpus)),
 				Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
-					runYCSB(ctx, t, c, wl, cpus, false /* readCommitted */, false /* rangeTombstone */)
+					runYCSB(ctx, t, c, wl, cpus, false /* readCommitted */, false /* rangeTombstone */, true)
 				},
 				CompatibleClouds: registry.AllClouds,
 				Suites:           registry.Suites(registry.Nightly),
@@ -128,7 +164,7 @@ func registerYCSB(r registry.Registry) {
 					Benchmark: true,
 					Cluster:   r.MakeClusterSpec(4, spec.CPU(cpus), spec.SetFileSystem(spec.Zfs)),
 					Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
-						runYCSB(ctx, t, c, wl, cpus, false /* readCommitted */, false /* rangeTombstone */)
+						runYCSB(ctx, t, c, wl, cpus, false /* readCommitted */, false /* rangeTombstone */, false)
 					},
 					CompatibleClouds: registry.AllExceptAWS,
 					Suites:           registry.Suites(registry.Nightly),
@@ -142,7 +178,7 @@ func registerYCSB(r registry.Registry) {
 					Benchmark: true,
 					Cluster:   r.MakeClusterSpec(4, spec.CPU(cpus)),
 					Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
-						runYCSB(ctx, t, c, wl, cpus, true /* readCommitted */, false /* rangeTombstone */)
+						runYCSB(ctx, t, c, wl, cpus, true /* readCommitted */, false /* rangeTombstone */, false)
 					},
 					CompatibleClouds: registry.AllClouds,
 					Suites:           registry.Suites(registry.Nightly),
@@ -153,10 +189,10 @@ func registerYCSB(r registry.Registry) {
 				r.Add(registry.TestSpec{
 					Name:      fmt.Sprintf("%s/mvcc-range-keys=global", name),
 					Owner:     registry.OwnerTestEng,
-					Benchmark: true,
+					Benchmark: false,
 					Cluster:   r.MakeClusterSpec(4, spec.CPU(cpus)),
 					Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
-						runYCSB(ctx, t, c, wl, cpus, false /* readCommitted */, true /* rangeTombstone */)
+						runYCSB(ctx, t, c, wl, cpus, false /* readCommitted */, true /* rangeTombstone */, false)
 					},
 					CompatibleClouds: registry.AllClouds,
 					Suites:           registry.Suites(registry.Nightly),
@@ -164,6 +200,39 @@ func registerYCSB(r registry.Registry) {
 			}
 		}
 	}
+	//r.Add(registry.TestSpec{
+	//	Name:      "ycsb/A/nodes=50/cpu=8",
+	//	Owner:     registry.OwnerTestEng,
+	//	Benchmark: true,
+	//	Cluster:   r.MakeClusterSpec(50, spec.CPU(8)),
+	//	Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
+	//		runYCSB(ctx, t, c, "A", 8, false /* readCommitted */, false /* rangeTombstone */, true)
+	//	},
+	//	CompatibleClouds: registry.AllClouds,
+	//	Suites:           registry.ManualOnly,
+	//})
+	r.Add(registry.TestSpec{
+		Name:      "ycsb/F/nodes=50/cpu=8",
+		Owner:     registry.OwnerTestEng,
+		Benchmark: true,
+		Cluster:   r.MakeClusterSpec(50, spec.CPU(8)),
+		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
+			runYCSB(ctx, t, c, "F", 8, false /* readCommitted */, false /* rangeTombstone */, true)
+		},
+		CompatibleClouds: registry.AllClouds,
+		Suites:           registry.ManualOnly,
+	})
+	//r.Add(registry.TestSpec{
+	//	Name:      "ycsb/D/nodes=50/cpu=8",
+	//	Owner:     registry.OwnerTestEng,
+	//	Benchmark: true,
+	//	Cluster:   r.MakeClusterSpec(50, spec.CPU(8)),
+	//	Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
+	//		runYCSB(ctx, t, c, "D", 8, false /* readCommitted */, false /* rangeTombstone */, true)
+	//	},
+	//	CompatibleClouds: registry.AllClouds,
+	//	Suites:           registry.ManualOnly,
+	//})
 }
 
 func enableIsolationLevels(ctx context.Context, t test.Test, db *gosql.DB) error {
