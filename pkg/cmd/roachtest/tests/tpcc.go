@@ -152,7 +152,7 @@ func setupTPCC(
 				settings.Env = append(settings.Env, "COCKROACH_SCAN_MAX_IDLE_TIME=5ms")
 			}
 			startOpts := option.DefaultStartOpts()
-			startOpts.RoachprodOpts.ScheduleBackups = !opts.DisableDefaultScheduledBackup
+			startOpts.RoachprodOpts.ScheduleBackups = false
 			c.Start(ctx, t.L(), startOpts, settings, crdbNodes)
 		}
 	}
@@ -194,6 +194,25 @@ func setupTPCC(
 		default:
 			t.Fatal("unknown tpcc setup type")
 		}
+		tables := []string{
+			"system.statement_statistics",
+			"system.transaction_statistics",
+			"system.statement_activity",
+			"system.transaction_activity",
+		}
+		for _, table := range tables {
+			cmd := fmt.Sprintf("ALTER TABLE %s CONFIGURE ZONE USING gc.ttlseconds = $1", table)
+			res, err := db.Exec(cmd, 3600*4)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fmt.Printf("%s:%v\n", cmd, res)
+		}
+		_, err := db.Exec("SET CLUSTER SETTING sql.stats.automatic_collection.enabled = false;")
+		if err != nil {
+			t.Fatal(err)
+		}
+
 		t.Status("finished tpc-c setup")
 	}()
 	return crdbNodes, workloadNode
@@ -450,6 +469,21 @@ func runTPCCMixedHeadroom(ctx context.Context, t test.Test, c cluster.Cluster) {
 
 func registerTPCC(r registry.Registry) {
 	headroomSpec := r.MakeClusterSpec(4, spec.CPU(16), spec.RandomlyUseZfs())
+	r.Add(registry.TestSpec{
+		Name:             "tpcc/w=13000/nodes=12/cpu=32",
+		Owner:            registry.OwnerTestEng,
+		CompatibleClouds: registry.AllClouds,
+		Suites:           registry.ManualOnly,
+		Cluster:          r.MakeClusterSpec(13, spec.CPU(32)),
+		Timeout:          4 * time.Hour,
+		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
+			runTPCC(ctx, t, c, tpccOptions{
+				Warehouses: 13000,
+				Duration:   120 * time.Minute,
+				SetupType:  usingImport,
+			})
+		},
+	})
 	r.Add(registry.TestSpec{
 		// w=headroom runs tpcc for a semi-extended period with some amount of
 		// headroom, more closely mirroring a real production deployment than
@@ -1131,7 +1165,7 @@ func (s tpccBenchSpec) partitions() int {
 // startOpts returns any extra start options that the spec requires.
 func (s tpccBenchSpec) startOpts() (option.StartOpts, install.ClusterSettings) {
 	startOpts := option.DefaultStartOpts()
-	startOpts.RoachprodOpts.ScheduleBackups = s.EnableDefaultScheduledBackup
+	startOpts.RoachprodOpts.ScheduleBackups = false //s.EnableDefaultScheduledBackup
 	settings := install.MakeClusterSettings()
 	// Facilitate diagnosing out-of-memory conditions in tpccbench runs.
 	// See https://github.com/cockroachdb/cockroach/issues/75071.
@@ -1618,8 +1652,8 @@ func setupPrometheusForRoachtest(
 		cfg = &prometheus.Config{}
 		workloadNode := c.Node(c.Spec().NodeCount).InstallNodes()[0]
 		cfg.WithPrometheusNode(workloadNode)
-		cfg.WithNodeExporter(c.Range(1, c.Spec().NodeCount-1).InstallNodes())
-		cfg.WithCluster(c.Range(1, c.Spec().NodeCount-1).InstallNodes())
+		cfg.WithNodeExporter(c.All().InstallNodes())
+		cfg.WithCluster(c.All().InstallNodes())
 		if len(workloadInstances) > 0 {
 			cfg.ScrapeConfigs = append(cfg.ScrapeConfigs, prometheus.MakeWorkloadScrapeConfig("workload",
 				"/", makeWorkloadScrapeNodes(workloadNode, workloadInstances)))
