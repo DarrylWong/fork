@@ -43,7 +43,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
-	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/tests"
 	"github.com/cockroachdb/cockroach/pkg/roachprod"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/cloud"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/config"
@@ -114,7 +113,7 @@ func validateBinaryFormat(path string, arch vm.CPUArch, checkEA bool) (string, e
 	}
 	if checkEA {
 		// Check that the binary was compiled with assertions _enabled_.
-		cmd = exec.Command("bash", "-c", fmt.Sprintf("%s version |grep \"Enabled Assertions\" |grep true", abspath))
+		cmd = exec.Command("bash", "-c", fmt.Sprintf("%s %s version |grep \"Enabled Assertions\" |grep true", install.SuppressMetamorphicConstantsEnvVar(), abspath))
 		if err := cmd.Run(); err != nil {
 			return "", errors.Newf("%s is not compiled with assertions enabled", abspath)
 		}
@@ -1953,14 +1952,11 @@ func (c *clusterImpl) PutE(
 func (c *clusterImpl) PutCockroach(ctx context.Context, l *logger.Logger, t *testImpl) error {
 	switch t.spec.CockroachBinary {
 	case registry.RandomizedCockroach:
-		if tests.UsingRuntimeAssertions(t) {
-			t.l.Printf("To reproduce the same set of metamorphic constants, run this test with %s=%d", test.EnvAssertionsEnabledSeed, c.cockroachRandomSeed())
-		}
 		return c.PutE(ctx, l, t.Cockroach(), test.DefaultCockroachPath, c.All())
 	case registry.StandardCockroach:
 		return c.PutE(ctx, l, t.StandardCockroach(), test.DefaultCockroachPath, c.All())
 	case registry.RuntimeAssertionsCockroach:
-		t.l.Printf("To reproduce the same set of metamorphic constants, run this test with %s=%d", test.EnvAssertionsEnabledSeed, c.cockroachRandomSeed())
+		t.l.Printf("Runtime assertions enabled by default through test spec.")
 		return c.PutE(ctx, l, t.RuntimeAssertionsCockroach(), test.DefaultCockroachPath, c.All())
 	default:
 		return errors.Errorf("Specified cockroach binary does not exist.")
