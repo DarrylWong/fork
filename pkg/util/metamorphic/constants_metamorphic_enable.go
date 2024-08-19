@@ -18,3 +18,9 @@ import "github.com/cockroachdb/cockroach/pkg/util/envutil"
 // disableMetamorphicTesting can be used to disable metamorphic tests. If it
 // is set to true then metamorphic testing will not be enabled.
 var disableMetamorphicTesting = envutil.EnvOrDefaultBool(DisableMetamorphicEnvVar, false)
+
+var specifiedMetamorphicConstantsFile = envutil.EnvOrDefaultString(SpecifyMetamorphicConstantsEnvVar, "")
+
+var usingSpecifiedMetamorphicConstants = specifiedMetamorphicConstantsFile != ""
+
+var storedMetamorphicConstants map[string]string

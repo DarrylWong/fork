@@ -11,9 +11,12 @@
 package metamorphic
 
 import (
+	"bufio"
 	"fmt"
 	"math/rand"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/cockroachdb/cockroach/pkg/build/bazel"
 	"github.com/cockroachdb/cockroach/pkg/util/buildutil"
@@ -88,6 +91,8 @@ var rng struct {
 // strconv.ParseBool then metamorphic testing will not be enabled.
 const DisableMetamorphicEnvVar = "COCKROACH_INTERNAL_DISABLE_METAMORPHIC_TESTING"
 
+const SpecifyMetamorphicConstantsEnvVar = "COCKROACH_INTERNAL_SPECIFIED_METAMORPHIC_CONSTANTS"
+
 // Returns true iff the current process is eligible to enable metamorphic
 // variables. When run under Bazel, checking if we are in the Go test wrapper
 // ensures that metamorphic variables are not initialized and logged twice
@@ -109,7 +114,25 @@ func init() {
 	if metamorphicEligible() {
 		if !disableMetamorphicTesting {
 			rng.r, _ = randutil.NewTestRand()
-			metamorphicutil.IsMetamorphicBuild = rng.r.Float64() < IsMetamorphicBuildProbability
+			metamorphicutil.IsMetamorphicBuild = rng.r.Float64() < IsMetamorphicBuildProbability || usingSpecifiedMetamorphicConstants
+		}
+	}
+
+	if metamorphicutil.IsMetamorphicBuild {
+		storedMetamorphicConstants = make(map[string]string)
+		if usingSpecifiedMetamorphicConstants {
+			f, err := os.Open(specifiedMetamorphicConstantsFile)
+			if err != nil {
+				panic(err)
+			}
+			r := bufio.NewScanner(f)
+			for r.Scan() {
+				vals := strings.Split(r.Text(), "=")
+				if len(vals) != 2 {
+					panic("unable to parse metamorphic constants file")
+				}
+				storedMetamorphicConstants[vals[0]] = vals[1]
+			}
 		}
 	}
 }
@@ -121,6 +144,18 @@ func init() {
 // The given name is used for logging.
 func ConstantWithTestRange(name string, defaultValue, min, max int) int {
 	if metamorphicutil.IsMetamorphicBuild {
+		if usingSpecifiedMetamorphicConstants {
+			val, ok := storedMetamorphicConstants[name]
+			if !ok {
+				return defaultValue
+			}
+			v, err := strconv.Atoi(val)
+			if err != nil {
+				panic("unable to parse metamorphic constant as int")
+			}
+			return v
+		}
+
 		rng.Lock()
 		defer rng.Unlock()
 		if rng.r.Float64() < metamorphicValueProbability {
@@ -145,6 +180,18 @@ func ConstantWithTestBool(name string, defaultValue bool) bool {
 
 func constantWithTestBoolInternal(name string, defaultValue bool, doLog bool) bool {
 	if metamorphicutil.IsMetamorphicBuild {
+		if usingSpecifiedMetamorphicConstants {
+			val, ok := storedMetamorphicConstants[name]
+			if !ok {
+				return defaultValue
+			}
+			v, err := strconv.ParseBool(val)
+			if err != nil {
+				panic("unable to parse metamorphic constant as bool")
+			}
+			return v
+		}
+
 		rng.Lock()
 		defer rng.Unlock()
 		if rng.r.Float64() < metamorphicBoolProbability {
@@ -175,6 +222,14 @@ func ConstantWithTestChoice(
 	name string, defaultValue interface{}, otherValues ...interface{},
 ) interface{} {
 	if metamorphicutil.IsMetamorphicBuild {
+		if usingSpecifiedMetamorphicConstants {
+			val, ok := storedMetamorphicConstants[name]
+			if !ok {
+				return defaultValue
+			}
+			return val
+		}
+
 		values := append([]interface{}{defaultValue}, otherValues...)
 		rng.Lock()
 		defer rng.Unlock()
