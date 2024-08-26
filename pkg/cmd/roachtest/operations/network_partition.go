@@ -90,6 +90,57 @@ func createNetworkFullPartition(
 	return &cleanupNetworkPartition{nodeID: nodeID}
 }
 
+// createSwizzleNetworkPartition selects a random subset of nodes in the cluster.
+// Then, it “clogs” (stops) each of their network connections one by one over a few seconds.
+// Finally, it unclogs them in a random order, again one by one, until they are all up.
+func createSwizzleNetworkPartition(
+	ctx context.Context, o operation.Operation, c cluster.Cluster,
+) registry.OperationCleanup {
+	nodeCount := c.Spec().NodeCount
+	if nodeCount <= 1 {
+		o.Fatal("not enough nodes to create a partition")
+	}
+	numToClog := rand.Intn(nodeCount/2) + 1
+	var nodes []int
+	for i := 0; i < nodeCount; i++ {
+		nodes = append(nodes, i+1)
+	}
+
+	rand.Shuffle(len(nodes), func(i int, j int) {
+		nodes[i], nodes[j] = nodes[j], nodes[i]
+	})
+	nodes = nodes[:numToClog]
+
+	for _, nodeID := range nodes {
+		// Drop bi-directional traffic between the node and all other nodes on the
+		// pgport.
+		o.Status(fmt.Sprintf("partition node n%d from the cluster", nodeID))
+		c.Run(ctx, option.WithNodes(c.Node(nodeID)), fmt.Sprintf(`sudo iptables -A INPUT  -p tcp --sport {pgport:%d} -j DROP`, nodeID))
+		c.Run(ctx, option.WithNodes(c.Node(nodeID)), fmt.Sprintf(`sudo iptables -A OUTPUT -p tcp --sport {pgport:%d} -j DROP`, nodeID))
+		c.Run(ctx, option.WithNodes(c.Node(nodeID)), fmt.Sprintf(`sudo iptables -A INPUT  -p tcp --dport {pgport:%d} -j DROP`, nodeID))
+		c.Run(ctx, option.WithNodes(c.Node(nodeID)), fmt.Sprintf(`sudo iptables -A OUTPUT -p tcp --dport {pgport:%d} -j DROP`, nodeID))
+	}
+	return &cleanupSwizzleNetworkPartition{nodesClogged: nodes}
+}
+
+type cleanupSwizzleNetworkPartition struct {
+	nodesClogged []int
+}
+
+// Cleanup removes the network partition created by the operation.
+func (np *cleanupSwizzleNetworkPartition) Cleanup(
+	ctx context.Context, o operation.Operation, c cluster.Cluster,
+) {
+	rand.Shuffle(len(np.nodesClogged), func(i int, j int) {
+		np.nodesClogged[i], np.nodesClogged[j] = np.nodesClogged[j], np.nodesClogged[i]
+	})
+
+	for _, nodeID := range np.nodesClogged {
+		o.Status(fmt.Sprintf("remove the partition on node n%d", nodeID))
+		c.Run(ctx, option.WithNodes(c.Node(nodeID)), `sudo iptables -F`)
+	}
+}
+
 // registerNetworkPartition registers both the full and partial network
 // partition operations.
 func registerNetworkPartition(r registry.Registry) {
@@ -108,5 +159,13 @@ func registerNetworkPartition(r registry.Registry) {
 		CompatibleClouds: registry.AllClouds,
 		Dependencies:     []registry.OperationDependency{registry.OperationRequiresZeroUnderreplicatedRanges},
 		Run:              createNetworkPartialPartition,
+	})
+	r.AddOperation(registry.OperationSpec{
+		Name:             "network-partition/swizzle",
+		Owner:            registry.OwnerKV,
+		Timeout:          1 * time.Minute,
+		CompatibleClouds: registry.AllClouds,
+		Dependencies:     []registry.OperationDependency{registry.OperationRequiresZeroUnderreplicatedRanges},
+		Run:              createSwizzleNetworkPartition,
 	})
 }

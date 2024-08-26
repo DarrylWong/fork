@@ -40,6 +40,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/storage/disk"
 	"github.com/cockroachdb/cockroach/pkg/storage/enginepb"
 	"github.com/cockroachdb/cockroach/pkg/storage/fs"
+	"github.com/cockroachdb/cockroach/pkg/testutils/serverutils/regionlatency"
 	"github.com/cockroachdb/cockroach/pkg/ts"
 	"github.com/cockroachdb/cockroach/pkg/util"
 	"github.com/cockroachdb/cockroach/pkg/util/cidr"
@@ -373,6 +374,35 @@ func (cfg *BaseConfig) InitTestingKnobs() {
 		storeKnobs := cfg.TestingKnobs.Store.(*kvserver.StoreTestingKnobs)
 		storeKnobs.EvalKnobs.UseRangeTombstonesForPointDeletes = true
 		cfg.TestingKnobs.RangeFeed.(*rangefeed.TestingKnobs).IgnoreOnDeleteRangeError = true
+	}
+
+	if latenciesList := envutil.EnvOrDefaultString("COCKROACH_INTERNAL_ARTIFICIAL_LATENCY_MAP", ""); latenciesList != "" {
+		fmt.Printf("darryl: COCKROACH_INTERNAL_ARTIFICIAL_LATENCY_MAP detected! %s\n", latenciesList)
+		if cfg.TestingKnobs.Server == nil {
+			cfg.TestingKnobs.Server = &TestingKnobs{}
+		}
+		serverKnobs := cfg.TestingKnobs.Server.(*TestingKnobs)
+		serverKnobs.ContextTestingKnobs.InjectedLatencyOracle = regionlatency.MakeAddrMap()
+		latencies := strings.Split(latenciesList, ",")
+		for _, latency := range latencies {
+			latencyKV := strings.Split(latency, "=")
+			if len(latencyKV) != 2 {
+				fmt.Println("darryl: unable to parse latencies")
+				cfg.TestingKnobs.Server = nil
+				break
+			}
+
+			duration, err := time.ParseDuration(latencyKV[1])
+			if err != nil {
+				fmt.Printf("darryl: unable to parse latencies: %s\n", err)
+				cfg.TestingKnobs.Server = nil
+				break
+			}
+			serverKnobs.ContextTestingKnobs.InjectedLatencyOracle.(regionlatency.AddrMap).SetLatency(latencyKV[0], duration)
+		}
+		fmt.Printf("darryl: latencyMap:%+v\n", serverKnobs.ContextTestingKnobs.InjectedLatencyOracle)
+	} else {
+		fmt.Println("darryl: no COCKROACH_INTERNAL_ARTIFICIAL_LATENCY_MAP detected :(")
 	}
 }
 

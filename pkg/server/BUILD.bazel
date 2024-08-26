@@ -283,6 +283,7 @@ go_library(
         "//pkg/storage/fs",
         "//pkg/testutils",
         "//pkg/testutils/serverutils",
+        "//pkg/testutils/serverutils/regionlatency",
         "//pkg/testutils/sqlutils",
         "//pkg/ts",
         "//pkg/ts/catalog",

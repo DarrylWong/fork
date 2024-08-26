@@ -17,10 +17,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/rpc"
-	"github.com/cockroachdb/cockroach/pkg/server"
-	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/testutils/serverutils"
-	"github.com/cockroachdb/errors"
 )
 
 // LatencyMap contains mapping for the speed-of-light delay between a pair
@@ -57,45 +54,45 @@ type OneWayLatency = time.Duration
 // InjectedLatencyOracle testing knob or if it does not implement AddrMap, an
 // error will be returned.
 func (m LatencyMap) Apply(tc TestCluster) error {
-	for i, n := 0, tc.NumServers(); i < n; i++ {
-		// TODO(#109869): This seems incorrect; what of the latency between
-		// SQL servers which use their own, separate RPC service?
-		serv := tc.Server(i).SystemLayer()
-		serverKnobs, ok := serv.TestingKnobs().Server.(*server.TestingKnobs)
-		if !ok {
-			return errors.AssertionFailedf(
-				"failed to inject latencies: no server testing knobs for server %d", i,
-			)
-		}
-		latencyMap, ok := serverKnobs.ContextTestingKnobs.InjectedLatencyOracle.(AddrMap)
-		if !ok {
-			return errors.AssertionFailedf(
-				"failed to inject latencies: InjectedLatencyOracle for server %d is %T",
-				i, serverKnobs.ContextTestingKnobs.InjectedLatencyOracle,
-			)
-		}
-		cfg := serv.ExecutorConfig().(sql.ExecutorConfig)
-		srcLocality, ok := cfg.Locality.Find("region")
-		if !ok {
-			continue
-		}
-		for j := 0; j < tc.NumServers(); j++ {
-			dst := tc.Server(j)
-			if dst == serv {
-				continue
-			}
-			dstCfg := dst.ExecutorConfig().(sql.ExecutorConfig)
-			dstLocality, ok := dstCfg.Locality.Find("region")
-			if !ok {
-				continue
-			}
-			l, ok := m.getLatency(srcLocality, dstLocality)
-			if !ok {
-				continue
-			}
-			latencyMap.SetLatency(dst.AdvRPCAddr(), l)
-		}
-	}
+	//for i, n := 0, tc.NumServers(); i < n; i++ {
+	//	// TODO(#109869): This seems incorrect; what of the latency between
+	//	// SQL servers which use their own, separate RPC service?
+	//	serv := tc.Server(i).SystemLayer()
+	//	serverKnobs, ok := serv.TestingKnobs().Server.(*server.TestingKnobs)
+	//	if !ok {
+	//		return errors.AssertionFailedf(
+	//			"failed to inject latencies: no server testing knobs for server %d", i,
+	//		)
+	//	}
+	//	latencyMap, ok := serverKnobs.ContextTestingKnobs.InjectedLatencyOracle.(AddrMap)
+	//	if !ok {
+	//		return errors.AssertionFailedf(
+	//			"failed to inject latencies: InjectedLatencyOracle for server %d is %T",
+	//			i, serverKnobs.ContextTestingKnobs.InjectedLatencyOracle,
+	//		)
+	//	}
+	//	cfg := serv.ExecutorConfig().(sql.ExecutorConfig)
+	//	srcLocality, ok := cfg.Locality.Find("region")
+	//	if !ok {
+	//		continue
+	//	}
+	//	for j := 0; j < tc.NumServers(); j++ {
+	//		dst := tc.Server(j)
+	//		if dst == serv {
+	//			continue
+	//		}
+	//		dstCfg := dst.ExecutorConfig().(sql.ExecutorConfig)
+	//		dstLocality, ok := dstCfg.Locality.Find("region")
+	//		if !ok {
+	//			continue
+	//		}
+	//		l, ok := m.getLatency(srcLocality, dstLocality)
+	//		if !ok {
+	//			continue
+	//		}
+	//		latencyMap.SetLatency(dst.AdvRPCAddr(), l)
+	//	}
+	//}
 	return nil
 }
 

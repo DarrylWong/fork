@@ -7,9 +7,6 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/rpc",
-        "//pkg/server",
-        "//pkg/sql",
         "//pkg/testutils/serverutils",
-        "@com_github_cockroachdb_errors//:errors",
     ],
 )

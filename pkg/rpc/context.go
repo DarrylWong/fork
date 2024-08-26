@@ -15,6 +15,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
+	"fmt"
 	"hash/fnv"
 	"io"
 	"math"
@@ -1583,7 +1584,10 @@ func (rpcCtx *Context) dialOptsNetwork(
 	dialer := onlyOnceDialer{}
 	dialerFunc := dialer.dial
 	if rpcCtx.Knobs.InjectedLatencyOracle != nil {
+		fmt.Printf("darryl: getting target: %s\n", target)
 		latency := rpcCtx.Knobs.InjectedLatencyOracle.GetLatency(target)
+		fmt.Printf("connecting with simulated latency %dms\n",
+			latency)
 		log.VEventf(ctx, 1, "connecting with simulated latency %dms",
 			latency)
 		dialer := artificialLatencyDialer{
@@ -1592,6 +1596,8 @@ func (rpcCtx *Context) dialOptsNetwork(
 			enabled:    rpcCtx.Knobs.InjectedLatencyEnabled,
 		}
 		dialerFunc = dialer.dial
+	} else {
+		fmt.Println("darryl: no injected latency oracle found!")
 	}
 	dialOpts = append(dialOpts, grpc.WithContextDialer(dialerFunc))
 
