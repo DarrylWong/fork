@@ -180,7 +180,7 @@ func (cfg *Config) WithNodeExporter(nodes install.Nodes) *Config {
 		cfg.ScrapeConfigs = append(cfg.ScrapeConfigs, ScrapeConfig{
 			JobName:     "node_exporter-" + s,
 			MetricsPath: "/metrics",
-			Labels:      map[string]string{"node": s},
+			Labels:      map[string]string{"cluster": "local", "node": s},
 			ScrapeNodes: []ScrapeNode{{
 				Node: node,
 				Port: 9100}},
@@ -200,8 +200,9 @@ func MakeInsecureCockroachScrapeConfig(nodes install.Nodes) []ScrapeConfig {
 			JobName:     "cockroach-n" + s,
 			MetricsPath: "/_status/vars",
 			Labels: map[string]string{
-				"node":   s,
-				"tenant": "system", // all CRDB nodes emit SQL metrics for the system tenant since it's embedded
+				"cluster": "local",
+				"node":    s,
+				"tenant":  "system", // all CRDB nodes emit SQL metrics for the system tenant since it's embedded
 			},
 			ScrapeNodes: []ScrapeNode{
 				{
@@ -222,8 +223,9 @@ func MakeInsecureTenantPodScrapeConfig(node install.Node, tenantID int) []Scrape
 		JobName:     fmt.Sprintf("cockroach-tenant-t%d-n%d", tenantID, int(node)),
 		MetricsPath: "/_status/vars",
 		Labels: map[string]string{
-			"node":   strconv.Itoa(int(node)),
-			"tenant": strconv.Itoa(tenantID),
+			"cluster": "local",
+			"node":    strconv.Itoa(int(node)),
+			"tenant":  strconv.Itoa(tenantID),
 		},
 		ScrapeNodes: []ScrapeNode{
 			{

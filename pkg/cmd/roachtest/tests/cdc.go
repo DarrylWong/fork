@@ -44,9 +44,9 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/cdctest"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/changefeedbase"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachprod/grafana"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/clusterstats"
-	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/grafana"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
@@ -736,7 +736,8 @@ func (ct *cdcTester) startGrafana() {
 		WithPrometheusNode(ct.workloadNode.InstallNodes()[0]).
 		WithCluster(ct.crdbNodes.InstallNodes()).
 		WithNodeExporter(ct.crdbNodes.InstallNodes()).
-		WithGrafanaDashboardJSON(grafana.ChangefeedRoachtestGrafanaDashboardJSON)
+		WithGrafanaDashboardJSON(grafana.ChangefeedRoachtestGrafanaDashboardJSON).
+		WithGrafanaDashboardJSON(grafana.SQLGrafana)
 
 	cfg.Grafana.Enabled = true
 
