@@ -226,6 +226,122 @@ func registerDiskStalledDetection(r registry.Registry) {
 			EncryptionSupport: registry.EncryptionMetamorphic,
 			Leases:            registry.MetamorphicLeases,
 		})
+		r.Add(registry.TestSpec{
+			Name:  fmt.Sprintf("disk-stalled/%s/kv", name),
+			Owner: registry.OwnerStorage,
+			// Use PDs in an attempt to work around flakes encountered when using SSDs.
+			// See #97968.
+			Cluster:             r.MakeClusterSpec(4, spec.WorkloadNode(), spec.ReuseNone(), spec.DisableLocalSSD()),
+			CompatibleClouds:    registry.OnlyGCE,
+			Suites:              registry.Suites(registry.Nightly),
+			Timeout:             30 * time.Minute,
+			SkipPostValidations: registry.PostValidationNoDeadNodes,
+			Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
+				runDiskStalledWorkload(ctx, t, c, makeStaller(t, c))
+			},
+			// Encryption is implemented within the virtual filesystem layer,
+			// just like disk-health monitoring. It's important to exercise
+			// encryption-at-rest to ensure there is not unmonitored I/O within
+			// the encryption-at-rest implementation that could indefinitely
+			// stall the process during a disk stall.
+			EncryptionSupport: registry.EncryptionMetamorphic,
+			Leases:            registry.MetamorphicLeases,
+		})
+	}
+}
+
+func runDiskStalledWorkload(ctx context.Context, t test.Test, c cluster.Cluster, s diskStaller) {
+	const maxSyncDur = 10 * time.Second
+
+	startOpts := option.DefaultStartOpts()
+	startOpts.RoachprodOpts.ExtraArgs = []string{
+		"--store", s.DataDir(),
+		"--log", fmt.Sprintf(`{sinks: {stderr: {filter: INFO}}, file-defaults: {dir: "%s"}}`, s.LogDir()),
+	}
+	startSettings := install.MakeClusterSettings()
+	startSettings.Env = append(startSettings.Env,
+		"COCKROACH_AUTO_BALLAST=false",
+		fmt.Sprintf("COCKROACH_LOG_MAX_SYNC_DURATION=%s", maxSyncDur),
+		fmt.Sprintf("COCKROACH_ENGINE_MAX_SYNC_DURATION_DEFAULT=%s", maxSyncDur))
+
+	t.Status("setting up disk staller")
+	s.Setup(ctx)
+	defer s.Cleanup(ctx)
+
+	t.Status("starting cluster")
+	c.Start(ctx, t.L(), startOpts, startSettings, c.CRDBNodes())
+
+	const numStalls = 8
+	var stallOrder []int
+	for i := 0; i < numStalls; i++ {
+		nodeToStall := rand.Intn(c.Spec().NodeCount)
+		stallOrder = append(stallOrder, nodeToStall)
+	}
+	adminUIAddrs, err := c.ExternalAdminUIAddr(ctx, t.L(), c.Nodes(2))
+	require.NoError(t, err)
+	adminURL := adminUIAddrs[0]
+
+	m := c.NewMonitor(ctx, c.CRDBNodes())
+	workloadStartAt := timeutil.Now()
+	m.Go(func(ctx context.Context) error {
+		c.Run(ctx, option.WithNodes(c.WorkloadNode()), `./cockroach workload run kv --read-percent 50 `+
+			`--duration 12m --concurrency 256 --max-rate 2048 --tolerate-errors `+
+			` --min-block-bytes=512 --max-block-bytes=512 `+
+			`{pgurl:1-3}`)
+		return nil
+	})
+
+	pauseDur := time.Minute
+	pauseBeforeStall := time.After(pauseDur)
+	t.Status("pausing ", pauseDur, " before inducing write stall")
+	select {
+	case <-ctx.Done():
+		t.Fatalf("context done before stall: %s", ctx.Err())
+	case <-pauseBeforeStall:
+	}
+
+	for _, node := range stallOrder {
+		if node != 0 {
+			stallAt := timeutil.Now()
+			response := mustGetMetrics(ctx, c, t, adminURL, install.SystemInterfaceName, workloadStartAt, stallAt, []tsQuery{
+				{name: "cr.node.sql.query.count", queryType: total},
+			})
+			cum := response.Results[0].Datapoints
+			totalQueriesPreStall := cum[len(cum)-1].Value - cum[0].Value
+			t.L().PrintfCtx(ctx, "%.2f queries completed before stall", totalQueriesPreStall)
+			t.L().PrintfCtx(ctx, "stalling node %d", node)
+			s.Stall(ctx, c.Node(node))
+
+			defer func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+				defer cancel()
+				s.Unstall(ctx, c.Node(1))
+			}()
+
+			pauseDur = 2 * time.Minute
+			pauseForStall := time.After(pauseDur)
+			t.Status("pausing ", pauseDur, " after inducing write stall")
+			select {
+			case <-ctx.Done():
+				t.Fatalf("context done before stall completed: %s", ctx.Err())
+			case <-pauseForStall:
+			}
+		} else {
+			t.L().PrintfCtx(ctx, "running workload without stalls")
+
+			pauseDur = 2 * time.Minute
+			pauseForStall := time.After(pauseDur)
+			t.Status("pausing ", pauseDur)
+			select {
+			case <-ctx.Done():
+				t.Fatalf("context done before wait completed: %s", ctx.Err())
+			case <-pauseForStall:
+			}
+		}
+
+		m.Wait()
+		// Shut down the nodes, allowing any devices to be unmounted during cleanup.
+		c.Stop(ctx, t.L(), option.DefaultStopOpts(), c.CRDBNodes())
 	}
 }
 
