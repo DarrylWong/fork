@@ -44,6 +44,7 @@ go_library(
         "cdc_helper.go",
         "cdc_stats.go",
         "chaos.go",
+        "chaosd.go",
         "clearrange.go",
         "cli.go",
         "clock_jump_crash.go",
