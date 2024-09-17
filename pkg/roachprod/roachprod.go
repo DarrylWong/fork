@@ -786,7 +786,11 @@ func UpdateTargets(
 	if err := LoadClusters(); err != nil {
 		return err
 	}
-	return updatePrometheusTargets(ctx, l, clusterName, clusterSettingsOpts...)
+	promLogger, err := l.ChildLogger("prom_setup")
+	if err != nil {
+		return err
+	}
+	return updatePrometheusTargets(ctx, promLogger, clusterName, clusterSettingsOpts...)
 }
 
 // updatePrometheusTargets updates the prometheus instance cluster config. Any error is logged and ignored.
