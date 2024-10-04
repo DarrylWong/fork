@@ -29,6 +29,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/util/ctxgroup"
+	"github.com/cockroachdb/cockroach/pkg/util/retry"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
@@ -559,19 +560,11 @@ func (tr *testRunner) refreshBinaryVersions(ctx context.Context, service *servic
 		group.GoCtx(func(ctx context.Context) error {
 			bv, err := clusterupgrade.BinaryVersion(ctx, tr.conn(node, service.descriptor.Name))
 			if err != nil {
-				if tr.cluster.IsNodeExpectedDown(node) {
+				if tr.cluster.IsNodeExpectedStatus(node, install.Down) {
 					tr.logger.Printf("refreshBinaryVersions: expected node %d to be down, ignoring error: %v", node, err)
 					newBinaryVersions[j] = oldBinaryVersions[j]
 					return nil
 				}
-
-				// Debugging
-				expectedDownNodes := make(map[int]bool)
-				for i := range service.descriptor.Nodes {
-					expectedDownNodes[i+1] = tr.cluster.IsNodeExpectedDown(i + 1)
-				}
-				tr.logger.Printf("expectedDownNodes: %v", expectedDownNodes)
-				// Debugging
 
 				return fmt.Errorf("failed to get binary version for node %d: %w", node, err)
 			}
@@ -603,7 +596,7 @@ func (tr *testRunner) refreshClusterVersions(ctx context.Context, service *servi
 		group.GoCtx(func(ctx context.Context) error {
 			cv, err := clusterupgrade.ClusterVersion(ctx, tr.conn(node, service.descriptor.Name))
 			if err != nil {
-				if tr.cluster.IsNodeExpectedDown(node) {
+				if tr.cluster.IsNodeExpectedStatus(node, install.Down) {
 					tr.logger.Printf("refreshClusterVersions: expected node %d to be down, ignoring error: %v", node, err)
 					newClusterVersions[j] = oldClusterVersions[j]
 					return nil
@@ -635,12 +628,30 @@ func (tr *testRunner) refreshServiceData(ctx context.Context, service *serviceRu
 	}
 
 	if isSystem || tr.plan.deploymentMode == SeparateProcessDeployment {
-		if err := tr.refreshBinaryVersions(ctx, service); err != nil {
+		if err := retry.WithMaxAttempts(ctx, retry.Options{
+			InitialBackoff: 30 * time.Second,
+			Multiplier:     1,
+		}, 3, func() error {
+			err := tr.refreshBinaryVersions(ctx, service)
+			if err != nil {
+				tr.logger.Printf("%s", err)
+			}
+			return err
+		}); err != nil {
 			return err
 		}
 	}
 
-	if err := tr.refreshClusterVersions(ctx, service); err != nil {
+	if err := retry.WithMaxAttempts(ctx, retry.Options{
+		InitialBackoff: 30 * time.Second,
+		Multiplier:     1,
+	}, 3, func() error {
+		err := tr.refreshClusterVersions(ctx, service)
+		if err != nil {
+			tr.logger.Printf("%s", err)
+		}
+		return err
+	}); err != nil {
 		return err
 	}
 

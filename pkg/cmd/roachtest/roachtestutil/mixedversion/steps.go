@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math/rand"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -324,8 +325,8 @@ func (s restartWithNewBinaryStep) Run(
 		install.TagOption(systemTag),
 	}, s.settings...)
 
-	h.runner.cluster.SetNodeExpectedDown(s.node, true)
-	defer h.runner.cluster.SetNodeExpectedDown(s.node, false)
+	h.runner.cluster.SetNodeExpectedStatus(s.node, install.Down)
+	defer h.runner.cluster.SetNodeExpectedStatus(s.node, install.Alive)
 	if err := clusterupgrade.RestartNodesWithNewBinary(
 		startCtx,
 		s.rt,
@@ -371,12 +372,12 @@ func (s restartProcessStep) Run(
 	c := h.runner.cluster
 	customStartOpts := []option.StartStopOption{option.WithInitTarget(s.initTarget), option.WaitForReplication()}
 
-	if (*h.cluster).IsNodeExpectedDown(s.node[0]) {
+	if (*h.cluster).IsNodeExpectedStatus(s.node[0], install.Down) {
 		l.Printf("node %d is already expected to be down, skipping", s.node)
 		return nil
 	}
 
-	(*h.cluster).SetNodeExpectedDown(s.node[0], true)
+	(*h.cluster).SetNodeExpectedStatus(s.node[0], install.Down)
 
 	const gracePeriod = 300 // 5 minutes
 	stopOpts := option.NewStopOpts()
@@ -427,7 +428,72 @@ func (s restartProcessStep) Run(
 	}
 	l.Printf("pinging node %d after restart, node reached, marking it as up", s.node[0])
 
-	(*h.cluster).SetNodeExpectedDown(s.node[0], false)
+	(*h.cluster).SetNodeExpectedStatus(s.node[0], install.Alive)
+	return nil
+}
+
+type partitionNodeStep struct {
+	node         option.NodeListOption
+	nodeDowntime time.Duration
+}
+
+func (s partitionNodeStep) Background() shouldStop { return nil }
+
+func (s partitionNodeStep) Description() string {
+	return fmt.Sprintf("partition node %d for %s", s.node, s.nodeDowntime)
+}
+
+const iptablesPartition = `# ensure any failure fails the entire script.
+set -e;
+
+# Setting default filter policy
+sudo iptables -P INPUT ACCEPT;
+sudo iptables -P OUTPUT ACCEPT;
+
+# Drop any node-to-node crdb traffic.
+sudo iptables -A INPUT -p tcp --dport {pgport%[1]s} -j DROP;
+sudo iptables -A OUTPUT -p tcp --dport {pgport%[1]s} -j DROP;
+
+sudo iptables-save`
+
+const revertIpTablesPartition = `set -e;
+sudo iptables -D INPUT -p tcp --dport {pgport%[1]s} -j DROP;
+sudo iptables -D OUTPUT -p tcp --dport {pgport%[1]s} -j DROP;
+sudo iptables-save`
+
+func (s partitionNodeStep) Run(
+	ctx context.Context, l *logger.Logger, _ *rand.Rand, h *Helper,
+) error {
+	c := h.runner.cluster
+	c.SetNodeExpectedStatus(s.node[0], install.Partitioned)
+	defer c.SetNodeExpectedStatus(s.node[0], install.Alive)
+	c.Run(ctx, option.WithNodes(s.node), fmt.Sprintf(iptablesPartition, s.node))
+
+	select {
+	case <-time.After(s.nodeDowntime):
+	case <-ctx.Done():
+	}
+
+	defer c.Run(ctx, option.WithNodes(s.node), fmt.Sprintf(revertIpTablesPartition, s.node))
+
+	res, err := c.RunWithDetailsSingleNode(ctx, l, option.WithNodes(s.node), "sudo iptables -L -v -n")
+	if err != nil {
+		return err
+	}
+	rows := strings.Split(res.Stdout, "\n")
+	// iptables -L outputs rows in the order of: chain, fields, and then values.
+	// We care about the values so only look at row 2.
+	values := strings.Fields(rows[2])
+	if len(values) == 0 {
+		return errors.Errorf("no configured iptables rules found:\n%s", res.Stdout)
+	}
+	packetsDropped, err := strconv.Atoi(values[0])
+	if err != nil {
+		return err
+	}
+
+	l.Printf("packets dropped: %d", packetsDropped)
+
 	return nil
 }
 

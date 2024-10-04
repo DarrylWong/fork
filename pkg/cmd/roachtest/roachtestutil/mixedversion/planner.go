@@ -214,6 +214,7 @@ const (
 var planMutators = []mutator{
 	preserveDowngradeOptionRandomizerMutator{},
 	processRestartMutator{},
+	partitionNodeMutator{},
 	newClusterSettingMutator(
 		"kv.expiration_leases_only.enabled",
 		[]bool{true, false},

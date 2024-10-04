@@ -392,7 +392,7 @@ func (m processRestartMutator) Name() string {
 }
 
 func (m processRestartMutator) Probability() float64 {
-	return 1.0
+	return 0.0
 }
 
 func (m processRestartMutator) Generate(rng *rand.Rand, plan *TestPlan) []mutation {
@@ -453,6 +453,82 @@ func (m processRestartMutator) restartSteps(rng *rand.Rand, numPossibleSteps int
 	for i := 0; i < numChanges; i++ {
 		steps = append(steps, restartStep{
 			impl: restartProcessStep{},
+			slot: nextSlot(),
+		})
+	}
+	return steps
+}
+
+type partitionNodeMutator struct{}
+
+func (m partitionNodeMutator) Name() string {
+	return "partition_node_mutator"
+}
+
+func (m partitionNodeMutator) Probability() float64 {
+	return 1.0
+}
+
+func (m partitionNodeMutator) Generate(rng *rand.Rand, plan *TestPlan) []mutation {
+	if plan.isLocal {
+		return nil
+	}
+	var mutations []mutation
+	// Don't partition nodes until we had some background work going on. This way we
+	// can observe packets actually being dropped.
+	possiblePointsInTime := plan.
+		newStepSelector().
+		Filter(func(s *singleStep) bool {
+			return s.context.System.Stage > BackgroundStage
+		})
+
+	possibleWaitDurations := []time.Duration{30 * time.Second, 1 * time.Minute}
+
+	for _, step := range m.partitionSteps(rng, len(possiblePointsInTime)) {
+		var currentSlot int
+		applyChange := possiblePointsInTime.
+			Filter(func(s *singleStep) bool {
+				step.impl.nodeDowntime = pickRandomDelay(rng, plan.isLocal, possibleWaitDurations)
+				step.impl.node = s.context.Nodes().SeededRandNode(rng)
+				currentSlot++
+				return currentSlot == step.slot
+			}).
+			Insert(rng, step.impl)
+
+		mutations = append(mutations, applyChange...)
+	}
+
+	return mutations
+}
+
+type partitionSteps struct {
+	impl partitionNodeStep
+	slot int
+}
+
+func (m partitionNodeMutator) partitionSteps(
+	rng *rand.Rand, numPossibleSteps int,
+) []partitionSteps {
+	numChanges := 1 + rng.Intn(numPossibleSteps)
+
+	chosenSlots := make(map[int]struct{})
+	for len(chosenSlots) != numChanges {
+		chosenSlots[1+rng.Intn(numPossibleSteps)] = struct{}{}
+	}
+
+	slots := maps.Keys(chosenSlots)
+	sort.Ints(slots)
+
+	nextSlot := func() int {
+		n := slots[0]
+		slots = slots[1:]
+		return n
+	}
+
+	var steps []partitionSteps
+	for i := 0; i < numChanges; i++ {
+		steps = append(steps, partitionSteps{
+			impl: partitionNodeStep{},
 			slot: nextSlot(),
 		})
 	}

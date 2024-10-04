@@ -18,6 +18,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/mixedversion"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/server/serverpb"
 	"github.com/cockroachdb/cockroach/pkg/util/httputil"
@@ -205,13 +206,11 @@ func (s *sqlStatsRequestHelper) requestSQLStats(
 	}
 
 	for i, addr := range adminUIAddrs {
-		if c.IsNodeExpectedDown(i + 1) {
-			s.logger.Printf("skipping request to down node %d", i+1)
-			continue
-		}
 		url := getCombinedStatementStatsURL(addr, statsType, requestedRange)
 		statsResponse := &serverpb.StatementsResponse{}
-		if err := s.client.GetJSON(ctx, url, statsResponse, httputil.IgnoreUnknownFields()); err != nil {
+		if err := s.cluster.RunIfNodeExpectedStatus(i+1, install.Alive, func() error {
+			return s.client.GetJSON(ctx, url, statsResponse, httputil.IgnoreUnknownFields())
+		}); err != nil {
 			s.logger.Printf("error requesting stats from url: %s", url)
 			return err
 		}

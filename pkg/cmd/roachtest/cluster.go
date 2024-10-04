@@ -680,20 +680,32 @@ type clusterImpl struct {
 		// sideEyeEnvName is the name of the environment used by the Side-Eye agents
 		// running on this cluster. Empty if the Side-Eye integration is not active.
 		sideEyeEnvName    string
-		expectedDownNodes map[int]bool
+		expectedDownNodes map[int]install.ExpectedNodeStatus
 	}
 }
 
-func (c *clusterImpl) IsNodeExpectedDown(node int) bool {
+func (c *clusterImpl) IsNodeExpectedStatus(node int, status install.ExpectedNodeStatus) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.mu.expectedDownNodes[node]
+	return c.mu.expectedDownNodes[node] == status
 }
 
-func (c *clusterImpl) SetNodeExpectedDown(node int, expectedDown bool) {
+func (c *clusterImpl) RunIfNodeExpectedStatus(
+	node int, status install.ExpectedNodeStatus, runFunc func() error,
+) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.mu.expectedDownNodes[node] = expectedDown
+	if c.mu.expectedDownNodes[node] == status {
+		return runFunc()
+	}
+
+	return nil
+}
+
+func (c *clusterImpl) SetNodeExpectedStatus(node int, status install.ExpectedNodeStatus) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.mu.expectedDownNodes[node] = status
 }
 
 func (c *clusterImpl) WaitForNodeLiveness(ctx context.Context, node int) {
@@ -702,9 +714,7 @@ func (c *clusterImpl) WaitForNodeLiveness(ctx context.Context, node int) {
 		case <-ctx.Done():
 			return
 		case <-time.After(1 * time.Second):
-			c.mu.Lock()
-			defer c.mu.Unlock()
-			if !c.mu.expectedDownNodes[node] {
+			if c.IsNodeExpectedStatus(node, install.Alive) {
 				return
 			}
 		}

@@ -602,10 +602,15 @@ func (c *SyncedCluster) Wipe(ctx context.Context, l *logger.Logger, preserveCert
 				cmd += fmt.Sprintf(`rm -fr %s/%s ;`, c.localVMDir(node), dir)
 			}
 		} else {
+			const cleanIpTablesRules = `sudo iptables-save | awk '/^[*]/ { print $1 } 
+                     /^:[A-Z]+ [^-]/ { print $1 " ACCEPT" ; }
+                     /COMMIT/ { print $0; }' | sudo iptables-restore`
+
 			rmCmds := []string{
 				fmt.Sprintf(`sudo find /mnt/data* -maxdepth 1 -type f -not -name %s -exec rm -f {} \;`, vm.InitializedFile),
 				`sudo rm -fr /mnt/data*/{auxiliary,local,tmp,cassandra,cockroach,cockroach-temp*,mongo-data}`,
 				`sudo rm -fr logs* data*`,
+				cleanIpTablesRules,
 			}
 			if !preserveCerts {
 				rmCmds = append(rmCmds,
@@ -3040,3 +3045,11 @@ func GenFilenameFromArgs(maxLen int, args ...string) string {
 
 	return sb.String()
 }
+
+type ExpectedNodeStatus int
+
+const (
+	Alive ExpectedNodeStatus = iota
+	Partitioned
+	Down
+)

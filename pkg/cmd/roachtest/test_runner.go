@@ -35,6 +35,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/config"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/vm"
 	"github.com/cockroachdb/cockroach/pkg/util/allstacks"
@@ -897,7 +898,7 @@ func (r *testRunner) runWorker(
 				c.clusterSettings = map[string]string{}
 				c.virtualClusterSettings = map[string]string{}
 				c.mu.Lock()
-				c.mu.expectedDownNodes = make(map[int]bool)
+				c.mu.expectedDownNodes = make(map[int]install.ExpectedNodeStatus)
 				c.mu.Unlock()
 
 				switch testSpec.Leases {
