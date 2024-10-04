@@ -51,6 +51,8 @@ func registerSqlStatsMixedVersion(r registry.Registry) {
 func runSQLStatsMixedVersion(ctx context.Context, t test.Test, c cluster.Cluster) {
 	mvt := mixedversion.NewTest(ctx, t, t.L(), c,
 		c.CRDBNodes(),
+		// For testing only, easier to parse plan when it's not 50+ steps long :)
+		mixedversion.MaxUpgrades(2),
 		// We test only upgrades from 23.2 in this test because it uses
 		// the `workload fixtures import` command, which is only supported
 		// reliably multi-tenant mode starting from that version.
@@ -121,7 +123,7 @@ func runGetRequests(
 	// We can ensure we request from in-memory tables by requesting stats from
 	// a time range for which no data is available, as the in-memory table
 	// is only used when no data is available from system tables.
-	if err := s.requestSQLStatsFromEmptyInterval(ctx, roachNodes, statsType, addToTableSources); err != nil {
+	if err := s.requestSQLStatsFromEmptyInterval(ctx, c, roachNodes, statsType, addToTableSources); err != nil {
 		return errors.Wrap(err, "failed to request stats for empty interval")
 	}
 	inMemTable := crdbInternalStmtStatsCombined
@@ -141,7 +143,7 @@ func runGetRequests(
 	foundFlushedStats := false
 	for r.Next() {
 		// Requesting data from the last two hours should return data from the persisted tables eventually.
-		if err := s.requestSQLStatsFromLastTwoHours(ctx, roachNodes, statsType, addToTableSources); err != nil {
+		if err := s.requestSQLStatsFromLastTwoHours(ctx, c, roachNodes, statsType, addToTableSources); err != nil {
 			return errors.Wrap(err, "failed to request stats for last two hours")
 		}
 		if len(foundTableSources) >= expectedTableCount {
@@ -191,6 +193,7 @@ func createSQLStatsRequestHelper(
 // the statusServer via `_status/combinedstmts`.
 func (s *sqlStatsRequestHelper) requestSQLStats(
 	ctx context.Context,
+	c cluster.Cluster,
 	gatewayNodes option.NodeListOption,
 	statsType serverpb.CombinedStatementsStatsRequest_StatsType,
 	requestedRange timeRange,
@@ -201,7 +204,11 @@ func (s *sqlStatsRequestHelper) requestSQLStats(
 		return err
 	}
 
-	for _, addr := range adminUIAddrs {
+	for i, addr := range adminUIAddrs {
+		if c.IsNodeExpectedDown(i + 1) {
+			s.logger.Printf("skipping request to down node %d", i+1)
+			continue
+		}
 		url := getCombinedStatementStatsURL(addr, statsType, requestedRange)
 		statsResponse := &serverpb.StatementsResponse{}
 		if err := s.client.GetJSON(ctx, url, statsResponse, httputil.IgnoreUnknownFields()); err != nil {
@@ -217,13 +224,14 @@ func (s *sqlStatsRequestHelper) requestSQLStats(
 // Requests stmt stats data from the last two hours.
 func (s *sqlStatsRequestHelper) requestSQLStatsFromLastTwoHours(
 	ctx context.Context,
+	c cluster.Cluster,
 	gatewayNodes option.NodeListOption,
 	statsType serverpb.CombinedStatementsStatsRequest_StatsType,
 	respHandler func(*serverpb.StatementsResponse),
 ) error {
 	start := timeutil.Now().Add(-2 * time.Hour)
 	end := timeutil.Now()
-	return s.requestSQLStats(ctx, gatewayNodes, statsType, timeRange{start, end}, respHandler)
+	return s.requestSQLStats(ctx, c, gatewayNodes, statsType, timeRange{start, end}, respHandler)
 }
 
 // Requests stmt stats data  by using a time range for which no data
@@ -231,11 +239,12 @@ func (s *sqlStatsRequestHelper) requestSQLStatsFromLastTwoHours(
 // the in-memory table.
 func (s *sqlStatsRequestHelper) requestSQLStatsFromEmptyInterval(
 	ctx context.Context,
+	c cluster.Cluster,
 	gatewayNodes option.NodeListOption,
 	statsType serverpb.CombinedStatementsStatsRequest_StatsType,
 	respHandler func(*serverpb.StatementsResponse),
 ) error {
 	end := timeutil.Unix(100, 0)
 	start := timeutil.Unix(0, 0)
-	return s.requestSQLStats(ctx, gatewayNodes, statsType, timeRange{start, end}, respHandler)
+	return s.requestSQLStats(ctx, c, gatewayNodes, statsType, timeRange{start, end}, respHandler)
 }

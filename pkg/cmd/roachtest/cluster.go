@@ -679,7 +679,35 @@ type clusterImpl struct {
 		syncutil.Mutex
 		// sideEyeEnvName is the name of the environment used by the Side-Eye agents
 		// running on this cluster. Empty if the Side-Eye integration is not active.
-		sideEyeEnvName string
+		sideEyeEnvName    string
+		expectedDownNodes map[int]bool
+	}
+}
+
+func (c *clusterImpl) IsNodeExpectedDown(node int) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.mu.expectedDownNodes[node]
+}
+
+func (c *clusterImpl) SetNodeExpectedDown(node int, expectedDown bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.mu.expectedDownNodes[node] = expectedDown
+}
+
+func (c *clusterImpl) WaitForNodeLiveness(ctx context.Context, node int) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(1 * time.Second):
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			if !c.mu.expectedDownNodes[node] {
+				return
+			}
+		}
 	}
 }
 

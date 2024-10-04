@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/clusterupgrade"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
@@ -64,6 +65,7 @@ type (
 		bgCount    int64
 		runner     *testRunner
 		stepLogger *logger.Logger
+		cluster    *cluster.Cluster
 	}
 )
 

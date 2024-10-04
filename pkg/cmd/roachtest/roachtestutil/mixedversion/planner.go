@@ -213,6 +213,7 @@ const (
 // any mixedversion test plan.
 var planMutators = []mutator{
 	preserveDowngradeOptionRandomizerMutator{},
+	processRestartMutator{},
 	newClusterSettingMutator(
 		"kv.expiration_leases_only.enabled",
 		[]bool{true, false},

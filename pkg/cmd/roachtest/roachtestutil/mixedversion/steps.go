@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -312,6 +313,10 @@ func (s restartWithNewBinaryStep) Run(
 		customStartOpts = append(customStartOpts, option.WaitForReplication())
 	}
 
+	h.ExpectDeath()
+
+	h.runner.cluster.WaitForNodeLiveness(ctx, s.node)
+
 	startCtx, cancel := context.WithTimeout(ctx, startTimeout)
 	defer cancel()
 
@@ -319,7 +324,8 @@ func (s restartWithNewBinaryStep) Run(
 		install.TagOption(systemTag),
 	}, s.settings...)
 
-	h.ExpectDeath()
+	h.runner.cluster.SetNodeExpectedDown(s.node, true)
+	defer h.runner.cluster.SetNodeExpectedDown(s.node, false)
 	if err := clusterupgrade.RestartNodesWithNewBinary(
 		startCtx,
 		s.rt,
@@ -340,6 +346,88 @@ func (s restartWithNewBinaryStep) Run(
 		return waitForSharedProcess(ctx, l, h, h.runner.cluster.Node(s.node))
 	}
 
+	return nil
+}
+
+type restartProcessStep struct {
+	node option.NodeListOption
+	// How do we get the settings?
+	//settings           []install.ClusterSettingOption
+	initTarget int
+	//waitForReplication bool
+	gracefulStop bool
+	nodeDowntime time.Duration
+}
+
+func (s restartProcessStep) Background() shouldStop { return nil }
+
+func (s restartProcessStep) Description() string {
+	return fmt.Sprintf("stopping node %d for %s before restarting", s.node, s.nodeDowntime)
+}
+
+func (s restartProcessStep) Run(
+	ctx context.Context, l *logger.Logger, _ *rand.Rand, h *Helper,
+) error {
+	c := h.runner.cluster
+	customStartOpts := []option.StartStopOption{option.WithInitTarget(s.initTarget), option.WaitForReplication()}
+
+	if (*h.cluster).IsNodeExpectedDown(s.node[0]) {
+		l.Printf("node %d is already expected to be down, skipping", s.node)
+		return nil
+	}
+
+	(*h.cluster).SetNodeExpectedDown(s.node[0], true)
+
+	const gracePeriod = 300 // 5 minutes
+	stopOpts := option.NewStopOpts()
+	if s.gracefulStop {
+		stopOpts = option.NewStopOpts(option.Graceful(gracePeriod))
+	}
+
+	h.ExpectDeath()
+	if err := c.StopE(
+		ctx, l, stopOpts, s.node,
+	); err != nil {
+		return err
+	}
+
+	l.Printf("node %d stopped, waiting %s", s.node, s.nodeDowntime)
+
+	select {
+	case <-time.After(s.nodeDowntime):
+	case <-ctx.Done():
+	}
+
+	l.Printf("restarting node %d", s.node)
+
+	startCtx, cancel := context.WithTimeout(ctx, startTimeout)
+	defer cancel()
+
+	var binary string
+	v, _ := h.System.NodeVersion(s.node[0])
+
+	if v.IsCurrent() {
+		binary = test.DefaultCockroachPath
+	} else {
+		binary = filepath.Join(v.String(), "cockroach")
+	}
+
+	if err := clusterupgrade.StartWithSettings(
+		startCtx, l, c, s.node, startOpts(customStartOpts...), install.BinaryOption(binary),
+	); err != nil {
+		return err
+	}
+
+	l.Printf("pinging node %d after restart", s.node[0])
+	conn := (*h.cluster).Conn(ctx, l, s.node[0])
+	pingCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := conn.PingContext(pingCtx); err != nil {
+		return errors.Wrapf(err, "failed to reach node %d after restart", s.node[0])
+	}
+	l.Printf("pinging node %d after restart, node reached, marking it as up", s.node[0])
+
+	(*h.cluster).SetNodeExpectedDown(s.node[0], false)
 	return nil
 }
 

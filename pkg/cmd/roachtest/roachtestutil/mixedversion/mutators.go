@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
+	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/clusterupgrade"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
@@ -381,5 +382,79 @@ func (m clusterSettingMutator) changeSteps(
 		}
 	}
 
+	return steps
+}
+
+type processRestartMutator struct{}
+
+func (m processRestartMutator) Name() string {
+	return "process_restart_mutator"
+}
+
+func (m processRestartMutator) Probability() float64 {
+	return 1.0
+}
+
+func (m processRestartMutator) Generate(rng *rand.Rand, plan *TestPlan) []mutation {
+	var mutations []mutation
+	// Don't kill processes while the test is still starting up as that is not interesting.
+	// Workload init should be resilient, but it's not and non-trivial to fix
+	possiblePointsInTime := plan.
+		newStepSelector().
+		Filter(func(s *singleStep) bool {
+			return s.context.System.Stage > OnStartupStage
+		})
+
+	possibleWaitDurations := []time.Duration{0 * time.Second, 30 * time.Second, 1 * time.Minute}
+
+	for _, step := range m.restartSteps(rng, len(possiblePointsInTime)) {
+		var currentSlot int
+		applyChange := possiblePointsInTime.
+			Filter(func(s *singleStep) bool {
+				step.impl.nodeDowntime = pickRandomDelay(rng, plan.isLocal, possibleWaitDurations)
+				step.impl.node = s.context.Nodes().SeededRandNode(rng)
+
+				step.impl.initTarget = s.context.System.Descriptor.Nodes[0]
+				step.impl.gracefulStop = rng.Float64() < 0.5
+				currentSlot++
+				return currentSlot == step.slot
+			}).
+			Insert(rng, step.impl)
+
+		mutations = append(mutations, applyChange...)
+	}
+
+	return mutations
+}
+
+type restartStep struct {
+	impl restartProcessStep
+	slot int
+}
+
+func (m processRestartMutator) restartSteps(rng *rand.Rand, numPossibleSteps int) []restartStep {
+	numChanges := 1 + rng.Intn(numPossibleSteps)
+
+	chosenSlots := make(map[int]struct{})
+	for len(chosenSlots) != numChanges {
+		chosenSlots[1+rng.Intn(numPossibleSteps)] = struct{}{}
+	}
+
+	slots := maps.Keys(chosenSlots)
+	sort.Ints(slots)
+
+	nextSlot := func() int {
+		n := slots[0]
+		slots = slots[1:]
+		return n
+	}
+
+	var steps []restartStep
+	for i := 0; i < numChanges; i++ {
+		steps = append(steps, restartStep{
+			impl: restartProcessStep{},
+			slot: nextSlot(),
+		})
+	}
 	return steps
 }

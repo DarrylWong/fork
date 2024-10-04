@@ -550,6 +550,7 @@ func (tr *testRunner) loggerFor(step *singleStep) (*logger.Logger, error) {
 // called by two steps that are running concurrently.
 func (tr *testRunner) refreshBinaryVersions(ctx context.Context, service *serviceRuntime) error {
 	newBinaryVersions := make([]roachpb.Version, len(service.descriptor.Nodes))
+	oldBinaryVersions := loadAtomicVersions(service.binaryVersions)
 	connectionCtx, cancel := context.WithTimeout(ctx, internalQueryTimeout)
 	defer cancel()
 
@@ -558,10 +559,21 @@ func (tr *testRunner) refreshBinaryVersions(ctx context.Context, service *servic
 		group.GoCtx(func(ctx context.Context) error {
 			bv, err := clusterupgrade.BinaryVersion(ctx, tr.conn(node, service.descriptor.Name))
 			if err != nil {
-				return fmt.Errorf(
-					"failed to get binary version for node %d (%s): %w",
-					node, service.descriptor.Name, err,
-				)
+				if tr.cluster.IsNodeExpectedDown(node) {
+					tr.logger.Printf("refreshBinaryVersions: expected node %d to be down, ignoring error: %v", node, err)
+					newBinaryVersions[j] = oldBinaryVersions[j]
+					return nil
+				}
+
+				// Debugging
+				expectedDownNodes := make(map[int]bool)
+				for i := range service.descriptor.Nodes {
+					expectedDownNodes[i+1] = tr.cluster.IsNodeExpectedDown(i + 1)
+				}
+				tr.logger.Printf("expectedDownNodes: %v", expectedDownNodes)
+				// Debugging
+
+				return fmt.Errorf("failed to get binary version for node %d: %w", node, err)
 			}
 
 			newBinaryVersions[j] = bv
@@ -582,6 +594,7 @@ func (tr *testRunner) refreshBinaryVersions(ctx context.Context, service *servic
 // of the cluster.
 func (tr *testRunner) refreshClusterVersions(ctx context.Context, service *serviceRuntime) error {
 	newClusterVersions := make([]roachpb.Version, len(service.descriptor.Nodes))
+	oldClusterVersions := loadAtomicVersions(service.clusterVersions)
 	connectionCtx, cancel := context.WithTimeout(ctx, internalQueryTimeout)
 	defer cancel()
 
@@ -590,10 +603,12 @@ func (tr *testRunner) refreshClusterVersions(ctx context.Context, service *servi
 		group.GoCtx(func(ctx context.Context) error {
 			cv, err := clusterupgrade.ClusterVersion(ctx, tr.conn(node, service.descriptor.Name))
 			if err != nil {
-				return fmt.Errorf(
-					"failed to get cluster version for node %d (%s): %w",
-					node, service.descriptor.Name, err,
-				)
+				if tr.cluster.IsNodeExpectedDown(node) {
+					tr.logger.Printf("refreshClusterVersions: expected node %d to be down, ignoring error: %v", node, err)
+					newClusterVersions[j] = oldClusterVersions[j]
+					return nil
+				}
+				return fmt.Errorf("failed to get cluster version for node %d: %w", node, err)
 			}
 
 			newClusterVersions[j] = cv
@@ -711,6 +726,8 @@ func (tr *testRunner) newHelper(
 		ctx:         ctx,
 		runner:      tr,
 		stepLogger:  l,
+		// Expose the cluster to the helper so mvt framework steps can use it. Seems bad to do but ¯\_(ツ)_/¯
+		cluster: &tr.cluster,
 	}
 }
 

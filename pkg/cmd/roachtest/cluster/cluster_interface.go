@@ -132,6 +132,9 @@ type Cluster interface {
 	RunWithDetailsSingleNode(ctx context.Context, testLogger *logger.Logger, options install.RunOptions, args ...string) (install.RunResultDetails, error)
 
 	// Metadata about the provisioned nodes.
+	IsNodeExpectedDown(node int) bool
+	SetNodeExpectedDown(node int, expectedDown bool)
+	WaitForNodeLiveness(ctx context.Context, node int)
 
 	Spec() spec.ClusterSpec
 	Name() string
