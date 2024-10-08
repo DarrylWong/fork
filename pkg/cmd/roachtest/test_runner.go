@@ -2005,7 +2005,7 @@ func grafanaAnnotateTestStart(ctx context.Context, t test.Test, c cluster.Cluste
 }
 
 // How often to poll for preempted VMs.
-var pollPreemptionInterval = 5 * time.Minute
+var PollPreemptionInterval = 5 * time.Second
 
 func monitorForPreemptedVMs(ctx context.Context, t test.Test, c cluster.Cluster, l *logger.Logger) {
 	go func() {
@@ -2013,7 +2013,7 @@ func monitorForPreemptedVMs(ctx context.Context, t test.Test, c cluster.Cluster,
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(pollPreemptionInterval):
+			case <-time.After(PollPreemptionInterval):
 				preemptedVMs, err := c.GetPreemptedVMs(ctx, l)
 				if err != nil {
 					l.Printf("monitorForPreemptedVMs: failed to check preempted VMs:\n%+v", err)

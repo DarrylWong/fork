@@ -30,6 +30,7 @@ func RegisterTests(r registry.Registry) {
 	registerExportParquet(r)
 	registerCancel(r)
 	registerChangeReplicasMixedVersion(r)
+	registerCheckPreemption(r)
 	registerClearRange(r)
 	registerClockJumpTests(r)
 	registerClockMonotonicTests(r)

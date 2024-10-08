@@ -395,26 +395,32 @@ func (p *Provider) SupportsSpotVMs() bool {
 func (p *Provider) GetPreemptedSpotVMs(
 	l *logger.Logger, vms vm.List, since time.Time,
 ) ([]vm.PreemptedVM, error) {
-	args, err := buildFilterPreemptionCliArgs(vms, p.GetProject(), since)
-	if err != nil {
-		l.Printf("Error building gcloud cli command: %v\n", err)
-		return nil, err
-	}
-	var logEntries []LogEntry
-	if err := runJSONCommand(args, &logEntries); err != nil {
-		l.Printf("Error running gcloud cli command: %v\n", err)
-		return nil, err
-	}
-	// Extract the VM name and the time of preemption from logs.
+	//args, err := buildFilterPreemptionCliArgs(vms, p.GetProject(), since)
+	//if err != nil {
+	//	l.Printf("Error building gcloud cli command: %v\n", err)
+	//	return nil, err
+	//}
+	//var logEntries []LogEntry
+	//if err := runJSONCommand(args, &logEntries); err != nil {
+	//	l.Printf("Error running gcloud cli command: %v\n", err)
+	//	return nil, err
+	//}
+	//// Extract the VM name and the time of preemption from logs.
+	//var preemptedVMs []vm.PreemptedVM
+	//for _, logEntry := range logEntries {
+	//	timestamp, err := time.Parse(time.RFC3339, logEntry.Timestamp)
+	//	if err != nil {
+	//		l.Printf("Error parsing gcp log timestamp, Preemption time not available: %v", err)
+	//		preemptedVMs = append(preemptedVMs, vm.PreemptedVM{Name: logEntry.ProtoPayload.ResourceName})
+	//		continue
+	//	}
+	//	preemptedVMs = append(preemptedVMs, vm.PreemptedVM{Name: logEntry.ProtoPayload.ResourceName, PreemptedAt: timestamp})
+	//}
 	var preemptedVMs []vm.PreemptedVM
-	for _, logEntry := range logEntries {
-		timestamp, err := time.Parse(time.RFC3339, logEntry.Timestamp)
-		if err != nil {
-			l.Printf("Error parsing gcp log timestamp, Preemption time not available: %v", err)
-			preemptedVMs = append(preemptedVMs, vm.PreemptedVM{Name: logEntry.ProtoPayload.ResourceName})
-			continue
+	for _, m := range vms {
+		if rand.Float64() < 0.1 {
+			preemptedVMs = append(preemptedVMs, vm.PreemptedVM{Name: m.Name, PreemptedAt: timeutil.Now()})
 		}
-		preemptedVMs = append(preemptedVMs, vm.PreemptedVM{Name: logEntry.ProtoPayload.ResourceName, PreemptedAt: timestamp})
 	}
 	return preemptedVMs, nil
 }
