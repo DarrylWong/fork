@@ -1275,6 +1275,7 @@ func (r *testRunner) runTest(
 		}()
 
 		grafanaAnnotateTestStart(runCtx, t, c)
+		monitorForPreemptedVMs(runCtx, t, c, l)
 		// This is the call to actually run the test.
 		s.Run(runCtx, t, c)
 	}()
@@ -2001,4 +2002,28 @@ func grafanaAnnotateTestStart(ctx context.Context, t test.Test, c cluster.Cluste
 	if err := c.AddGrafanaAnnotation(ctx, t.L(), grafana.AddAnnotationRequest{Text: text, Tags: tags}); err != nil {
 		t.L().Printf(errors.Wrap(err, "error adding annotation for test start").Error())
 	}
+}
+
+// How often to poll for preempted VMs.
+var pollPreemptionInterval = 5 * time.Minute
+
+func monitorForPreemptedVMs(ctx context.Context, t test.Test, c cluster.Cluster, l *logger.Logger) {
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(pollPreemptionInterval):
+				preemptedVMs, err := c.GetPreemptedVMs(ctx, l)
+				if err != nil {
+					l.Printf("monitorForPreemptedVMs: failed to check preempted VMs:\n%+v", err)
+					continue
+				}
+
+				if len(preemptedVMs) != 0 {
+					t.Fatalf("monitorForPreemptedVMs: Preempted VMs detected: %s", preemptedVMs)
+				}
+			}
+		}
+	}()
 }
