@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"sort"
 
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/clusterupgrade"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"golang.org/x/exp/maps"
@@ -42,7 +43,7 @@ func (m preserveDowngradeOptionRandomizerMutator) Name() string {
 // Most runs will have this mutator disabled, as the base upgrade
 // plan's approach of resetting the cluster setting when all nodes are
 // upgraded is the most sensible / common.
-func (m preserveDowngradeOptionRandomizerMutator) Probability() float64 {
+func (m preserveDowngradeOptionRandomizerMutator) Probability(_ DeploymentMode) float64 {
 	return 0.3
 }
 
@@ -53,9 +54,10 @@ func (m preserveDowngradeOptionRandomizerMutator) Probability() float64 {
 // current version is always mutated. The length of the returned
 // mutations is always even.
 func (m preserveDowngradeOptionRandomizerMutator) Generate(
-	rng *rand.Rand, plan *TestPlan,
+	planner *testPlanner, plan *TestPlan,
 ) []mutation {
 	var mutations []mutation
+	rng := planner.prng
 	for _, upgradeSelector := range randomUpgrades(rng, plan) {
 		removeExistingStep := upgradeSelector.
 			Filter(func(s *singleStep) bool {
@@ -213,7 +215,7 @@ func (m clusterSettingMutator) Name() string {
 	return ClusterSettingMutator(m.name)
 }
 
-func (m clusterSettingMutator) Probability() float64 {
+func (m clusterSettingMutator) Probability(_ DeploymentMode) float64 {
 	return m.probability
 }
 
@@ -221,8 +223,9 @@ func (m clusterSettingMutator) Probability() float64 {
 // original test plan. Up to `maxChanges` steps will be added to the
 // plan. Changes may be concurrent with user-provided steps and may
 // happen any time after cluster setup.
-func (m clusterSettingMutator) Generate(rng *rand.Rand, plan *TestPlan) []mutation {
+func (m clusterSettingMutator) Generate(planner *testPlanner, plan *TestPlan) []mutation {
 	var mutations []mutation
+	rng := planner.prng
 
 	// possiblePointsInTime is the list of steps in the plan that are
 	// valid points in time during the mixedversion test where applying
@@ -382,4 +385,177 @@ func (m clusterSettingMutator) changeSteps(
 	}
 
 	return steps
+}
+
+type createAdditionalTenantMutator struct{}
+
+func (m createAdditionalTenantMutator) Name() string {
+	return "create_additional_tenant"
+}
+
+func (m createAdditionalTenantMutator) Probability(deploymentMode DeploymentMode) float64 {
+	if deploymentMode != SeparateProcessDeployment {
+		return 0
+	}
+	return 0.7
+}
+
+type tenantMutatorStatus struct {
+	name               string
+	nodes              option.NodeListOption
+	currentVersion     *clusterupgrade.Version
+	chosenUpgradeSlots map[clusterupgrade.Version]int // version to first eligible upgrade slot
+}
+
+// Generate returns mutations to remove the randomly create tenants in addition
+// to the tenant used by the test. Up to `maxTenantCount` tenants will be added
+// to the plan. It also adds the corresponding steps to upgrade the tenants, so
+// they are at most one major version behind the system cluster version.
+func (m createAdditionalTenantMutator) Generate(planner *testPlanner, plan *TestPlan) []mutation {
+	var mutations []mutation
+	rng := planner.prng
+
+	possiblePointsInTime := plan.
+		newStepSelector().
+		Filter(func(s *singleStep) bool {
+			// We need to make sure the system has been set up first and that it's
+			// not restarting.
+			// TODO: make sure it works when creating multiple tenants at same time (port collision?)
+
+			// To simplify the scope of this mutator, only create additional tenants after
+			// tenant auto upgrade has been supported. This means we do not need to worry
+			// about connecting to the tenant to set the cluster setting, which entails
+			// keeping connection details and a service context.
+			if !s.context.System.ToVersion.AtLeast(tenantSupportsAutoUpgradeVersion) {
+				return false
+			}
+
+			// TODO: during the tenant start up step, the to version is current, likely because
+			// it's meaningless. This messes up the mutator though.
+			return s.context.System.Stage >= OnStartupStage && s.context.System.Stage <= AfterUpgradeFinalizedStage
+		})
+
+	// We have serverless clusters with 1000+ tenants so testing with only 3 might
+	// be unrealistic. To keep test time and plan length reasonable, we limit it anyway.
+	maxTenantCount := 3
+	numTenantsToAdd := 1 + rng.Intn(maxTenantCount)
+
+	chosenTenantStartSlots := make(map[int]struct{})
+	for len(chosenTenantStartSlots) != numTenantsToAdd {
+		chosenTenantStartSlots[1+rng.Intn(len(possiblePointsInTime))] = struct{}{}
+	}
+
+	slots := maps.Keys(chosenTenantStartSlots)
+	sort.Ints(slots)
+	tenantMutatorStatuses := make([]tenantMutatorStatus, numTenantsToAdd)
+
+	for i, slot := range slots {
+		var step singleStepProtocol
+		var currentSlot int
+
+		applyChanges := possiblePointsInTime.
+			Filter(func(s *singleStep) bool {
+				currentSlot++
+				if slot != currentSlot {
+					return false
+				}
+
+				tenantName := "mutation-" + virtualClusterName(rng)
+				v := s.context.Tenant.FromVersion
+
+				tenantNodes := s.context.Nodes()
+				numNodes := rng.Intn(len(tenantNodes)) + 1
+				rng.Shuffle(len(s.context.Nodes()), func(i, j int) {
+					tenantNodes[i], tenantNodes[j] = tenantNodes[j], tenantNodes[i]
+				})
+
+				tenantMutatorStatuses[i] = tenantMutatorStatus{
+					name:               tenantName,
+					nodes:              tenantNodes[:numNodes],
+					currentVersion:     v,
+					chosenUpgradeSlots: make(map[clusterupgrade.Version]int),
+				}
+
+				step = startSeparateProcessVirtualClusterStep{
+					// Prefix with the tenant name with `mutation-` to make identification easier in the plan.
+					name:                       tenantName,
+					nodes:                      tenantNodes[:numNodes],
+					rt:                         planner.rt,
+					version:                    v,
+					settings:                   planner.clusterSettingsForTenant(v),
+					setAsDefaultVirtualCluster: false,
+				}
+				return true
+			}).
+			Insert(rng, step)
+
+		mutations = append(mutations, applyChanges...)
+	}
+
+	fmt.Printf("tenants: %v\n", tenantMutatorStatuses)
+	// Add the upgrade steps for the tenants.
+	for _, tenant := range tenantMutatorStatuses {
+		var currentSlot int
+		possiblePointsInTime = plan.
+			newStepSelector().
+			Filter(func(s *singleStep) bool {
+				currentSlot++
+				if s.context.System.Stage != UpgradingTenantStage {
+					return false
+				}
+
+				// If the tenant and system are on the same version then we can't upgrade the tenant yet.
+				if tenant.currentVersion.AtLeast(s.context.System.ToVersion) {
+					return false
+				}
+
+				return true
+			})
+
+		currentSlot = 0
+		possiblePointsInTime.Filter(func(s *singleStep) bool {
+			currentSlot++
+			// TODO, make it so that the upgrade happens at random times not just the first possible
+			if _, ok := tenant.chosenUpgradeSlots[*s.context.System.ToVersion]; !ok {
+				tenant.chosenUpgradeSlots[*s.context.System.ToVersion] = currentSlot
+			}
+			return true
+		})
+		fmt.Printf("tenant chosen upgrade slots: %v\n", tenant.chosenUpgradeSlots)
+
+		for version, upgradeSlot := range tenant.chosenUpgradeSlots {
+			for _, node := range tenant.nodes {
+				var step singleStepProtocol
+				currentSlot = 0
+
+				applyChanges := possiblePointsInTime.
+					Filter(func(s *singleStep) bool {
+						currentSlot++
+						if version != *s.context.System.ToVersion {
+							return false
+						}
+						if currentSlot != upgradeSlot {
+							return false
+						}
+
+						// TODO: add a small probability that we stop the tenant instead of
+						// continuing to upgrade it.
+						step = restartVirtualClusterStep{
+							version:        &version,
+							node:           node,
+							virtualCluster: tenant.name,
+							rt:             planner.rt,
+							settings:       planner.clusterSettingsForTenant(&version),
+						}
+
+						return true
+					}).
+					Insert(rng, step)
+
+				mutations = append(mutations, applyChanges...)
+			}
+		}
+	}
+
+	return mutations
 }

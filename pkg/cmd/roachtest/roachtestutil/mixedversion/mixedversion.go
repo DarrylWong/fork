@@ -70,6 +70,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -752,6 +753,9 @@ func (t *Test) plan() (plan *TestPlan, retErr error) {
 	// Pick a random deployment mode to use in this test run among the
 	// list of enabled deployment modes enabled for this test.
 	deploymentMode := t.options.enabledDeploymentModes[t.prng.Intn(len(t.options.enabledDeploymentModes))]
+	if forceEnv := os.Getenv("ROACHTEST_MVT_DEPLOYMENT_MODE"); forceEnv != "" {
+		deploymentMode = DeploymentMode(forceEnv)
+	}
 	t.updateOptionsForDeploymentMode(deploymentMode)
 
 	previousReleases, err := t.choosePreviousReleases()
