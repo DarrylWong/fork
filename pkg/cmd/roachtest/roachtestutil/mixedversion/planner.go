@@ -123,10 +123,10 @@ type (
 		// makes that more prominent. Note that tests are able to override
 		// this probability for specific mutator implementations as
 		// needed.
-		Probability() float64
+		Probability(DeploymentMode) float64
 		// Generate takes a test plan and a RNG and returns the list of
 		// mutations that should be applied to the plan.
-		Generate(*rand.Rand, *TestPlan) []mutation
+		Generate(*testPlanner, *TestPlan) []mutation
 	}
 
 	// mutationOp encodes the type of mutation and controls how the
@@ -170,13 +170,13 @@ const (
 	lastBranchPadding  = "   "
 )
 
+// Upgrade stages are defined in the order they happen during test
+// runs, so that we are able to implement mutators that select, for
+// example, "stages after rollback" by doing `stage >	RollbackUpgrade`.
+// Note that `BackgroundStage` is special in the sense that it may
+// continue to run across stage changes, so doing direct stage comparisons
+// as mentioned above doesn't make sense for background functions.
 const (
-	// Upgrade stages are defined in the order they happen during test
-	// runs, so that we are able to implement mutators that select, for
-	// example, "stages after rollback" by doing `stage >	RollbackUpgrade`.
-	// Note that `BackgroundStage` is special in the sense that it may
-	// continue to run across stage changes, so doing direct stage comparisons
-	// as mentioned above doesn't make sense for background functions.
 	SystemSetupStage UpgradeStage = iota
 	TenantSetupStage
 	OnStartupStage
@@ -194,7 +194,9 @@ const (
 	// arbitrarily large constant.
 	UpgradingSystemStage = 1000 // only applicable to tenant
 	UpgradingTenantStage = 1001 // only applicable to system
+)
 
+const (
 	mutationInsertBefore mutationOp = iota
 	mutationInsertAfter
 	mutationInsertConcurrent
@@ -213,6 +215,7 @@ const (
 // any mixedversion test plan.
 var planMutators = []mutator{
 	preserveDowngradeOptionRandomizerMutator{},
+	createAdditionalTenantMutator{},
 	newClusterSettingMutator(
 		"kv.expiration_leases_only.enabled",
 		[]bool{true, false},
@@ -401,7 +404,7 @@ func (p *testPlanner) Plan() *TestPlan {
 	// plan generated above.
 	for _, mut := range planMutators {
 		if p.mutatorEnabled(mut) {
-			mutations := mut.Generate(p.prng, testPlan)
+			mutations := mut.Generate(p, testPlan)
 			testPlan.applyMutations(p.prng, mutations)
 			testPlan.enabledMutators = append(testPlan.enabledMutators, mut)
 		}
@@ -588,10 +591,12 @@ func (p *testPlanner) tenantSetupSteps(v *clusterupgrade.Version) []testStep {
 		}
 	} else {
 		startStep = startSeparateProcessVirtualClusterStep{
-			name:     p.tenantName(),
-			rt:       p.rt,
-			version:  v,
-			settings: p.clusterSettingsForTenant(v),
+			name:                       p.tenantName(),
+			nodes:                      p.currentContext.Tenant.Descriptor.Nodes,
+			rt:                         p.rt,
+			version:                    v,
+			settings:                   p.clusterSettingsForTenant(v),
+			setAsDefaultVirtualCluster: true,
 		}
 	}
 
@@ -1095,7 +1100,7 @@ func (p *testPlanner) newRNG() *rand.Rand {
 }
 
 func (p *testPlanner) mutatorEnabled(mut mutator) bool {
-	probability := mut.Probability()
+	probability := mut.Probability(p.deploymentMode)
 	if p, ok := p.options.overriddenMutatorProbabilities[mut.Name()]; ok {
 		probability = p
 	}

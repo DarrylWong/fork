@@ -139,18 +139,20 @@ func (s startSharedProcessVirtualClusterStep) Run(
 // startSeparateProcessVirtualCluster step creates a new separate-process
 // virtual cluster with the given name, and starts it.
 type startSeparateProcessVirtualClusterStep struct {
-	name     string
-	rt       test.Test
-	version  *clusterupgrade.Version
-	settings []install.ClusterSettingOption
+	name                       string
+	nodes                      option.NodeListOption
+	rt                         test.Test
+	version                    *clusterupgrade.Version
+	settings                   []install.ClusterSettingOption
+	setAsDefaultVirtualCluster bool
 }
 
 func (s startSeparateProcessVirtualClusterStep) Background() shouldStop { return nil }
 
 func (s startSeparateProcessVirtualClusterStep) Description() string {
 	return fmt.Sprintf(
-		"start separate process virtual cluster %s with binary version %s",
-		s.name, s.version,
+		"start separate process virtual cluster %s with binary version %s on nodes %v",
+		s.name, s.version, s.nodes,
 	)
 }
 
@@ -171,7 +173,9 @@ func (s startSeparateProcessVirtualClusterStep) Run(
 		return err
 	}
 
-	h.runner.cluster.SetDefaultVirtualCluster(s.name)
+	if s.setAsDefaultVirtualCluster {
+		h.runner.cluster.SetDefaultVirtualCluster(s.name)
+	}
 	return nil
 }
 
