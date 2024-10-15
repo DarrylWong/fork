@@ -17,6 +17,7 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestflags"
+	rperrors "github.com/cockroachdb/cockroach/pkg/roachprod/errors"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/testutils/skip"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
@@ -539,6 +540,70 @@ func failuresMatchingError(failures []failure, refError any) bool {
 	}
 
 	return false
+}
+
+// transientErrorOwnershipFallback string matches for `TRANSIENT_ERROR` in the error
+// message and returns a new ErrorWithOwnership if it does.
+//
+// This is needed as the `require` package does not preserve the error object needed
+// for us to properly check if it is a transient error using `failuresMatchingError`.
+// Note we only check if we also see requireNoErrorPrefix, indicating it's an error reported
+// by the require package. If we see somewhere else that does not preserve the error object,
+// we want to investigate whether it can be fixed before resorting to this fallback.
+// See: #131094
+func transientErrorOwnershipFallback(failures []failure) *registry.ErrorWithOwnership {
+	const (
+		transientSSHError    = "TRANSIENT_ERROR(ssh_problem)"
+		transientAptError    = "TRANSIENT_ERROR(apt_problem)"
+		requireNoErrorPrefix = "Received unexpected error:"
+	)
+	var errWithOwner registry.ErrorWithOwnership
+	isTransient := func(err error) bool {
+		// Both squashedErr and errors should be non nil in actual roachtest failures,
+		// but for testing we sometimes only set one for simplicity.
+		if err == nil {
+			return false
+		}
+		// The require package prepends this message to `require.NoError` failures.
+		// We may see `TRANSIENT_ERROR` without this prefix, but don't mark it as
+		// a flake as we may be able to fix the code that doesn't preserve the error.
+		if !strings.Contains(err.Error(), requireNoErrorPrefix) {
+			return false
+		}
+
+		if strings.Contains(err.Error(), transientSSHError) {
+			errWithOwner = registry.ErrorWithOwner(
+				registry.OwnerTestEng, err,
+				registry.WithTitleOverride(rperrors.SSHProblemCause),
+				registry.InfraFlake,
+			)
+			return true
+		}
+
+		if strings.Contains(err.Error(), transientAptError) {
+			errWithOwner = registry.ErrorWithOwner(
+				registry.OwnerTestEng, err,
+				registry.WithTitleOverride(rperrors.AptProblemCause),
+				registry.InfraFlake,
+			)
+			return true
+		}
+		return false
+	}
+
+	for _, f := range failures {
+		for _, err := range f.errors {
+			if isTransient(err) {
+				return &errWithOwner
+			}
+		}
+
+		if isTransient(f.squashedErr) {
+			return &errWithOwner
+		}
+	}
+
+	return nil
 }
 
 func (t *testImpl) ArtifactsDir() string {

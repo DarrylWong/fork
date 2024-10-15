@@ -126,6 +126,13 @@ func TestCreatePostRequest(t *testing.T) {
 		return failure{squashedErr: ref}
 	}
 
+	// Attempts to mimic how the require package creates failures by losing
+	// the error object and prepending a message.
+	createRequireFailure := func(ref error) failure {
+		requireErr := fmt.Errorf("Received unexpected error:\n%+v", ref)
+		return failure{squashedErr: requireErr}
+	}
+
 	const testName = "github_test"
 
 	// TODO(radu): these tests should be converted to datadriven tests which
@@ -416,6 +423,70 @@ func TestCreatePostRequest(t *testing.T) {
 			expectedLabels: []string{"C-test-failure"},
 			expectedTeam:   "@cockroachdb/unowned",
 			sideEyeURL:     "https://app.side-eye.io/snapshots/1",
+		},
+		// 18. When a transient error is lost as a result of the require package
+		// casting it to a string, check that our fallback transient error handling
+		// still catches it.
+		{
+			failures:              []failure{createRequireFailure(rperrors.NewSSHError(errors.New("oops")))},
+			expectedPost:          true,
+			expectedLabels:        []string{"T-testeng", "X-infra-flake"},
+			expectedTeam:          "@cockroachdb/test-eng",
+			expectedName:          "ssh_problem",
+			expectedMessagePrefix: testName + " failed",
+			expectedParams: prefixAll(map[string]string{
+				"cloud":                  "gce",
+				"encrypted":              "false",
+				"fs":                     "ext4",
+				"ssd":                    "0",
+				"cpu":                    "4",
+				"arch":                   "amd64",
+				"localSSD":               "false",
+				"runtimeAssertionsBuild": "false",
+				"coverageBuild":          "false",
+			}),
+		},
+		// 19. Same as test case 18 but checks for apt errors.
+		{
+			failures:              []failure{createRequireFailure(rperrors.AptError(errors.New("oops")))},
+			expectedPost:          true,
+			expectedLabels:        []string{"T-testeng", "X-infra-flake"},
+			expectedTeam:          "@cockroachdb/test-eng",
+			expectedName:          "apt_problem",
+			expectedMessagePrefix: testName + " failed",
+			expectedParams: prefixAll(map[string]string{
+				"cloud":                  "gce",
+				"encrypted":              "false",
+				"fs":                     "ext4",
+				"ssd":                    "0",
+				"cpu":                    "4",
+				"arch":                   "amd64",
+				"localSSD":               "false",
+				"runtimeAssertionsBuild": "false",
+				"coverageBuild":          "false",
+			}),
+		},
+		// 20. When a transient error is lost as a result of an unknown case
+		// casting it to a string, check that our fallback transient error handling
+		// *doesn't* catch it. This should be investigated to determine if it should
+		// be fixed to preserve the error object or added to the list of exceptions.
+		{
+			failures:       []failure{createFailure(fmt.Errorf("%s", rperrors.NewSSHError(errors.New("oops"))))},
+			expectedPost:   true,
+			expectedLabels: []string{"C-test-failure", "release-blocker"},
+			expectedTeam:   "@cockroachdb/unowned",
+			expectedName:   testName,
+			expectedParams: prefixAll(map[string]string{
+				"cloud":                  "gce",
+				"encrypted":              "false",
+				"fs":                     "ext4",
+				"ssd":                    "0",
+				"cpu":                    "4",
+				"arch":                   "amd64",
+				"localSSD":               "false",
+				"runtimeAssertionsBuild": "false",
+				"coverageBuild":          "false",
+			}),
 		},
 	}
 
