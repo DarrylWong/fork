@@ -121,6 +121,11 @@ go_test(
         "//pkg/util/version",
         "@com_github_cockroachdb_datadriven//:datadriven",
         "@com_github_cockroachdb_errors//:errors",
+<<<<<<< HEAD
+=======
+        "@com_github_cockroachdb_redact//:redact",
+        "@com_github_data_dog_go_sqlmock//:go-sqlmock",
+>>>>>>> c54776761ba (roachtest: string match for transient errors as a fallback)
         "@com_github_kr_pretty//:pretty",
         "@com_github_prometheus_client_golang//prometheus",
         "@com_github_stretchr_testify//assert",
