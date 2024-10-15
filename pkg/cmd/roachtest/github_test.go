@@ -213,6 +213,14 @@ func TestCreatePostRequest(t *testing.T) {
 							refError = registry.ErrorWithOwner(registry.OwnerSQLFoundations, refError)
 						case "error-with-owner-test-eng":
 							refError = registry.ErrorWithOwner(registry.OwnerTestEng, refError)
+						case "require-no-error-failed":
+							// Attempts to mimic how the require package creates failures by losing
+							// the error object and prepending a message. Similar to above we don't use
+							// %+v to avoid stack traces.
+							refError = errors.Newf("Received unexpected error:\n%v", refError)
+						case "lose-error-object":
+							// Lose the error object which should make our flake detection fail.
+							refError = errors.Newf("%s", refError)
 						}
 					}
 				}

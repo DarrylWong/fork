@@ -27,8 +27,8 @@ const (
 	transientExitCode    = 10
 	unclassifiedExitCode = 1
 
-	sshProblemCause = "ssh_problem"
-	aptProblemCause = "apt_problem"
+	SSHProblemCause = "ssh_problem"
+	AptProblemCause = "apt_problem"
 )
 
 const (
@@ -104,18 +104,18 @@ func IsTransient(err error) bool {
 
 // NewSSHError returns a transient error for SSH-related issues.
 func NewSSHError(err error) TransientError {
-	return TransientFailure(err, sshProblemCause)
+	return TransientFailure(err, SSHProblemCause)
 }
 
 // AptError returns a transient error for apt-related issues.
 func AptError(err error) TransientError {
-	return TransientFailure(err, aptProblemCause)
+	return TransientFailure(err, AptProblemCause)
 }
 
 func IsSSHError(err error) bool {
 	var transientErr TransientError
 	if errors.As(err, &transientErr) {
-		return transientErr.Cause == sshProblemCause
+		return transientErr.Cause == SSHProblemCause
 	}
 
 	return false
