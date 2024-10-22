@@ -1065,6 +1065,7 @@ func attachToExistingCluster(
 	c := &clusterImpl{
 		name:       name,
 		spec:       spec,
+		cloud:      roachtestflags.Cloud,
 		l:          l,
 		expiration: exp,
 		destroyState: destroyState{
