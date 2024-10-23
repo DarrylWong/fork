@@ -404,16 +404,107 @@ func maxSupportedTPCCWarehouses(
 	return warehouses
 }
 
+func runMTImport(ctx context.Context, t test.Test, c cluster.Cluster) {
+	c.Start(ctx, t.L(), option.DefaultStartOpts(), install.MakeClusterSettings())
+	startOpts := option.StartVirtualClusterOpts(
+		"mt",
+		c.CRDBNodes(),
+		option.StorageCluster(c.CRDBNodes()),
+	)
+
+	c.StartServiceForVirtualCluster(ctx, t.L(), startOpts, install.MakeClusterSettings())
+
+	time.Sleep(10 * time.Second)
+
+	importTPCC := func() error {
+		randomNode := c.Node(2)
+		cmd := tpccImportCmdWithCockroachBinary(test.DefaultCockroachPath, "", "tpcc", 7000, fmt.Sprintf("{pgurl%s}", randomNode))
+		return c.RunE(ctx, option.WithNodes(randomNode), cmd)
+	}
+
+	// Add a lot of cold data to this cluster. This further stresses the version
+	// upgrade machinery, in which a) all ranges are touched and b) work proportional
+	// to the amount data may be carried out.
+	importLargeBank := func() error {
+		randomNode := c.Node(1)
+		cmd := roachtestutil.NewCommand("%s workload fixtures import bank", test.DefaultCockroachPath).
+			Arg("{pgurl%s}", randomNode).
+			Flag("payload-bytes", 10240).
+			Flag("rows", 65104166/2).
+			Flag("seed", 4).
+			Flag("db", "bigbank").
+			String()
+		return c.RunE(ctx, option.WithNodes(randomNode), cmd)
+	}
+
+	settings := []string{
+		"sql.split_at.allow_for_secondary_tenant.enabled",
+		"sql.scatter.allow_for_secondary_tenant.enabled",
+	}
+
+	db := c.Conn(ctx, t.L(), 1)
+
+	for _, s := range settings {
+		// Only enable the relevant settings if they are not already
+		// enabled by default.
+		_, err := db.Exec(
+			fmt.Sprintf(`ALTER TENANT mt SET CLUSTER SETTING %s = true`, s),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := db.ExecContext(
+		ctx, fmt.Sprintf("SET CLUSTER SETTING kv.tenant_rate_limiter.rate_limit = '%d'", 1_000_000_000),
+	); err != nil {
+		t.Fatalf("failed to set tenant rate limiter limit: %v", err)
+	}
+
+	if _, err := db.ExecContext(
+		ctx, "SET CLUSTER SETTING server.secondary_tenants.authorization.mode = 'allow-all'",
+	); err != nil {
+		t.Fatalf("failed to set auth mode: %v", err)
+	}
+
+	if res, err := db.QueryContext(
+		ctx, fmt.Sprintf("ALTER TENANT %q GRANT CAPABILITY exempt_from_rate_limiting = true", "mt"),
+	); err != nil {
+		t.Fatalf("failed to set exempt tenant from rate limiting: %v", err)
+	} else {
+		for res.Next() {
+			str := ""
+			err = res.Scan(&str)
+			require.NoError(t, err)
+			fmt.Printf("darryl: res: %v\n", str)
+		}
+	}
+
+	c.SetDefaultVirtualCluster("mt")
+
+	m := c.NewMonitor(ctx)
+	m.Go(func(ctx context.Context) error {
+		return importTPCC()
+	})
+	m.Go(func(ctx context.Context) error {
+		return importLargeBank()
+	})
+
+	m.Wait()
+}
+
 // runTPCCMixedHeadroom runs a mixed-version test that imports a large
 // `bank` dataset, and runs multiple database upgrades while a TPCC
 // workload is running. The number of database upgrades is randomized
 // by the mixed-version framework which chooses a random predecessor version
 // and upgrades until it reaches the current version.
 func runTPCCMixedHeadroom(ctx context.Context, t test.Test, c cluster.Cluster) {
-	maxWarehouses := maxSupportedTPCCWarehouses(*t.BuildVersion(), c.Cloud(), c.Spec())
-	headroomWarehouses := int(float64(maxWarehouses) * 0.7)
+	var headroomWarehouses int
 	if c.IsLocal() {
 		headroomWarehouses = 10
+	} else {
+		maxWarehouses := maxSupportedTPCCWarehouses(*t.BuildVersion(), c.Cloud(), c.Spec())
+		headroomWarehouses = int(float64(maxWarehouses) * 0.7)
 	}
 
 	// NB: this results in ~100GB of (actual) disk usage per node once things
@@ -586,6 +677,23 @@ func registerTPCC(r registry.Registry) {
 		Randomized:        true,
 		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 			runTPCCMixedHeadroom(ctx, t, c)
+		},
+	})
+
+	r.Add(registry.TestSpec{
+		// mixed-headroom is similar to w=headroom, but with an additional
+		// node and on a mixed version cluster which runs its long-running
+		// migrations while TPCC runs. It simulates a real production
+		// deployment in the middle of the migration into a new cluster version.
+		Name:             "mt/import",
+		Timeout:          7 * time.Hour,
+		Owner:            registry.OwnerTestEng,
+		CompatibleClouds: registry.AllExceptAWS,
+		Suites:           registry.ManualOnly,
+		Cluster:          r.MakeClusterSpec(4, spec.WorkloadNode()),
+		Randomized:       true,
+		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
+			runMTImport(ctx, t, c)
 		},
 	})
 

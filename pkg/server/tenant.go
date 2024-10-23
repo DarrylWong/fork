@@ -198,6 +198,7 @@ func NewSeparateProcessTenantServer(
 	sqlCfg SQLConfig,
 	tenantNameContainer *roachpb.TenantNameContainer,
 ) (*SQLServerWrapper, error) {
+	log.Event(ctx, "darryl: creating separate-process tenant server")
 	deps := tenantServerDeps{
 		instanceIDContainer: baseCfg.IDContainer.SwitchToSQLIDContainerForStandaloneSQLInstance(),
 		// The kvcoord.DistSender uses the node ID to preferentially route
@@ -207,7 +208,7 @@ func NewSeparateProcessTenantServer(
 		// in-process with KV instances have no such optimization to take
 		// advantage of to begin with.
 		nodeIDGetter:          nil,
-		costControllerFactory: NewTenantSideCostController,
+		costControllerFactory: NewNoopTenantSideCostController,
 		spanLimiterFactory: func(ie isql.Executor, st *cluster.Settings, knobs *spanconfig.TestingKnobs) spanconfig.Limiter {
 			return spanconfiglimiter.New(ie, st, knobs)
 		},
@@ -229,6 +230,7 @@ func newSharedProcessTenantServer(
 	sqlCfg SQLConfig,
 	tenantNameContainer *roachpb.TenantNameContainer,
 ) (*SQLServerWrapper, error) {
+	log.Event(ctx, "darryl: creating shared-process tenant server")
 	if baseCfg.IDContainer.Get() == 0 {
 		return nil, errors.AssertionFailedf("programming error: NewSharedProcessTenantServer called before NodeID was assigned.")
 	}
