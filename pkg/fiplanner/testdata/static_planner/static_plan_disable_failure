@@ -1,0 +1,41 @@
+echo
+----
+plan_id: "1"
+cluster_names:
+- test_cluster
+steps:
+- step_id: 1
+  failure_type: Limit Bandwidth
+  cluster: test_cluster
+  node: 4
+  delay: 16s
+  args:
+    rate: 1mbps
+- step_id: 2
+  failure_type: Limit Bandwidth
+  cluster: test_cluster
+  node: 1
+  delay: 31s
+  args:
+    rate: 0mbps
+- step_id: 3
+  failure_type: Limit Bandwidth
+  cluster: test_cluster
+  node: 2
+  delay: 39s
+  args:
+    rate: 1mbps
+- step_id: 4
+  failure_type: Limit Bandwidth
+  cluster: test_cluster
+  node: 2
+  delay: 25s
+  args:
+    rate: 0mbps
+- step_id: 5
+  failure_type: Limit Bandwidth
+  cluster: test_cluster
+  node: 2
+  delay: 48s
+  args:
+    rate: 1mbps
