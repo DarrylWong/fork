@@ -38,6 +38,7 @@ func (r *failureRegistry) Add(spec failureSpec) {
 
 	if _, ok := r.disabledFailures[spec.Name]; ok {
 		fmt.Fprintf(os.Stderr, "failure %s is disabled by failure plan spec\n", spec.Name)
+		return
 	}
 
 	r.failures = append(r.failures, spec.Name)
@@ -51,8 +52,11 @@ func (r *failureRegistry) GetRandomFailure(rng *rand.Rand) failureSpec {
 
 func RegisterFailures(r *failureRegistry) {
 	registerNodeRestart(r)
+	registerLimitBandwidth(r)
 }
 
+// TODO: register functions should live in their own files, maybe grouped
+// by type i.e. disk, cpu, network, etc.
 func registerNodeRestart(r *failureRegistry) {
 	gen := func(rng *rand.Rand) map[string]string {
 		args := make(map[string]string)
@@ -68,6 +72,20 @@ func registerNodeRestart(r *failureRegistry) {
 	}
 	r.Add(failureSpec{
 		Name:         "Node Restart",
+		GenerateArgs: gen,
+	})
+}
+
+func registerLimitBandwidth(r *failureRegistry) {
+	gen := func(rng *rand.Rand) map[string]string {
+		args := make(map[string]string)
+		possibleRates := []string{"0mbps", "1mbps", "10mbps"}
+		args["rate"] = possibleRates[rng.Intn(len(possibleRates))]
+
+		return args
+	}
+	r.Add(failureSpec{
+		Name:         "Limit Bandwidth",
 		GenerateArgs: gen,
 	})
 }

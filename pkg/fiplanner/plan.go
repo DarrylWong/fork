@@ -1,43 +1,63 @@
 package fiplanner
 
 import (
-	"fmt"
 	"math/rand"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/util/randutil"
+	"gopkg.in/yaml.v2"
 )
 
-func GenerateStaticPlan(clusterSizes []int, spec FailurePlanSpec, numSteps int) error {
+func GenerateStaticPlan(clusterSizes []int, spec FailurePlanSpec, numSteps int) ([]byte, error) {
 	registry := makeFailureRegistry(spec)
 	RegisterFailures(&registry)
 
 	rng := rand.New(rand.NewSource(spec.Seed))
-	plan := make([]FailureStep, 0, numSteps)
+	steps := make([]FailureStep, 0, numSteps)
 	for stepID := 1; stepID <= numSteps; stepID++ {
 
 		newStep, err := GenerateStep(registry, spec, rng, clusterSizes, stepID)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
-		plan = append(plan, newStep)
+		steps = append(steps, newStep)
 	}
 
-	fmt.Printf("generatedPlan: %+v\n", plan)
-	return nil
+	plan := StaticFailurePlan{
+		// TODO: planner should generate this so it's unique, maybe pass in a user instead
+		PlanID:         spec.PlanID,
+		ClusterNames:   spec.ClusterNames,
+		TolerateErrors: spec.TolerateErrors,
+		Steps:          steps,
+	}
+
+	return yaml.Marshal(plan)
+}
+
+type DynamicFailurePlan struct {
+	PlanID           string
+	TolerateErrors   bool
+	Seed             int64
+	DisabledFailures []string
+	MinWait          time.Duration
+	MaxWait          time.Duration
+}
+
+type StaticFailurePlan struct {
+	PlanID         string        `yaml:"plan_id"`
+	ClusterNames   []string      `yaml:"cluster_names"`
+	TolerateErrors bool          `yaml:"tolerate_errors,omitempty"`
+	Steps          []FailureStep `yaml:"steps"`
 }
 
 type FailureStep struct {
-	FailureType string
-	StepID      int
-	// Which cluster to target. Can be left empty if only one cluster.
-	Cluster string
-	Node    int
-	// Amount of time to delay before reversing a failure.
-	Delay time.Duration
-	// FailureType specific arguments.
-	Args map[string]string
+	StepID      int               `yaml:"step_id"`
+	FailureType string            `yaml:"failure_type"`
+	Cluster     string            `yaml:"cluster,omitempty"` // Which cluster to target. Can be left empty if only one cluster.
+	Node        int               `yaml:"node"`
+	Delay       time.Duration     `yaml:"delay"`          // Amount of time to delay before reversing a failure.
+	Args        map[string]string `yaml:"args,omitempty"` // FailureType specific arguments.
 }
 
 func GenerateStep(
@@ -54,7 +74,7 @@ func GenerateStep(
 		StepID:      stepID,
 		Cluster:     spec.ClusterNames[clusterToTarget],
 		Node:        nodeToTarget,
-		Delay:       time.Duration(delayInNanoseconds),
+		Delay:       time.Duration(delayInNanoseconds).Truncate(time.Second),
 		Args:        failure.GenerateArgs(rng),
 	}, nil
 }
