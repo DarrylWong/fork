@@ -3,7 +3,8 @@ package fiplanner
 import "time"
 
 type FailurePlanSpec struct {
-	PlanID string
+	// User is used along with the current time to generate a unique plan ID.
+	User string
 	// Cluster(s) to target. Note the support for test that use multiple
 	// clusters i.e. c2c.
 	ClusterNames []string
@@ -17,4 +18,9 @@ type FailurePlanSpec struct {
 	// each step is generated.
 	minWait time.Duration
 	maxWait time.Duration
+}
+
+func validate(spec FailurePlanSpec) error {
+
+	return nil
 }
