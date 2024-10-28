@@ -1,0 +1,7 @@
+echo
+----
+plan_id: unit_test-12345
+tolerate_errors: true
+seed: 1234
+min_wait: 10s
+max_wait: 1m0s
