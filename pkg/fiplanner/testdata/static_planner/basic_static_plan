@@ -1,8 +1,9 @@
 echo
 ----
-plan_id: "1"
+plan_id: unit_test-12345
 cluster_names:
 - test_cluster
+tolerate_errors: true
 steps:
 - step_id: 1
   failure_type: Node Restart
@@ -12,13 +13,12 @@ steps:
   args:
     graceful-restart: "true"
 - step_id: 2
-  failure_type: Node Restart
+  failure_type: Page Fault
   cluster: test_cluster
   node: 4
   delay: 55s
   args:
-    graceful-restart: "true"
-    wait-for-replication: "true"
+    type: major
 - step_id: 3
   failure_type: Node Restart
   cluster: test_cluster
@@ -35,36 +35,38 @@ steps:
   args:
     rate: 1mbps
 - step_id: 5
-  failure_type: Node Restart
+  failure_type: Page Fault
   cluster: test_cluster
   node: 1
   delay: 56s
   args:
-    wait-for-replication: "true"
+    type: minor, major
 - step_id: 6
-  failure_type: Node Restart
+  failure_type: Page Fault
   cluster: test_cluster
   node: 4
-  delay: 19s
+  delay: 13s
+  args:
+    type: major
 - step_id: 7
   failure_type: Node Restart
   cluster: test_cluster
-  node: 3
-  delay: 27s
-- step_id: 8
-  failure_type: Limit Bandwidth
-  cluster: test_cluster
-  node: 2
-  delay: 53s
+  node: 4
+  delay: 14s
   args:
-    rate: 10mbps
-- step_id: 9
+    graceful-restart: "true"
+- step_id: 8
   failure_type: Node Restart
+  cluster: test_cluster
+  node: 4
+  delay: 22s
+- step_id: 9
+  failure_type: Page Fault
   cluster: test_cluster
   node: 4
   delay: 37s
   args:
-    graceful-restart: "true"
+    type: minor
 - step_id: 10
   failure_type: Limit Bandwidth
   cluster: test_cluster

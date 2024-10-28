@@ -1,6 +1,6 @@
 echo
 ----
-plan_id: "1"
+plan_id: unit_test-12345
 cluster_names:
 - test_cluster
 steps:
@@ -26,16 +26,16 @@ steps:
   args:
     rate: 1mbps
 - step_id: 4
-  failure_type: Limit Bandwidth
+  failure_type: Disk Stall
   cluster: test_cluster
   node: 2
   delay: 25s
   args:
-    rate: 0mbps
+    type: read
 - step_id: 5
   failure_type: Limit Bandwidth
   cluster: test_cluster
-  node: 2
-  delay: 48s
+  node: 1
+  delay: 42s
   args:
-    rate: 1mbps
+    rate: 0mbps

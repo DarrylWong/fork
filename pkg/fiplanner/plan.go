@@ -1,16 +1,21 @@
 package fiplanner
 
 import (
+	"fmt"
 	"math/rand"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/util/randutil"
+	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"gopkg.in/yaml.v2"
 )
 
+var registerFailuresHook = registerFailures
+var generatePlanIDHook = generatePlanID
+
 func GenerateStaticPlan(clusterSizes []int, spec FailurePlanSpec, numSteps int) ([]byte, error) {
 	registry := makeFailureRegistry(spec)
-	RegisterFailures(&registry)
+	registerFailuresHook(&registry)
 
 	rng := rand.New(rand.NewSource(spec.Seed))
 	steps := make([]FailureStep, 0, numSteps)
@@ -25,8 +30,7 @@ func GenerateStaticPlan(clusterSizes []int, spec FailurePlanSpec, numSteps int) 
 	}
 
 	plan := StaticFailurePlan{
-		// TODO: planner should generate this so it's unique, maybe pass in a user instead
-		PlanID:         spec.PlanID,
+		PlanID:         generatePlanIDHook(spec.User),
 		ClusterNames:   spec.ClusterNames,
 		TolerateErrors: spec.TolerateErrors,
 		Steps:          steps,
@@ -77,4 +81,9 @@ func GenerateStep(
 		Delay:       time.Duration(delayInNanoseconds).Truncate(time.Second),
 		Args:        failure.GenerateArgs(rng),
 	}, nil
+}
+
+func generatePlanID(prefix string) string {
+	secs := timeutil.Now().Unix()
+	return fmt.Sprintf("%s-%d", prefix, secs)
 }

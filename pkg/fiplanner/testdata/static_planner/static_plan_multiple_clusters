@@ -1,6 +1,6 @@
 echo
 ----
-plan_id: "1"
+plan_id: unit_test-12345
 cluster_names:
 - test_cluster_1
 - test_cluster_2
@@ -19,55 +19,54 @@ steps:
   args:
     rate: 1mbps
 - step_id: 3
-  failure_type: Limit Bandwidth
+  failure_type: Disk Stall
   cluster: test_cluster_3
   node: 8
   delay: 10s
   args:
-    rate: 1mbps
+    type: write
 - step_id: 4
   failure_type: Node Restart
-  cluster: test_cluster_2
-  node: 1
-  delay: 16s
+  cluster: test_cluster_1
+  node: 3
+  delay: 43s
   args:
     graceful-restart: "true"
-    wait-for-replication: "true"
 - step_id: 5
-  failure_type: Limit Bandwidth
-  cluster: test_cluster_2
-  node: 1
-  delay: 28s
-  args:
-    rate: 10mbps
-- step_id: 6
-  failure_type: Limit Bandwidth
+  failure_type: Node Restart
   cluster: test_cluster_1
-  node: 1
-  delay: 27s
+  node: 3
+  delay: 19s
   args:
-    rate: 10mbps
-- step_id: 7
+    graceful-restart: "true"
+- step_id: 6
   failure_type: Node Restart
   cluster: test_cluster_3
-  node: 4
-  delay: 55s
-  args:
-    graceful-restart: "true"
-- step_id: 8
-  failure_type: Node Restart
-  cluster: test_cluster_1
-  node: 1
-  delay: 24s
-  args:
-    graceful-restart: "true"
-- step_id: 9
-  failure_type: Node Restart
-  cluster: test_cluster_2
-  node: 3
-  delay: 15s
+  node: 6
+  delay: 23s
   args:
     wait-for-replication: "true"
+- step_id: 7
+  failure_type: Limit Bandwidth
+  cluster: test_cluster_1
+  node: 4
+  delay: 24s
+  args:
+    rate: 1mbps
+- step_id: 8
+  failure_type: Disk Stall
+  cluster: test_cluster_3
+  node: 8
+  delay: 39s
+  args:
+    type: read, write
+- step_id: 9
+  failure_type: Limit Bandwidth
+  cluster: test_cluster_3
+  node: 9
+  delay: 43s
+  args:
+    rate: 0mbps
 - step_id: 10
   failure_type: Limit Bandwidth
   cluster: test_cluster_3
