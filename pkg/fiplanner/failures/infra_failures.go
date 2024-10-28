@@ -1,8 +1,8 @@
-package fiplanner
+package failures
 
 import "math/rand"
 
-func registerNodeRestart(r *failureRegistry) {
+func registerNodeRestart(r *FailureRegistry) {
 	gen := func(rng *rand.Rand) map[string]string {
 		args := make(map[string]string)
 		if rng.Float64() > 0.5 {
@@ -15,7 +15,7 @@ func registerNodeRestart(r *failureRegistry) {
 
 		return args
 	}
-	r.Add(failureSpec{
+	r.Add(FailureSpec{
 		Name:         "Node Restart",
 		GenerateArgs: gen,
 	})

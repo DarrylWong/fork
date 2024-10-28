@@ -1,8 +1,8 @@
-package fiplanner
+package failures
 
 import "math/rand"
 
-func registerLimitBandwidth(r *failureRegistry) {
+func registerLimitBandwidth(r *FailureRegistry) {
 	gen := func(rng *rand.Rand) map[string]string {
 		args := make(map[string]string)
 		possibleRates := []string{"0mbps", "1mbps", "10mbps"}
@@ -10,7 +10,7 @@ func registerLimitBandwidth(r *failureRegistry) {
 
 		return args
 	}
-	r.Add(failureSpec{
+	r.Add(FailureSpec{
 		Name:         "Limit Bandwidth",
 		GenerateArgs: gen,
 	})

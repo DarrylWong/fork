@@ -5,37 +5,37 @@ cluster_names:
 - test_cluster
 steps:
 - step_id: 1
-  failure_type: Limit Bandwidth
+  failure_type: Disk Stall
   cluster: test_cluster
   node: 4
-  delay: 16s
+  delay: 15s
   args:
-    rate: 1mbps
+    type: read
 - step_id: 2
   failure_type: Limit Bandwidth
   cluster: test_cluster
-  node: 1
-  delay: 31s
+  node: 4
+  delay: 13s
   args:
-    rate: 0mbps
+    rate: 10mbps
 - step_id: 3
   failure_type: Limit Bandwidth
   cluster: test_cluster
-  node: 2
-  delay: 39s
+  node: 1
+  delay: 35s
   args:
     rate: 1mbps
 - step_id: 4
   failure_type: Disk Stall
   cluster: test_cluster
-  node: 2
-  delay: 25s
+  node: 4
+  delay: 51s
   args:
-    type: read
+    type: write
 - step_id: 5
   failure_type: Limit Bandwidth
   cluster: test_cluster
   node: 1
-  delay: 42s
+  delay: 56s
   args:
-    rate: 0mbps
+    rate: 1mbps

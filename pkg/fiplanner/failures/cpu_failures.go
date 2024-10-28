@@ -1,23 +1,23 @@
-package fiplanner
+package failures
 
 import "math/rand"
 
-func registerDiskStall(r *failureRegistry) {
+func registerPageFault(r *FailureRegistry) {
 	gen := func(rng *rand.Rand) map[string]string {
 		args := make(map[string]string)
 
 		if rng.Float64() < 0.5 {
-			args["type"] = "read, write"
+			args["type"] = "minor, major"
 		} else {
-			// Add at least one type of disk stall.
-			pageFaultTypes := []string{"read", "write"}
+			// Add at least one type of page fault.
+			pageFaultTypes := []string{"minor", "major"}
 			args["type"] = pageFaultTypes[rng.Intn(len(pageFaultTypes))]
 		}
 
 		return args
 	}
-	r.Add(failureSpec{
-		Name:         "Disk Stall",
+	r.Add(FailureSpec{
+		Name:         "Page Fault",
 		GenerateArgs: gen,
 	})
 }

@@ -7,70 +7,72 @@ cluster_names:
 - test_cluster_3
 steps:
 - step_id: 1
-  failure_type: Node Restart
+  failure_type: Page Fault
   cluster: test_cluster_2
   node: 3
-  delay: 14s
+  delay: 44s
+  args:
+    type: minor, major
 - step_id: 2
-  failure_type: Limit Bandwidth
-  cluster: test_cluster_2
-  node: 1
+  failure_type: Page Fault
+  cluster: test_cluster_3
+  node: 5
   delay: 47s
   args:
-    rate: 1mbps
+    type: major
 - step_id: 3
   failure_type: Disk Stall
   cluster: test_cluster_3
   node: 8
-  delay: 10s
+  delay: 20s
   args:
     type: write
 - step_id: 4
-  failure_type: Node Restart
+  failure_type: Page Fault
   cluster: test_cluster_1
   node: 3
-  delay: 43s
+  delay: 12s
   args:
-    graceful-restart: "true"
+    type: major
 - step_id: 5
-  failure_type: Node Restart
+  failure_type: Disk Stall
   cluster: test_cluster_1
   node: 3
-  delay: 19s
+  delay: 13s
   args:
-    graceful-restart: "true"
+    type: read
 - step_id: 6
-  failure_type: Node Restart
+  failure_type: Page Fault
   cluster: test_cluster_3
   node: 6
-  delay: 23s
+  delay: 59s
   args:
-    wait-for-replication: "true"
+    type: minor, major
 - step_id: 7
-  failure_type: Limit Bandwidth
+  failure_type: Disk Stall
   cluster: test_cluster_1
-  node: 4
+  node: 1
   delay: 24s
   args:
-    rate: 1mbps
+    type: read, write
 - step_id: 8
-  failure_type: Disk Stall
-  cluster: test_cluster_3
-  node: 8
+  failure_type: Page Fault
+  cluster: test_cluster_2
+  node: 3
   delay: 39s
   args:
-    type: read, write
+    type: minor, major
 - step_id: 9
-  failure_type: Limit Bandwidth
-  cluster: test_cluster_3
-  node: 9
+  failure_type: Page Fault
+  cluster: test_cluster_2
+  node: 3
   delay: 43s
   args:
-    rate: 0mbps
+    type: minor, major
 - step_id: 10
-  failure_type: Limit Bandwidth
-  cluster: test_cluster_3
-  node: 1
+  failure_type: Disk Stall
+  cluster: test_cluster_1
+  node: 3
   delay: 40s
   args:
-    rate: 0mbps
+    type: write
