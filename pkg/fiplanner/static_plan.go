@@ -40,15 +40,19 @@ type StaticFailurePlanSpec struct {
 	maxWait time.Duration
 }
 
+// GeneratePlan generates a new failure plan based on a static failure plan.
+// It does so by:
+//  1. Converting the static failure spec into a dynamic failure plan.
+//  2. Creating a new step generator based on the dynamic plan.
+//  3. Generating new steps until spec.NumSteps has been reached.
+//  4. Parsing the static spec and generated steps into YAML.
 func (spec StaticFailurePlanSpec) GeneratePlan() ([]byte, error) {
 	if err := spec.Validate(); err != nil {
 		return nil, err
 	}
 	dynamicPlan := spec.GenerateDynamicPlan()
-	gen, err := NewStepGenerator(dynamicPlan)
-	if err != nil {
-		return nil, err
-	}
+	gen := NewStepGenerator(dynamicPlan)
+
 	steps := make([]FailureStep, 0, spec.NumSteps)
 
 	for stepID := 1; stepID <= spec.NumSteps; stepID++ {

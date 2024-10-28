@@ -41,10 +41,10 @@ type StepGenerator struct {
 // NewStepGenerator parses a given dynamic failure plan and returns
 // a step generator. This step generator can be used to generate
 // new failure steps based on the failure plan.
-func NewStepGenerator(plan DynamicFailurePlan) (*StepGenerator, error) {
+func NewStepGenerator(plan DynamicFailurePlan) *StepGenerator {
 	registry := failures.MakeFailureRegistry(plan.DisabledFailures)
 	registerFailuresHook(&registry)
-	return &StepGenerator{registry: registry, plan: plan, rng: rand.New(rand.NewSource(plan.Seed))}, nil
+	return &StepGenerator{registry: registry, plan: plan, rng: rand.New(rand.NewSource(plan.Seed))}
 }
 
 func (g *StepGenerator) randomDelay() time.Duration {

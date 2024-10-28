@@ -2,6 +2,7 @@ package fiplanner
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/fiplanner/failures"
 	"github.com/cockroachdb/cockroach/pkg/testutils/echotest"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v2"
 )
 
 const testUser = "unit_test"
@@ -114,27 +116,27 @@ func Test_GenerateDynamicPlan(t *testing.T) {
 		planBytes, err := spec.GeneratePlan()
 		require.NoError(t, err)
 
+		planPath := filepath.Join(t.TempDir(), "fiplan.yaml")
+		require.NoError(t, os.WriteFile(planPath, planBytes, 0644))
+
+		plan, err := parseDynamicPlanFromFile(planPath)
+		require.NoError(t, err)
+
+		gen := NewStepGenerator(plan)
+		steps := make([]FailureStep, 0, 10)
+		for i := 0; i < 10; i++ {
+			newStep, err := gen.GenerateStep(i, []string{"test_cluster"}, []int{4})
+			require.NoError(t, err)
+			steps = append(steps, newStep)
+		}
+
+		stepsBytes, err := yaml.Marshal(steps)
+		require.NoError(t, err)
 		file := "basic_dynamic_plan"
-		echotest.Require(t, string(planBytes), filepath.Join(testdataDir, file))
+		echotest.Require(t, formatDynamicPlanOutput(planBytes, stepsBytes), filepath.Join(testdataDir, file))
 	})
 }
 
-func Test_DynamicPlanGenerateStep(t *testing.T) {
-	defer setupPlannerUnitTest()()
-
-	testdataDir := filepath.Join("testdata", "dynamic_planner")
-	t.Run("basic plan", func(t *testing.T) {
-		spec := DynamicFailurePlanSpec{
-			User:           testUser,
-			TolerateErrors: true,
-			Seed:           1234,
-			minWait:        10 * time.Second,
-			maxWait:        1 * time.Minute,
-		}
-		planBytes, err := spec.GeneratePlan()
-		require.NoError(t, err)
-
-		file := "basic_dynamic_plan"
-		echotest.Require(t, string(planBytes), filepath.Join(testdataDir, file))
-	})
+func formatDynamicPlanOutput(planBytes []byte, stepsBytes []byte) string {
+	return fmt.Sprintf("%s\n=====Generated Steps=====\n%s", planBytes, stepsBytes)
 }
