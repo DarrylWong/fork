@@ -5,54 +5,17 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/cockroachdb/cockroach/pkg/util/randutil"
+	"github.com/cockroachdb/cockroach/pkg/fiplanner/failures"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
-	"gopkg.in/yaml.v2"
 )
 
-var registerFailuresHook = registerFailures
+var registerFailuresHook = failures.RegisterFailures
 var generatePlanIDHook = generatePlanID
 
-func GenerateStaticPlan(clusterSizes []int, spec FailurePlanSpec, numSteps int) ([]byte, error) {
-	registry := makeFailureRegistry(spec)
-	registerFailuresHook(&registry)
-
-	rng := rand.New(rand.NewSource(spec.Seed))
-	steps := make([]FailureStep, 0, numSteps)
-	for stepID := 1; stepID <= numSteps; stepID++ {
-
-		newStep, err := GenerateStep(registry, spec, rng, clusterSizes, stepID)
-		if err != nil {
-			return nil, err
-		}
-
-		steps = append(steps, newStep)
-	}
-
-	plan := StaticFailurePlan{
-		PlanID:         generatePlanIDHook(spec.User),
-		ClusterNames:   spec.ClusterNames,
-		TolerateErrors: spec.TolerateErrors,
-		Steps:          steps,
-	}
-
-	return yaml.Marshal(plan)
-}
-
-type DynamicFailurePlan struct {
-	PlanID           string
-	TolerateErrors   bool
-	Seed             int64
-	DisabledFailures []string
-	MinWait          time.Duration
-	MaxWait          time.Duration
-}
-
-type StaticFailurePlan struct {
-	PlanID         string        `yaml:"plan_id"`
-	ClusterNames   []string      `yaml:"cluster_names"`
-	TolerateErrors bool          `yaml:"tolerate_errors,omitempty"`
-	Steps          []FailureStep `yaml:"steps"`
+type FailurePlanSpec interface {
+	Validate() error
+	GeneratePlan() ([]byte, error)
+	RandomDelay(*rand.Rand) time.Duration
 }
 
 type FailureStep struct {
@@ -65,20 +28,24 @@ type FailureStep struct {
 }
 
 func GenerateStep(
-	r failureRegistry, spec FailurePlanSpec, rng *rand.Rand, clusterSizes []int, stepID int,
+	r failures.FailureRegistry,
+	spec FailurePlanSpec,
+	rng *rand.Rand,
+	clusterNames []string,
+	clusterSizes []int,
+	stepID int,
 ) (FailureStep, error) {
 	clusterToTarget := rng.Intn(len(clusterSizes))
 	nodeToTarget := rng.Intn(clusterSizes[clusterToTarget]) + 1
-	delayInNanoseconds := randutil.RandInt63InRange(rng, spec.minWait.Nanoseconds(), spec.maxWait.Nanoseconds())
 
 	failure := r.GetRandomFailure(rng)
 
 	return FailureStep{
 		FailureType: failure.Name,
 		StepID:      stepID,
-		Cluster:     spec.ClusterNames[clusterToTarget],
+		Cluster:     clusterNames[clusterToTarget],
 		Node:        nodeToTarget,
-		Delay:       time.Duration(delayInNanoseconds).Truncate(time.Second),
+		Delay:       spec.RandomDelay(rng),
 		Args:        failure.GenerateArgs(rng),
 	}, nil
 }
