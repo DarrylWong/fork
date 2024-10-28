@@ -1,0 +1,117 @@
+echo
+----
+----
+plan_id: unit_test-12345
+tolerate_errors: true
+seed: 1234
+min_wait: 10s
+max_wait: 1m0s
+
+=====Generated Steps=====
+- step_id: 1
+  failure_type: Limit Bandwidth
+  cluster: test_cluster_1
+  node: 6
+  delay: 15s
+  args:
+    rate: 1mbps
+- step_id: 2
+  failure_type: Disk Stall
+  cluster: test_cluster_1
+  node: 5
+  delay: 55s
+  args:
+    type: read, write
+- step_id: 3
+  failure_type: Node Restart
+  cluster: test_cluster_3
+  node: 2
+  delay: 16s
+  args:
+    wait-for-replication: "true"
+- step_id: 4
+  failure_type: Disk Stall
+  cluster: test_cluster_1
+  node: 2
+  delay: 51s
+  args:
+    type: write
+- step_id: 5
+  failure_type: Node Restart
+  cluster: test_cluster_1
+  node: 1
+  delay: 56s
+  args:
+    graceful-restart: "true"
+- step_id: 6
+  failure_type: Disk Stall
+  cluster: test_cluster_1
+  node: 2
+  delay: 19s
+  args:
+    type: write
+- step_id: 7
+  failure_type: Page Fault
+  cluster: test_cluster_3
+  node: 4
+  delay: 27s
+  args:
+    type: minor
+- step_id: 8
+  failure_type: Limit Bandwidth
+  cluster: test_cluster_1
+  node: 2
+  delay: 53s
+  args:
+    rate: 0mbps
+- step_id: 9
+  failure_type: Disk Stall
+  cluster: test_cluster_1
+  node: 2
+  delay: 37s
+  args:
+    type: read, write
+- step_id: 10
+  failure_type: Limit Bandwidth
+  cluster: test_cluster_4
+  node: 1
+  delay: 48s
+  args:
+    rate: 0mbps
+- step_id: 11
+  failure_type: Node Restart
+  cluster: test_cluster_2
+  node: 7
+  delay: 56s
+  args:
+    wait-for-replication: "true"
+- step_id: 12
+  failure_type: Limit Bandwidth
+  cluster: test_cluster_2
+  node: 5
+  delay: 21s
+  args:
+    rate: 1mbps
+- step_id: 13
+  failure_type: Disk Stall
+  cluster: test_cluster_2
+  node: 1
+  delay: 42s
+  args:
+    type: read
+- step_id: 14
+  failure_type: Disk Stall
+  cluster: test_cluster_2
+  node: 2
+  delay: 32s
+  args:
+    type: read
+- step_id: 15
+  failure_type: Page Fault
+  cluster: test_cluster_4
+  node: 5
+  delay: 29s
+  args:
+    type: minor, major
+----
+----
