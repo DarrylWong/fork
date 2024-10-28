@@ -118,3 +118,23 @@ func Test_GenerateDynamicPlan(t *testing.T) {
 		echotest.Require(t, string(planBytes), filepath.Join(testdataDir, file))
 	})
 }
+
+func Test_DynamicPlanGenerateStep(t *testing.T) {
+	defer setupPlannerUnitTest()()
+
+	testdataDir := filepath.Join("testdata", "dynamic_planner")
+	t.Run("basic plan", func(t *testing.T) {
+		spec := DynamicFailurePlanSpec{
+			User:           testUser,
+			TolerateErrors: true,
+			Seed:           1234,
+			minWait:        10 * time.Second,
+			maxWait:        1 * time.Minute,
+		}
+		planBytes, err := spec.GeneratePlan()
+		require.NoError(t, err)
+
+		file := "basic_dynamic_plan"
+		echotest.Require(t, string(planBytes), filepath.Join(testdataDir, file))
+	})
+}
