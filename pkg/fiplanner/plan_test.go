@@ -2,6 +2,7 @@ package fiplanner
 
 import (
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
@@ -124,7 +125,7 @@ func Test_GenerateDynamicPlan(t *testing.T) {
 
 		gen := NewStepGenerator(plan)
 		steps := make([]FailureStep, 0, 10)
-		for i := 0; i < 10; i++ {
+		for i := 1; i <= 10; i++ {
 			newStep, err := gen.GenerateStep(i, []string{"test_cluster"}, []int{4})
 			require.NoError(t, err)
 			steps = append(steps, newStep)
@@ -133,6 +134,56 @@ func Test_GenerateDynamicPlan(t *testing.T) {
 		stepsBytes, err := yaml.Marshal(steps)
 		require.NoError(t, err)
 		file := "basic_dynamic_plan"
+		echotest.Require(t, formatDynamicPlanOutput(planBytes, stepsBytes), filepath.Join(testdataDir, file))
+	})
+
+	// Test that we can generate steps even if the cluster state changes:
+	// i.e. cluster is added/removed, the number of nodes in the cluster changes.
+	t.Run("cluster state changed", func(t *testing.T) {
+		spec := DynamicFailurePlanSpec{
+			User:           testUser,
+			TolerateErrors: true,
+			Seed:           1234,
+			minWait:        10 * time.Second,
+			maxWait:        1 * time.Minute,
+		}
+		planBytes, err := spec.GeneratePlan()
+		require.NoError(t, err)
+
+		planPath := filepath.Join(t.TempDir(), "fiplan.yaml")
+		require.NoError(t, os.WriteFile(planPath, planBytes, 0644))
+
+		plan, err := parseDynamicPlanFromFile(planPath)
+		require.NoError(t, err)
+
+		gen := NewStepGenerator(plan)
+		steps := make([]FailureStep, 0, 15)
+
+		rng := rand.New(rand.NewSource(plan.Seed))
+		var clusterNames []string
+		var clusterSizes []int
+
+		mutateCluster := func() {
+			if rng.Float64() < 0.75 || len(clusterNames) < 2 {
+				clusterNames = append(clusterNames, fmt.Sprintf("test_cluster_%d", len(clusterNames)+1))
+				clusterSizes = append(clusterSizes, rng.Intn(10)+1)
+			} else {
+				clusterNames = clusterNames[:len(clusterNames)-1]
+				clusterSizes = clusterSizes[:len(clusterNames)-1]
+			}
+		}
+
+		for i := 1; i <= 15; i++ {
+			mutateCluster()
+			newStep, err := gen.GenerateStep(i, clusterNames, clusterSizes)
+			require.NoError(t, err)
+			steps = append(steps, newStep)
+
+		}
+
+		stepsBytes, err := yaml.Marshal(steps)
+		require.NoError(t, err)
+		file := "dynamic_plan_change_in_cluster_state"
 		echotest.Require(t, formatDynamicPlanOutput(planBytes, stepsBytes), filepath.Join(testdataDir, file))
 	})
 }
