@@ -2,10 +2,9 @@ package fiplanner
 
 import (
 	"math/rand"
+	"os"
 	"time"
 
-	"github.com/cockroachdb/cockroach/pkg/fiplanner/failures"
-	"github.com/cockroachdb/cockroach/pkg/util/randutil"
 	"github.com/cockroachdb/errors"
 	"gopkg.in/yaml.v2"
 )
@@ -42,9 +41,6 @@ func (spec DynamicFailurePlanSpec) GeneratePlan() ([]byte, error) {
 		return nil, err
 	}
 
-	registry := failures.MakeFailureRegistry(spec.DisabledFailures)
-	registerFailuresHook(&registry)
-
 	rng := rand.New(rand.NewSource(spec.Seed))
 
 	// Generate a new seed if one is not provided.
@@ -65,11 +61,6 @@ func (spec DynamicFailurePlanSpec) GeneratePlan() ([]byte, error) {
 	return yaml.Marshal(plan)
 }
 
-func (spec DynamicFailurePlanSpec) RandomDelay(rng *rand.Rand) time.Duration {
-	delayInNanoseconds := randutil.RandInt63InRange(rng, spec.minWait.Nanoseconds(), spec.maxWait.Nanoseconds())
-	return time.Duration(delayInNanoseconds).Truncate(time.Second)
-}
-
 func (spec DynamicFailurePlanSpec) Validate() error {
 	if spec.User == "" {
 		return errors.New("error validating failure plan spec: user must be specified")
@@ -80,4 +71,16 @@ func (spec DynamicFailurePlanSpec) Validate() error {
 	}
 
 	return nil
+}
+
+func parseDynamicPlanFromFile(planFile string) (DynamicFailurePlan, error) {
+	planBytes, err := os.ReadFile(planFile)
+	if err != nil {
+		return DynamicFailurePlan{}, err
+	}
+	var plan DynamicFailurePlan
+	if err = yaml.Unmarshal(planBytes, &plan); err != nil {
+		return DynamicFailurePlan{}, err
+	}
+	return plan, nil
 }

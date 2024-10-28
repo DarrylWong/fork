@@ -1,11 +1,8 @@
 package fiplanner
 
 import (
-	"math/rand"
 	"time"
 
-	"github.com/cockroachdb/cockroach/pkg/fiplanner/failures"
-	"github.com/cockroachdb/cockroach/pkg/util/randutil"
 	"github.com/cockroachdb/errors"
 	"gopkg.in/yaml.v2"
 )
@@ -47,15 +44,16 @@ func (spec StaticFailurePlanSpec) GeneratePlan() ([]byte, error) {
 	if err := spec.Validate(); err != nil {
 		return nil, err
 	}
-
-	registry := failures.MakeFailureRegistry(spec.DisabledFailures)
-	registerFailuresHook(&registry)
-
-	rng := rand.New(rand.NewSource(spec.Seed))
+	dynamicPlan := spec.GenerateDynamicPlan()
+	gen, err := NewStepGenerator(dynamicPlan)
+	if err != nil {
+		return nil, err
+	}
 	steps := make([]FailureStep, 0, spec.NumSteps)
+
 	for stepID := 1; stepID <= spec.NumSteps; stepID++ {
 
-		newStep, err := GenerateStep(registry, spec, rng, spec.ClusterNames, spec.ClusterSizes, stepID)
+		newStep, err := gen.GenerateStep(stepID, spec.ClusterNames, spec.ClusterSizes)
 		if err != nil {
 			return nil, err
 		}
@@ -71,11 +69,6 @@ func (spec StaticFailurePlanSpec) GeneratePlan() ([]byte, error) {
 	}
 
 	return yaml.Marshal(plan)
-}
-
-func (spec StaticFailurePlanSpec) RandomDelay(rng *rand.Rand) time.Duration {
-	delayInNanoseconds := randutil.RandInt63InRange(rng, spec.minWait.Nanoseconds(), spec.maxWait.Nanoseconds())
-	return time.Duration(delayInNanoseconds).Truncate(time.Second)
 }
 
 func (spec StaticFailurePlanSpec) Validate() error {
@@ -100,4 +93,15 @@ func (spec StaticFailurePlanSpec) Validate() error {
 	}
 
 	return nil
+}
+
+func (spec StaticFailurePlanSpec) GenerateDynamicPlan() DynamicFailurePlan {
+	return DynamicFailurePlan{
+		PlanID:           generatePlanIDHook(spec.User),
+		TolerateErrors:   spec.TolerateErrors,
+		Seed:             spec.Seed,
+		DisabledFailures: spec.DisabledFailures,
+		MinWait:          spec.minWait,
+		MaxWait:          spec.maxWait,
+	}
 }
