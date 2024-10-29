@@ -9,6 +9,13 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
+// DynamicFailurePlan is a type of failure plan that contains the information
+// needed to generate new steps but does not do so yet. Actual generation of
+// failure steps is done as needed by the consumer of the plan. The main use
+// of this mode is for roachtests where we cannot predetermine the exact number
+// of steps required to cover an entire test due to fluctuating run times or
+// failure injection impact. Instead, roachtests can have steps generated infinitely
+// until the test is complete.
 type DynamicFailurePlan struct {
 	PlanID           string        `yaml:"plan_id"`
 	TolerateErrors   bool          `yaml:"tolerate_errors,omitempty"`
@@ -18,6 +25,8 @@ type DynamicFailurePlan struct {
 	MaxWait          time.Duration `yaml:"max_wait"`
 }
 
+// DynamicFailurePlanSpec contains the information needed to generate a
+// DynamicFailurePlan.
 type DynamicFailurePlanSpec struct {
 	// User is used along with the current time to generate a unique plan ID.
 	User string
@@ -36,6 +45,7 @@ type DynamicFailurePlanSpec struct {
 	maxWait time.Duration
 }
 
+// GeneratePlan generates a new dynamic failure plan based on a dynamic failure plan spec.
 func (spec DynamicFailurePlanSpec) GeneratePlan() ([]byte, error) {
 	if err := spec.Validate(); err != nil {
 		return nil, err
@@ -61,6 +71,7 @@ func (spec DynamicFailurePlanSpec) GeneratePlan() ([]byte, error) {
 	return yaml.Marshal(plan)
 }
 
+// Validate checks that the dynamic failure plan spec is valid.
 func (spec DynamicFailurePlanSpec) Validate() error {
 	if spec.User == "" {
 		return errors.New("error validating failure plan spec: user must be specified")
@@ -73,7 +84,9 @@ func (spec DynamicFailurePlanSpec) Validate() error {
 	return nil
 }
 
-func parseDynamicPlanFromFile(planFile string) (DynamicFailurePlan, error) {
+// ParseDynamicPlanFromFile reads a dynamic failure plan from a YAML file and
+// unmarshals it into a DynamicFailurePlan.
+func ParseDynamicPlanFromFile(planFile string) (DynamicFailurePlan, error) {
 	planBytes, err := os.ReadFile(planFile)
 	if err != nil {
 		return DynamicFailurePlan{}, err

@@ -6,8 +6,12 @@ import (
 	"os"
 )
 
+// FailureSpec describes a failure that can be chosen by the
+// failure injection framework.
 type FailureSpec struct {
-	Name         string
+	Name string
+	// GenerateArgs generates a map of arguments that can be used to
+	// configure the parameters of the failure.
 	GenerateArgs func(rng *rand.Rand) map[string]string
 }
 
@@ -37,7 +41,6 @@ func (r *FailureRegistry) Add(spec FailureSpec) {
 	}
 
 	if _, ok := r.disabledFailures[spec.Name]; ok {
-		fmt.Fprintf(os.Stderr, "failure %s is disabled by failure plan spec\n", spec.Name)
 		return
 	}
 
@@ -45,11 +48,14 @@ func (r *FailureRegistry) Add(spec FailureSpec) {
 	r.m[spec.Name] = &spec
 }
 
+// GetRandomFailure returns a random failure from the registry,
+// accounting for disabled failures.
 func (r *FailureRegistry) GetRandomFailure(rng *rand.Rand) FailureSpec {
 	failure := r.failures[rng.Intn(len(r.failures))]
 	return *r.m[failure]
 }
 
+// RegisterFailures contains all available failure types.
 func RegisterFailures(r *FailureRegistry) {
 	registerNodeRestart(r)
 	registerLimitBandwidth(r)
@@ -57,6 +63,9 @@ func RegisterFailures(r *FailureRegistry) {
 	registerDiskStall(r)
 }
 
+// UnitTestRegisterFailures is a subset of all available failure types.
+// This is a unit test helper that can replace ReplaceFailures, so that
+// our datadriven unit tests don't change every time we add a new failure type.
 func UnitTestRegisterFailures(r *FailureRegistry) {
 	registerNodeRestart(r)
 	registerLimitBandwidth(r)

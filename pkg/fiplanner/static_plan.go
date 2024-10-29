@@ -7,6 +7,12 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
+// StaticFailurePlan is a type of failure plan used when we have a fixed
+// cluster state and know the exact number of steps we want to run. Example
+// uses for this plan could be a DRT or adhoc cluster where we have a
+// long-running cluster and may not want infinitely generate steps. It can
+// also be used to handcraft a failure plan for debugging purposes, as the
+// pre-generated can be manually edited.
 type StaticFailurePlan struct {
 	PlanID         string        `yaml:"plan_id"`
 	ClusterNames   []string      `yaml:"cluster_names"`
@@ -14,6 +20,14 @@ type StaticFailurePlan struct {
 	Steps          []FailureStep `yaml:"steps"`
 }
 
+// StaticFailurePlanSpec contains the information needed to generate a
+// StaticFailurePlan.
+//
+// From the planner's perspective, the main difference between a static and
+// dynamic plan is that the static plan generates ahead of time while the
+// dynamic plan will asynchronously generate steps as needed. Because of this,
+// the methods to generate steps are the same so a static plan spec is implicitly
+// converted to a dynamic plan by the framework.
 type StaticFailurePlanSpec struct {
 	// User is used along with the current time to generate a unique plan ID.
 	User string
@@ -40,7 +54,7 @@ type StaticFailurePlanSpec struct {
 	maxWait time.Duration
 }
 
-// GeneratePlan generates a new failure plan based on a static failure plan.
+// GeneratePlan generates a new static failure plan based on a static failure plan.
 // It does so by:
 //  1. Converting the static failure spec into a dynamic failure plan.
 //  2. Creating a new step generator based on the dynamic plan.
@@ -75,6 +89,7 @@ func (spec StaticFailurePlanSpec) GeneratePlan() ([]byte, error) {
 	return yaml.Marshal(plan)
 }
 
+// Validate checks that the static failure plan spec is valid.
 func (spec StaticFailurePlanSpec) Validate() error {
 	if len(spec.ClusterNames) == 0 {
 		return errors.New("error validating failure plan spec: at least one cluster must be specified")
@@ -99,6 +114,10 @@ func (spec StaticFailurePlanSpec) Validate() error {
 	return nil
 }
 
+// GenerateDynamicPlan constructs a dynamic failure plan based on a static plan spec.
+// The dynamic plan can be then used to create a step generator to generate failure steps.
+// Note we still need the static plan spec as it contains information related to cluster
+// state and number of steps to generate.
 func (spec StaticFailurePlanSpec) GenerateDynamicPlan() DynamicFailurePlan {
 	return DynamicFailurePlan{
 		PlanID:           generatePlanIDHook(spec.User),
