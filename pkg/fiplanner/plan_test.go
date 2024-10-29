@@ -120,7 +120,7 @@ func Test_GenerateDynamicPlan(t *testing.T) {
 		planPath := filepath.Join(t.TempDir(), "fiplan.yaml")
 		require.NoError(t, os.WriteFile(planPath, planBytes, 0644))
 
-		plan, err := parseDynamicPlanFromFile(planPath)
+		plan, err := ParseDynamicPlanFromFile(planPath)
 		require.NoError(t, err)
 
 		gen := NewStepGenerator(plan)
@@ -153,7 +153,7 @@ func Test_GenerateDynamicPlan(t *testing.T) {
 		planPath := filepath.Join(t.TempDir(), "fiplan.yaml")
 		require.NoError(t, os.WriteFile(planPath, planBytes, 0644))
 
-		plan, err := parseDynamicPlanFromFile(planPath)
+		plan, err := ParseDynamicPlanFromFile(planPath)
 		require.NoError(t, err)
 
 		gen := NewStepGenerator(plan)
@@ -163,6 +163,7 @@ func Test_GenerateDynamicPlan(t *testing.T) {
 		var clusterNames []string
 		var clusterSizes []int
 
+		// Randomly add or remove clusters.
 		mutateCluster := func() {
 			if rng.Float64() < 0.75 || len(clusterNames) < 2 {
 				clusterNames = append(clusterNames, fmt.Sprintf("test_cluster_%d", len(clusterNames)+1))
@@ -178,7 +179,6 @@ func Test_GenerateDynamicPlan(t *testing.T) {
 			newStep, err := gen.GenerateStep(i, clusterNames, clusterSizes)
 			require.NoError(t, err)
 			steps = append(steps, newStep)
-
 		}
 
 		stepsBytes, err := yaml.Marshal(steps)
@@ -188,6 +188,8 @@ func Test_GenerateDynamicPlan(t *testing.T) {
 	})
 }
 
+// Helper to provide a clean separation between the dynamic plan and the generated steps
+// in the datadriven output.
 func formatDynamicPlanOutput(planBytes []byte, stepsBytes []byte) string {
 	return fmt.Sprintf("%s\n=====Generated Steps=====\n%s", planBytes, stepsBytes)
 }

@@ -18,6 +18,8 @@ type FailurePlanSpec interface {
 	GeneratePlan() ([]byte, error)
 }
 
+// FailureStep describes a single failure step. It is a high level
+// description of what the failure looks like but not how to execute.
 type FailureStep struct {
 	StepID      int               `yaml:"step_id"`
 	FailureType string            `yaml:"failure_type"`
@@ -27,11 +29,14 @@ type FailureStep struct {
 	Args        map[string]string `yaml:"args,omitempty"` // FailureType specific arguments.
 }
 
+// Helper to generate a new planID based on the user and current time.
 func generatePlanID(prefix string) string {
 	secs := timeutil.Now().Unix()
 	return fmt.Sprintf("%s-%d", prefix, secs)
 }
 
+// StepGenerator contains the information used to infinitely generate
+// valid failure steps based on a supplied failure plan.
 type StepGenerator struct {
 	registry failures.FailureRegistry
 	plan     DynamicFailurePlan
@@ -47,6 +52,7 @@ func NewStepGenerator(plan DynamicFailurePlan) *StepGenerator {
 	return &StepGenerator{registry: registry, plan: plan, rng: rand.New(rand.NewSource(plan.Seed))}
 }
 
+// Helper to return a random valid delay in seconds.
 func (g *StepGenerator) randomDelay() time.Duration {
 	delayInNanoseconds := randutil.RandInt63InRange(g.rng, g.plan.MinWait.Nanoseconds(), g.plan.MaxWait.Nanoseconds())
 	return time.Duration(delayInNanoseconds).Truncate(time.Second)
