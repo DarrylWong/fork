@@ -1,0 +1,32 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "fiplanner",
+    srcs = [
+        "dynamic_plan.go",
+        "plan.go",
+        "static_plan.go",
+    ],
+    importpath = "github.com/cockroachdb/cockroach/pkg/fiplanner",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/fiplanner/failures",
+        "//pkg/util/randutil",
+        "//pkg/util/timeutil",
+        "@com_github_cockroachdb_errors//:errors",
+        "@in_gopkg_yaml_v2//:yaml_v2",
+    ],
+)
+
+go_test(
+    name = "fiplanner_test",
+    srcs = ["plan_test.go"],
+    data = glob(["testdata/**"]),
+    embed = [":fiplanner"],
+    deps = [
+        "//pkg/fiplanner/failures",
+        "//pkg/testutils/echotest",
+        "@com_github_stretchr_testify//require",
+        "@in_gopkg_yaml_v2//:yaml_v2",
+    ],
+)

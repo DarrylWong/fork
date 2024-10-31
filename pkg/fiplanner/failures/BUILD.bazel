@@ -1,0 +1,14 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "failures",
+    srcs = [
+        "cpu_failures.go",
+        "infra_failures.go",
+        "network_failures.go",
+        "registry.go",
+        "storage_failures.go",
+    ],
+    importpath = "github.com/cockroachdb/cockroach/pkg/fiplanner/failures",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,17 @@
+// Copyright 2024 The Cockroach Authors.
+//
+// Use of this software is governed by the CockroachDB Software License
+// included in the /LICENSE file.
+
+syntax = "proto3";
+package cockroach.ficontroller;
+option go_package = "github.com/cockroachdb/cockroach/ficontroller";
+
+import "ficontroller/controller.proto";
+
+service Controller {
+  rpc UploadFailureInjectionPlan (stream UploadFailureInjectionPlanRequest) returns (stream UploadFailureInjectionPlanResponse) {}
+  rpc StartFailureInjection (stream StartFailureInjectionRequest) returns (stream StartFailureInjectionResponse) {}
+  rpc UpdateClusterState (stream UpdateClusterStateRequest) returns (stream UpdateClusterStateResponse) {}
+  rpc GetFailurePlanLogs (stream GetFailurePlanLogsRequest) returns (stream GetFailurePlanLogsResponse) {}
+}
