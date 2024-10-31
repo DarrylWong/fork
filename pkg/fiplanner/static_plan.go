@@ -50,8 +50,8 @@ type StaticFailurePlanSpec struct {
 	// How long to inject a failure. Time range of acceptable pause times.
 	// The actual pause time is randomly chosen based off the seed when
 	// each step is generated.
-	minWait time.Duration
-	maxWait time.Duration
+	MinWait time.Duration
+	MaxWait time.Duration
 }
 
 // GeneratePlan generates a new static failure plan based on a static failure plan.
@@ -107,8 +107,8 @@ func (spec StaticFailurePlanSpec) Validate() error {
 		return errors.New("error validating failure plan spec: user must be specified")
 	}
 
-	if spec.maxWait < spec.minWait {
-		return errors.New("error validating failure plan spec: maxWait must be greater than or equal to minWait")
+	if spec.MaxWait < spec.MinWait {
+		return errors.New("error validating failure plan spec: MaxWait must be greater than or equal to MinWait")
 	}
 
 	return nil
@@ -124,7 +124,7 @@ func (spec StaticFailurePlanSpec) GenerateDynamicPlan() DynamicFailurePlan {
 		TolerateErrors:   spec.TolerateErrors,
 		Seed:             spec.Seed,
 		DisabledFailures: spec.DisabledFailures,
-		MinWait:          spec.minWait,
-		MaxWait:          spec.maxWait,
+		MinWait:          spec.MinWait,
+		MaxWait:          spec.MaxWait,
 	}
 }

@@ -10,8 +10,10 @@ option go_package = "github.com/cockroachdb/cockroach/ficontroller";
 import "ficontroller/controller.proto";
 
 service Controller {
-  rpc UploadFailureInjectionPlan (stream UploadFailureInjectionPlanRequest) returns (stream UploadFailureInjectionPlanResponse) {}
-  rpc StartFailureInjection (stream StartFailureInjectionRequest) returns (stream StartFailureInjectionResponse) {}
-  rpc UpdateClusterState (stream UpdateClusterStateRequest) returns (stream UpdateClusterStateResponse) {}
-  rpc GetFailurePlanLogs (stream GetFailurePlanLogsRequest) returns (stream GetFailurePlanLogsResponse) {}
+  rpc UploadFailureInjectionPlan (cockroach.ficontroller.UploadFailureInjectionPlanRequest) returns (cockroach.ficontroller.UploadFailureInjectionPlanResponse) {}
+  rpc StartFailureInjection (cockroach.ficontroller.StartFailureInjectionRequest) returns (cockroach.ficontroller.StartFailureInjectionResponse) {}
+  rpc StopFailureInjection (cockroach.ficontroller.StopFailureInjectionRequest) returns (cockroach.ficontroller.StopFailureInjectionResponse) {}
+  rpc UpdateClusterState (cockroach.ficontroller.UpdateClusterStateRequest) returns (cockroach.ficontroller.UpdateClusterStateResponse) {}
+  rpc GetFailurePlanStatus (cockroach.ficontroller.GetFailurePlanStatusRequest) returns (cockroach.ficontroller.GetFailurePlanStatusResponse) {}
+  rpc GetFailurePlanLogs (cockroach.ficontroller.GetFailurePlanLogsRequest) returns (cockroach.ficontroller.GetFailurePlanLogsResponse) {}
 }

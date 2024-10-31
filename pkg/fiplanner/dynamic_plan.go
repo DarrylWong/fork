@@ -25,6 +25,10 @@ type DynamicFailurePlan struct {
 	MaxWait          time.Duration `yaml:"max_wait"`
 }
 
+func (p DynamicFailurePlan) GetStep(stepID int) (*FailureStep, error) {
+	return nil, errors.New("not implemented")
+}
+
 // DynamicFailurePlanSpec contains the information needed to generate a
 // DynamicFailurePlan.
 type DynamicFailurePlanSpec struct {
@@ -78,7 +82,7 @@ func (spec DynamicFailurePlanSpec) Validate() error {
 	}
 
 	if spec.maxWait < spec.minWait {
-		return errors.New("error validating failure plan spec: maxWait must be greater than or equal to minWait")
+		return errors.New("error validating failure plan spec: MaxWait must be greater than or equal to MinWait")
 	}
 
 	return nil

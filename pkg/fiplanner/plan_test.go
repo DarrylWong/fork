@@ -50,8 +50,8 @@ func Test_GenerateStaticPlan(t *testing.T) {
 			TolerateErrors: true,
 			Seed:           1234,
 			NumSteps:       10,
-			minWait:        10 * time.Second,
-			maxWait:        1 * time.Minute,
+			MinWait:        10 * time.Second,
+			MaxWait:        1 * time.Minute,
 		}
 		planBytes, err := spec.GeneratePlan()
 		require.NoError(t, err)
@@ -71,8 +71,8 @@ func Test_GenerateStaticPlan(t *testing.T) {
 			Seed:             1234,
 			DisabledFailures: []string{"Node Restart", "Page Fault"},
 			NumSteps:         5,
-			minWait:          10 * time.Second,
-			maxWait:          1 * time.Minute,
+			MinWait:          10 * time.Second,
+			MaxWait:          1 * time.Minute,
 		}
 		planBytes, err := spec.GeneratePlan()
 		require.NoError(t, err)
@@ -91,8 +91,8 @@ func Test_GenerateStaticPlan(t *testing.T) {
 			ClusterSizes: clusterSizes,
 			Seed:         123456,
 			NumSteps:     10,
-			minWait:      10 * time.Second,
-			maxWait:      1 * time.Minute,
+			MinWait:      10 * time.Second,
+			MaxWait:      1 * time.Minute,
 		}
 		planBytes, err := spec.GeneratePlan()
 		require.NoError(t, err)
