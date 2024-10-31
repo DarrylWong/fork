@@ -1,0 +1,53 @@
+// Copyright 2024 The Cockroach Authors.
+//
+// Use of this software is governed by the CockroachDB Software License
+// included in the /LICENSE file.
+
+syntax = "proto3";
+package cockroach.ficontroller;
+option go_package = "github.com/cockroachdb/cockroach/ficontroller";
+
+import "gogoproto/gogo.proto";
+
+// A UploadFailureInjectionPlanRequest ...
+message UploadFailureInjectionPlanRequest {
+  bytes failure_plan = 1 [(gogoproto.customname) = "FailurePlan"];
+}
+
+message UploadFailureInjectionPlanResponse {
+}
+
+message StartFailureInjectionRequest {
+  string failure_plan_id = 1 [(gogoproto.customname) = "PlanID"];
+}
+
+message StartFailureInjectionResponse {
+}
+
+message StopFailureInjectionRequest {
+  string failure_plan_id = 1 [(gogoproto.customname) = "PlanID"];
+}
+
+message StopFailureInjectionResponse {
+}
+
+message ClusterInfo {
+  int32 cluster_size = 1 [(gogoproto.customname) = "ClusterSize"];
+  string connection_string = 2 [(gogoproto.customname) = "ConnectionString"];
+}
+
+message UpdateClusterStateRequest {
+  string failure_plan_id = 1 [(gogoproto.customname) = "PlanID"];
+  map<string, ClusterInfo> cluster_state = 2 [(gogoproto.customname) = "ClusterState"];
+}
+
+message UpdateClusterStateResponse {
+}
+
+message GetFailurePlanLogsRequest {
+  string failure_plan_id = 1 [(gogoproto.customname) = "PlanID"];
+}
+
+message GetFailurePlanLogsResponse {
+  bytes logs = 1 [(gogoproto.customname) = "Logs"];
+}
