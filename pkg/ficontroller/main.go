@@ -24,7 +24,7 @@ func main() {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			return config.Start(ctx, true)
+			return config.Start(ctx)
 		},
 	}
 
