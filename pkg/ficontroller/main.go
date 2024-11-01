@@ -28,6 +28,6 @@ func main() {
 		},
 	}
 
-	startCmd.Flags().IntVar(&config.port, "listen-port", 8081, "port to listen on")
+	startCmd.Flags().IntVar(&config.Port, "listen-Port", 8081, "Port to listen on")
 
 }

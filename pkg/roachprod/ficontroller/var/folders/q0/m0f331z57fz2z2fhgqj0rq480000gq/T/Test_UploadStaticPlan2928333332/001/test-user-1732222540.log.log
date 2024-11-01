@@ -1,0 +1,54 @@
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:40 runner.go:109: executing step: 1
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:40 storage_failures.go:10: TODO: implement Setup() {true false 0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:40 storage_failures.go:14: TODO: implement Attack() {true false 0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:40 runner.go:138: pausing for 1s
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:41 runner.go:145: reverting failure
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:41 storage_failures.go:18: TODO: implement Restore() {true false 0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:41 runner.go:109: executing step: 2
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:41 cpu_failures.go:10: TODO: implement Setup() {MinorFault:false MajorFault:true LogFunc:0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:41 cpu_failures.go:14: TODO: implement Attack() {MinorFault:false MajorFault:true LogFunc:0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:41 runner.go:138: pausing for 1s
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:42 runner.go:145: reverting failure
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:42 cpu_failures.go:18: TODO: implement Restore() {MinorFault:false MajorFault:true LogFunc:0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:42 runner.go:109: executing step: 3
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:42 network_failures.go:11: TODO: implement Setup() {0mbps 0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:42 network_failures.go:15: TODO: implement Attack() {0mbps 0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:42 runner.go:138: pausing for 1s
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:43 runner.go:145: reverting failure
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:43 network_failures.go:19: TODO: implement Restore() {0mbps 0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:43 runner.go:109: executing step: 4
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:43 network_failures.go:11: TODO: implement Setup() {1mbps 0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:43 network_failures.go:15: TODO: implement Attack() {1mbps 0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:43 runner.go:138: pausing for 1s
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:44 runner.go:145: reverting failure
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:44 network_failures.go:19: TODO: implement Restore() {1mbps 0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:44 runner.go:109: executing step: 5
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:44 storage_failures.go:10: TODO: implement Setup() {false true 0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:44 storage_failures.go:14: TODO: implement Attack() {false true 0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:44 runner.go:138: pausing for 1s
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:45 runner.go:145: reverting failure
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:45 storage_failures.go:18: TODO: implement Restore() {false true 0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:45 runner.go:109: executing step: 6
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:45 infra_failures.go:10: TODO: implement Setup() {true false 0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:45 infra_failures.go:14: TODO: implement Attack() {true false 0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:45 runner.go:138: pausing for 1s
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:46 runner.go:145: reverting failure
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:46 infra_failures.go:18: TODO: implement Restore() {true false 0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:46 runner.go:109: executing step: 7
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:46 infra_failures.go:10: TODO: implement Setup() {true false 0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:46 infra_failures.go:14: TODO: implement Attack() {true false 0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:46 runner.go:138: pausing for 1s
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:47 runner.go:145: reverting failure
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:47 infra_failures.go:18: TODO: implement Restore() {true false 0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:47 runner.go:109: executing step: 8
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:47 storage_failures.go:10: TODO: implement Setup() {true true 0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:47 storage_failures.go:14: TODO: implement Attack() {true true 0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:47 runner.go:138: pausing for 1s
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:48 runner.go:145: reverting failure
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:48 storage_failures.go:18: TODO: implement Restore() {true true 0x10283f4f0}
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:48 runner.go:109: executing step: 9
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:48 runner.go:138: pausing for 1s
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:49 runner.go:145: reverting failure
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:49 runner.go:109: executing step: 10
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:49 runner.go:138: pausing for 1s
+/var/folders/q0/m0f331z57fz2z2fhgqj0rq480000gq/T/Test_UploadStaticPlan2928333332/001/test-user-1732222540.log: 2024/11/21 20:55:50 runner.go:145: reverting failure

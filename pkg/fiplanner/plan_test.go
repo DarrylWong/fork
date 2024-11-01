@@ -111,8 +111,8 @@ func Test_GenerateDynamicPlan(t *testing.T) {
 			User:           testUser,
 			TolerateErrors: true,
 			Seed:           1234,
-			minWait:        10 * time.Second,
-			maxWait:        1 * time.Minute,
+			MinWait:        10 * time.Second,
+			MaxWait:        1 * time.Minute,
 		}
 		planBytes, err := spec.GeneratePlan()
 		require.NoError(t, err)
@@ -144,8 +144,8 @@ func Test_GenerateDynamicPlan(t *testing.T) {
 			User:           testUser,
 			TolerateErrors: true,
 			Seed:           1234,
-			minWait:        10 * time.Second,
-			maxWait:        1 * time.Minute,
+			MinWait:        10 * time.Second,
+			MaxWait:        1 * time.Minute,
 		}
 		planBytes, err := spec.GeneratePlan()
 		require.NoError(t, err)
