@@ -12,18 +12,19 @@ import (
 )
 
 type ControllerConfig struct {
-	port        int
-	planDir     string
-	concurrency int
+	// TODO support more than just localhost
+	Port        int
+	PlanDir     string
+	Concurrency int
 }
 
 func (config ControllerConfig) Start(ctx context.Context) error {
 	c := &Controller{
-		PlanDir:   config.planDir,
+		PlanDir:   config.PlanDir,
 		Plans:     make(map[string]string),
-		PlanCache: make(map[string]FailurePlan),
+		PlanCache: make(map[string]*FailurePlan),
 	}
-	return c.ListenAndServe(ctx, config.port)
+	return c.ListenAndServe(ctx, config.Port)
 }
 
 func (c *Controller) ListenAndServe(ctx context.Context, port int) error {
@@ -48,24 +49,26 @@ type PlanStatus string
 const (
 	NotFound   PlanStatus = "Not Found"
 	NotStarted PlanStatus = "Not Started"
+	Running    PlanStatus = "Running"
 	Failed     PlanStatus = "Failed"
 	Completed  PlanStatus = "Completed"
 	Cancelled  PlanStatus = "Cancelled"
 )
 
 type FailurePlan struct {
-	Status      PlanStatus
-	CancelFunc  func()
-	IsStatic    bool
-	StaticPlan  fiplanner.StaticFailurePlan
-	DynamicPlan fiplanner.DynamicFailurePlan
-	Clusters    map[string]*ClusterInfo
+	Status        PlanStatus
+	CancelFunc    func()
+	IsStatic      bool
+	StaticPlan    fiplanner.StaticFailurePlan
+	DynamicPlan   fiplanner.DynamicFailurePlan
+	stepGenerator *fiplanner.StepGenerator
+	Clusters      map[string]*ClusterInfo
 }
 
 type Controller struct {
 	PlanDir   string            // directory to store plans
 	Plans     map[string]string // map of name to plan file
-	PlanCache map[string]FailurePlan
+	PlanCache map[string]*FailurePlan
 }
 
 func (c *Controller) UploadFailureInjectionPlan(
@@ -80,7 +83,7 @@ func (c *Controller) UploadFailureInjectionPlan(
 			return nil, err
 		}
 
-		c.PlanCache[plan.PlanID] = FailurePlan{
+		c.PlanCache[plan.PlanID] = &FailurePlan{
 			IsStatic:   true,
 			StaticPlan: *plan,
 			Status:     NotStarted,
@@ -93,9 +96,10 @@ func (c *Controller) UploadFailureInjectionPlan(
 		return nil, err
 	}
 
-	c.PlanCache[plan.PlanID] = FailurePlan{
-		DynamicPlan: *plan,
-		Status:      NotStarted,
+	c.PlanCache[plan.PlanID] = &FailurePlan{
+		DynamicPlan:   *plan,
+		Status:        NotStarted,
+		stepGenerator: fiplanner.NewStepGenerator(*plan),
 	}
 	return &UploadFailureInjectionPlanResponse{plan.PlanID}, nil
 }
@@ -114,7 +118,6 @@ func (c *Controller) UpdateClusterState(
 		// TODO: check it doesn't already exist
 		plan.Clusters[name] = clusterInfo
 	}
-	c.PlanCache[req.PlanID] = plan
 	return &UpdateClusterStateResponse{}, nil
 }
 
@@ -127,8 +130,10 @@ func (c *Controller) StartFailureInjection(
 		return nil, fmt.Errorf("plan %s not found", req.PlanID)
 	}
 	// TODO check if plan already active
-	plan.Status = "running"
-	c.PlanCache[req.PlanID] = plan
+	plan.Status = Running
+	go func() {
+		c.RunFailureInjectionTest(ctx, plan)
+	}()
 	return &StartFailureInjectionResponse{}, nil
 }
 
@@ -137,12 +142,14 @@ func (c *Controller) StopFailureInjection(
 ) (*StopFailureInjectionResponse, error) {
 	plan, ok := c.PlanCache[req.PlanID]
 	if !ok {
-		// TODO check files
+		// TODO check files if not found in cache
 		return nil, fmt.Errorf("plan %s not found", req.PlanID)
 	}
-	// TODO check if plan is active
+	if plan.Status != Running {
+		return nil, fmt.Errorf("plan %s is not running, status is %s", req.PlanID, plan.Status)
+	}
 	plan.Status = Cancelled
-	c.PlanCache[req.PlanID] = plan
+	plan.CancelFunc()
 	return &StopFailureInjectionResponse{}, nil
 }
 
