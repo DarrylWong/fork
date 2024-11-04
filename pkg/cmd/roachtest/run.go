@@ -179,7 +179,10 @@ func runTests(register func(registry.Registry), filter *registry.TestFilter) err
 
 	// TODO: don't start this if no tests are going to use the FI controller
 	go func() {
-		config := ficontroller.ControllerConfig{Port: roachtestflags.FIPort}
+		config := ficontroller.ControllerConfig{
+			Port:    roachtestflags.FIPort,
+			PlanDir: artifactsDir,
+		}
 
 		if err := config.Start(ctx); err != nil {
 			// TODO should we preemptively skip failure injection tests if this happens?

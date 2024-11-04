@@ -414,7 +414,7 @@ var (
 	})
 
 	FIPort int = 2114
-	_          = registerRunFlag(&PromPort, FlagInfo{
+	_          = registerRunFlag(&FIPort, FlagInfo{
 		Name: "fi-controller-port",
 		Usage: `
 			TODO: add usage for me`,
