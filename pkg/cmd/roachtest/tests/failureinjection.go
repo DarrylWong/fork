@@ -46,7 +46,7 @@ func registerFailureInjection(r registry.Registry) {
 
 			cmd = roachtestutil.NewCommand("./cockroach workload run tpcc").
 				Arg("{pgurl%s}", c.CRDBNodes()).
-				Flag("duration", "10m").
+				Flag("duration", "3m").
 				Flag("warehouses", 10).
 				Flag("ramp", "1m").
 				String()

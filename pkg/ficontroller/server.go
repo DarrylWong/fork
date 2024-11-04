@@ -20,9 +20,9 @@ type ControllerConfig struct {
 
 func (config ControllerConfig) Start(ctx context.Context) error {
 	c := &Controller{
-		PlanDir:   config.PlanDir,
-		Plans:     make(map[string]string),
-		PlanCache: make(map[string]*FailurePlan),
+		PlanDir:     config.PlanDir,
+		PlanLogs:    make(map[string]string),
+		ActivePlans: make(map[string]*FailurePlan),
 	}
 	return c.ListenAndServe(ctx, config.Port)
 }
@@ -67,9 +67,9 @@ type FailurePlan struct {
 }
 
 type Controller struct {
-	PlanDir   string            // directory to store plans
-	Plans     map[string]string // map of name to plan file
-	PlanCache map[string]*FailurePlan
+	PlanDir     string            // directory to store plan and plan logs
+	PlanLogs    map[string]string // map of plan ID to plan logs
+	ActivePlans map[string]*FailurePlan
 }
 
 func (c *Controller) UploadFailureInjectionPlan(
@@ -84,7 +84,7 @@ func (c *Controller) UploadFailureInjectionPlan(
 			return nil, err
 		}
 
-		c.PlanCache[plan.PlanID] = &FailurePlan{
+		c.ActivePlans[plan.PlanID] = &FailurePlan{
 			IsStatic:   true,
 			StaticPlan: *plan,
 			Status:     NotStarted,
@@ -97,7 +97,7 @@ func (c *Controller) UploadFailureInjectionPlan(
 		return nil, err
 	}
 
-	c.PlanCache[plan.PlanID] = &FailurePlan{
+	c.ActivePlans[plan.PlanID] = &FailurePlan{
 		DynamicPlan:   *plan,
 		Status:        NotStarted,
 		stepGenerator: fiplanner.NewStepGenerator(*plan),
@@ -109,7 +109,7 @@ func (c *Controller) UpdateClusterState(
 	ctx context.Context, req *UpdateClusterStateRequest,
 ) (*UpdateClusterStateResponse, error) {
 	// TODO check this exists, lets make a helper
-	plan := c.PlanCache[req.PlanID]
+	plan := c.ActivePlans[req.PlanID]
 
 	if plan.Clusters == nil {
 		plan.Clusters = make(map[string]*ClusterInfo)
@@ -125,9 +125,8 @@ func (c *Controller) UpdateClusterState(
 func (c *Controller) StartFailureInjection(
 	ctx context.Context, req *StartFailureInjectionRequest,
 ) (*StartFailureInjectionResponse, error) {
-	plan, ok := c.PlanCache[req.PlanID]
+	plan, ok := c.ActivePlans[req.PlanID]
 	if !ok {
-		// TODO check files
 		return nil, fmt.Errorf("plan %s not found", req.PlanID)
 	}
 	// TODO check if plan already active
@@ -142,7 +141,7 @@ func (c *Controller) StartFailureInjection(
 func (c *Controller) StopFailureInjection(
 	ctx context.Context, req *StopFailureInjectionRequest,
 ) (*StopFailureInjectionResponse, error) {
-	plan, ok := c.PlanCache[req.PlanID]
+	plan, ok := c.ActivePlans[req.PlanID]
 	if !ok {
 		// TODO check files if not found in cache
 		return nil, fmt.Errorf("plan %s not found", req.PlanID)
@@ -152,19 +151,24 @@ func (c *Controller) StopFailureInjection(
 	}
 	plan.Status = Cancelled
 	plan.CancelFunc()
+
+	// TODO: mark plan for removal from ActivePlans?
+	// We don't want to do it right away since someone might want to check the status,
+	// but at the same time adding garbage collection may be a lot of unnecessary complexity.
 	return &StopFailureInjectionResponse{}, nil
 }
 
 func (c *Controller) GetFailurePlanStatus(
 	ctx context.Context, req *GetFailurePlanStatusRequest,
 ) (*GetFailurePlanStatusResponse, error) {
-	if _, ok := c.PlanCache[req.PlanID]; !ok {
+	if _, ok := c.ActivePlans[req.PlanID]; !ok {
+		// TODO: check files if not found in activeplans
 		return &GetFailurePlanStatusResponse{
 			PlanStatus: string(NotFound),
 		}, nil
 	}
 
-	plan := c.PlanCache[req.PlanID]
+	plan := c.ActivePlans[req.PlanID]
 
 	var planBytes []byte
 	var err error

@@ -3,6 +3,9 @@ package ficontroller
 import (
 	"context"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +22,29 @@ func (c *Controller) RunFailureInjectionTest(ctx context.Context, plan *FailureP
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	plan.CancelFunc = cancel
+
+	err := os.MkdirAll(c.PlanDir, 0755)
+	if err != nil {
+		// TODO error handling
+		fmt.Printf("error creating plan dir: %v\n", err)
+		return
+	}
+	// TODO: should/can we use a different logger here to make creating child loggers easier?
+	// TODO we should make a plan interface
+	planID := plan.DynamicPlan.PlanID
+	if plan.IsStatic {
+		planID = plan.StaticPlan.PlanID
+	}
+
+	f, err := os.Create(filepath.Join(c.PlanDir, planID))
+	if err != nil {
+		fmt.Printf("error creating plan logs: %v\n", err)
+		return
+	}
+	defer f.Close()
+	// TODO not sure what this should be configured to
+	l := log.New(f, "", 0)
+
 	for stepID := 1; plan.Status == Running; stepID++ {
 		select {
 		case <-runCtx.Done():
@@ -26,10 +52,11 @@ func (c *Controller) RunFailureInjectionTest(ctx context.Context, plan *FailureP
 		default:
 		}
 
-		step, err := plan.NextStep(ctx, stepID)
+		// TODO: we should save these steps so we can rerun the plan as a static plan
+		step, err := plan.NextStep(ctx, l, stepID)
 		if err != nil {
 			// TODO error handling
-			fmt.Printf("error getting next step: %v", err)
+			l.Printf("error getting next step: %v", err)
 			plan.Status = Failed
 			return
 		}
@@ -37,7 +64,7 @@ func (c *Controller) RunFailureInjectionTest(ctx context.Context, plan *FailureP
 		if plan.Status != Running {
 			return
 		}
-		err = plan.ExecuteStep(runCtx, step)
+		err = plan.ExecuteStep(runCtx, l, step)
 		if err != nil {
 			// TODO error handling
 			plan.Status = Failed
@@ -46,7 +73,9 @@ func (c *Controller) RunFailureInjectionTest(ctx context.Context, plan *FailureP
 	}
 }
 
-func (plan *FailurePlan) NextStep(ctx context.Context, stepID int) (fiplanner.FailureStep, error) {
+func (plan *FailurePlan) NextStep(
+	ctx context.Context, l *log.Logger, stepID int,
+) (fiplanner.FailureStep, error) {
 	if plan.IsStatic {
 		if stepID <= 0 {
 			return fiplanner.FailureStep{}, errors.Newf("step %d is not defined in plan", stepID)
@@ -69,13 +98,15 @@ func (plan *FailurePlan) NextStep(ctx context.Context, stepID int) (fiplanner.Fa
 	return plan.stepGenerator.GenerateStep(stepID, clusterNames, clusterSizes)
 }
 
-func (plan *FailurePlan) ExecuteStep(ctx context.Context, step fiplanner.FailureStep) error {
+func (plan *FailurePlan) ExecuteStep(
+	ctx context.Context, l *log.Logger, step fiplanner.FailureStep,
+) error {
 	clusterInfo := plan.Clusters[step.Cluster]
 	// TODO actually do this stuff
 	// TODO this should be logged in it's own per plan log
-	fmt.Printf("connecting to %s\n", clusterInfo.ConnectionString)
+	l.Printf("connecting to %s\n", clusterInfo.ConnectionString)
 
-	fmt.Printf("executing step %v\n", step)
+	l.Printf("executing step %v\n", step)
 	failure, err := parseStep(step)
 	if err != nil {
 		return err
@@ -89,14 +120,14 @@ func (plan *FailurePlan) ExecuteStep(ctx context.Context, step fiplanner.Failure
 	if err != nil {
 		return err
 	}
-	fmt.Printf("pausing for %s\n", step.Delay)
+	l.Printf("pausing for %s\n", step.Delay)
 
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-time.After(step.Delay):
 	}
-	fmt.Printf("reverting failure\n")
+	l.Printf("reverting failure\n")
 	err = failure.Restore(func() {})
 	if err != nil {
 		return err
