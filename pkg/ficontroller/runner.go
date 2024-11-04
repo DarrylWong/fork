@@ -30,6 +30,7 @@ func (c *Controller) RunFailureInjectionTest(ctx context.Context, plan *FailureP
 		if err != nil {
 			// TODO error handling
 			fmt.Printf("error getting next step: %v", err)
+			plan.Status = Failed
 			return
 		}
 		// TODO cleaner way of exiting
@@ -39,6 +40,7 @@ func (c *Controller) RunFailureInjectionTest(ctx context.Context, plan *FailureP
 		err = plan.ExecuteStep(runCtx, step)
 		if err != nil {
 			// TODO error handling
+			plan.Status = Failed
 			return
 		}
 	}

@@ -26,6 +26,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestflags"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/operations"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
+	"github.com/cockroachdb/cockroach/pkg/ficontroller"
 	"github.com/cockroachdb/cockroach/pkg/roachprod"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
@@ -175,6 +176,17 @@ func runTests(register func(registry.Registry), filter *registry.TestFilter) err
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	CtrlC(ctx, l, cancel, cr)
+
+	// TODO: don't start this if no tests are going to use the FI controller
+	go func() {
+		config := ficontroller.ControllerConfig{Port: roachtestflags.FIPort}
+
+		if err := config.Start(ctx); err != nil {
+			// TODO should we preemptively skip failure injection tests if this happens?
+			l.Errorf("error serving failure injection controller: %v", err)
+		}
+	}()
+
 	// Install goroutine leak checker and run it at the end of the entire test
 	// run. If a test is leaking a goroutine, then it will likely be still around.
 	// We could diff goroutine snapshots before/after each executed test, but that

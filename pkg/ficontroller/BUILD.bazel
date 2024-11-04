@@ -4,10 +4,7 @@ load("@io_bazel_rules_go//proto:def.bzl", "go_proto_library")
 
 proto_library(
     name = "ficontroller_proto",
-    srcs = [
-        "api.proto",
-        "controller.proto",
-    ],
+    srcs = ["controller.proto"],
     strip_import_prefix = "/pkg",
     visibility = ["//visibility:public"],
     deps = ["@com_github_gogo_protobuf//gogoproto:gogo_proto"],
@@ -20,6 +17,7 @@ go_library(
         "runner.go",
         "server.go",
     ],
+    embed = [":ficontroller_go_proto"],
     importpath = "github.com/cockroachdb/cockroach/pkg/ficontroller",
     visibility = ["//visibility:public"],
     deps = [
@@ -33,15 +31,6 @@ go_library(
     ],
 )
 
-go_proto_library(
-    name = "ficontroller_go_proto",
-    compilers = ["//pkg/cmd/protoc-gen-gogoroach:protoc-gen-gogoroach_grpc_compiler"],
-    importpath = "github.com/cockroachdb/cockroach/ficontroller",
-    proto = ":ficontroller_proto",
-    visibility = ["//visibility:public"],
-    deps = ["@com_github_gogo_protobuf//gogoproto"],
-)
-
 go_test(
     name = "ficontroller_test",
     srcs = ["main_test.go"],
@@ -51,4 +40,13 @@ go_test(
         "@com_github_stretchr_testify//require",
         "@org_golang_google_grpc//:go_default_library",
     ],
+)
+
+go_proto_library(
+    name = "ficontroller_go_proto",
+    compilers = ["//pkg/cmd/protoc-gen-gogoroach:protoc-gen-gogoroach_grpc_compiler"],
+    importpath = "github.com/cockroachdb/cockroach/pkg/ficontroller",
+    proto = ":ficontroller_proto",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_gogo_protobuf//gogoproto"],
 )

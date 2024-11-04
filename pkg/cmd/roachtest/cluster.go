@@ -39,6 +39,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
+	"github.com/cockroachdb/cockroach/pkg/ficontroller"
 	"github.com/cockroachdb/cockroach/pkg/roachprod"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/cloud"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/config"
@@ -679,6 +680,12 @@ type clusterImpl struct {
 		// sideEyeEnvName is the name of the environment used by the Side-Eye agents
 		// running on this cluster. Empty if the Side-Eye integration is not active.
 		sideEyeEnvName string
+	}
+
+	// TODO document me :(
+	failureInjectionState struct {
+		client *ficontroller.ControllerClient
+		planID string
 	}
 }
 
@@ -2192,6 +2199,25 @@ func (c *clusterImpl) StartE(
 		}
 	}
 
+	// If used for a failure injection test, we need to upload the cluster state
+	// to the controller.
+	if c.failureInjectionState.client != nil {
+		// TODO: we should pass the IPs for all crdb clusters
+		ip, _ := c.ExternalIP(ctx, l, c.Node(1))
+		client := *c.failureInjectionState.client
+		_, err := client.UpdateClusterState(ctx, &ficontroller.UpdateClusterStateRequest{
+			PlanID: c.failureInjectionState.planID,
+			ClusterState: map[string]*ficontroller.ClusterInfo{
+				c.Name(): {
+					ClusterSize:      int32(c.Spec().NodeCount),
+					ConnectionString: ip[0],
+				},
+			}})
+		if err != nil {
+			return errors.Wrap(err, "failed to update cluster state to failure injection controller")
+		}
+	}
+
 	return nil
 }
 
@@ -3318,4 +3344,26 @@ func (c *clusterImpl) GetHostErrorVMs(ctx context.Context, l *logger.Logger) ([]
 		allHostErrorVMs = append(allHostErrorVMs, hostErrorVMS...)
 	}
 	return allHostErrorVMs, nil
+}
+
+func (c *clusterImpl) StartFailureInjectionPlan(ctx context.Context, l *logger.Logger) error {
+	if c.failureInjectionState.client != nil {
+		client := *c.failureInjectionState.client
+		_, err := client.StartFailureInjection(ctx, &ficontroller.StartFailureInjectionRequest{PlanID: c.failureInjectionState.planID})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *clusterImpl) StopFailureInjectionPlan(ctx context.Context, l *logger.Logger) error {
+	if c.failureInjectionState.client != nil {
+		client := *c.failureInjectionState.client
+		_, err := client.StopFailureInjection(ctx, &ficontroller.StopFailureInjectionRequest{PlanID: c.failureInjectionState.planID})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

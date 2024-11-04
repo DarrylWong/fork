@@ -5,7 +5,7 @@
 
 syntax = "proto3";
 package cockroach.ficontroller;
-option go_package = "github.com/cockroachdb/cockroach/ficontroller";
+option go_package = "github.com/cockroachdb/cockroach/pkg/ficontroller";
 
 import "gogoproto/gogo.proto";
 
@@ -35,6 +35,7 @@ message StopFailureInjectionResponse {
 
 message ClusterInfo {
   int32 cluster_size = 1 [(gogoproto.customname) = "ClusterSize"];
+  // TODO: this should be a list of connection strings, one for each node in the cluster
   string connection_string = 2 [(gogoproto.customname) = "ConnectionString"];
 }
 
@@ -62,4 +63,13 @@ message GetFailurePlanLogsRequest {
 
 message GetFailurePlanLogsResponse {
   bytes logs = 1 [(gogoproto.customname) = "Logs"];
+}
+
+service Controller {
+  rpc UploadFailureInjectionPlan (UploadFailureInjectionPlanRequest) returns (UploadFailureInjectionPlanResponse) {}
+  rpc StartFailureInjection (StartFailureInjectionRequest) returns (StartFailureInjectionResponse) {}
+  rpc StopFailureInjection (StopFailureInjectionRequest) returns (StopFailureInjectionResponse) {}
+  rpc UpdateClusterState (UpdateClusterStateRequest) returns (UpdateClusterStateResponse) {}
+  rpc GetFailurePlanStatus (GetFailurePlanStatusRequest) returns (GetFailurePlanStatusResponse) {}
+  rpc GetFailurePlanLogs (GetFailurePlanLogsRequest) returns (GetFailurePlanLogsResponse) {}
 }

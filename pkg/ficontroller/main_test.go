@@ -21,7 +21,9 @@ func StartController(t *testing.T, ctx context.Context) {
 
 func Test_UploadStaticPlan(t *testing.T) {
 	ctx := context.Background()
-	StartController(t, ctx)
+	controllerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	StartController(t, controllerCtx)
 
 	conn, err := grpc.DialContext(ctx, "localhost:8081", grpc.WithInsecure())
 	require.NoError(t, err)

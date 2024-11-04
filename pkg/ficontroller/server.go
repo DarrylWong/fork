@@ -28,7 +28,7 @@ func (config ControllerConfig) Start(ctx context.Context) error {
 }
 
 func (c *Controller) ListenAndServe(ctx context.Context, port int) error {
-	lis, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", port))
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
@@ -37,9 +37,9 @@ func (c *Controller) ListenAndServe(ctx context.Context, port int) error {
 	go func() {
 		err = server.Serve(lis)
 	}()
-	select {
-	case <-ctx.Done():
-	}
+
+	<-ctx.Done()
+	server.Stop()
 
 	return err
 }
@@ -56,6 +56,7 @@ const (
 )
 
 type FailurePlan struct {
+	// TODO add mutex
 	Status        PlanStatus
 	CancelFunc    func()
 	IsStatic      bool
@@ -137,6 +138,7 @@ func (c *Controller) StartFailureInjection(
 	return &StartFailureInjectionResponse{}, nil
 }
 
+// TODO: should we have a distinct PauseFailureInjection as well?
 func (c *Controller) StopFailureInjection(
 	ctx context.Context, req *StopFailureInjectionRequest,
 ) (*StopFailureInjectionResponse, error) {
@@ -172,6 +174,10 @@ func (c *Controller) GetFailurePlanStatus(
 			return nil, err
 		}
 	} else {
+		planBytes, err = yaml.Marshal(plan.DynamicPlan)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &GetFailurePlanStatusResponse{
