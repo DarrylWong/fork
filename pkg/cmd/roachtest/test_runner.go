@@ -35,6 +35,8 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/task"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
+	"github.com/cockroachdb/cockroach/pkg/ficontroller"
+	"github.com/cockroachdb/cockroach/pkg/fiplanner"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/config"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/vm"
@@ -48,6 +50,8 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/version"
 	"github.com/cockroachdb/errors"
 	"github.com/petermattis/goid"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 var (
@@ -1092,6 +1096,31 @@ func (r *testRunner) runTest(
 		c.grafanaTags = []string{vm.SanitizeLabel(runID), vm.SanitizeLabel(testRunID), vm.SanitizeLabel(c.Name())}
 	}
 
+	// If the test is a failure injection test, generate a failure plan and upload it to the controller.
+	if t.spec.FailureInjectionTest {
+		plan := fiplanner.DynamicFailurePlanSpec{
+			User:    "test-user", // Should use roachprod user or cluster name
+			MinWait: 10 * time.Second,
+			MaxWait: 30 * time.Second,
+		}
+		planBytes, err := plan.GeneratePlan()
+		if err != nil {
+			t.Error("failed to generate plan", err)
+		}
+		conn, err := grpc.DialContext(ctx, fmt.Sprintf(":%d", roachtestflags.FIPort), grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			t.Error("failed to dial failure injection controller", err)
+		}
+		client := ficontroller.NewControllerClient(conn)
+		c.failureInjectionState.client = &client
+
+		resp, err := client.UploadFailureInjectionPlan(ctx, &ficontroller.UploadFailureInjectionPlanRequest{FailurePlan: planBytes})
+		if err != nil {
+			t.Error("failed to upload failure injection plan", err)
+		}
+		c.failureInjectionState.planID = resp.PlanID
+	}
+
 	// sideEyeTimeoutSnapshotURL may be set during teardown to communicate to the
 	// deferred function below that a Side-Eye snapshot was taken for a timed out
 	// test.
@@ -1578,6 +1607,13 @@ func (r *testRunner) teardownTest(
 			}
 			t.L().Printf("test timed out; check __stacks.log and CRDB logs for goroutine dumps")
 		}
+
+		// TODO: we should also grab the logs from the controller.
+		err = c.StopFailureInjectionPlan(ctx, t.L())
+		if err != nil {
+			t.L().Printf("error stopping failure injection plan: %v", err)
+		}
+
 		return snapURL, err
 	}
 

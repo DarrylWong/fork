@@ -413,6 +413,13 @@ var (
 			process`,
 	})
 
+	FIPort int = 2114
+	_          = registerRunFlag(&PromPort, FlagInfo{
+		Name: "fi-controller-port",
+		Usage: `
+			TODO: add usage for me`,
+	})
+
 	SelectProbability float64 = 1.0
 	_                         = registerRunFlag(&SelectProbability, FlagInfo{
 		Name: "select-probability",
