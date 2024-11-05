@@ -102,13 +102,13 @@ func (plan *FailurePlan) ExecuteStep(
 	l.Printf("executing step: %d", step.StepID)
 	clusterInfo := plan.Clusters[step.Cluster]
 	// TODO actually do this stuff
-	// TODO this should be logged in it's own per plan log
-	l.Printf("connecting to %s", clusterInfo.ConnectionString)
+	l.Printf("connecting to node %d with %s", step.Node, clusterInfo.ConnectionString[step.Node-1])
 
 	failure, err := parseStep(l, step)
 	if err != nil {
 		return err
 	}
+
 	err = failure.Setup(func() {})
 	if err != nil {
 		return err

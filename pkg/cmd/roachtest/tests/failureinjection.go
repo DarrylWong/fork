@@ -32,8 +32,8 @@ func registerFailureInjection(r registry.Registry) {
 		Cluster:              r.MakeClusterSpec(4, spec.WorkloadNode()),
 		FailureInjectionTest: true,
 		FailureInjectionOpts: []failureinjection.Option{
-			failureinjection.MinWait(10 * time.Second),
-			failureinjection.MaxWait(30 * time.Second),
+			failureinjection.MinWait(1 * time.Second),
+			failureinjection.MaxWait(3 * time.Second),
 		},
 		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 			c.Start(ctx, t.L(), option.DefaultStartOpts(), install.MakeClusterSettings(), c.CRDBNodes())
@@ -45,9 +45,9 @@ func registerFailureInjection(r registry.Registry) {
 
 			cmd = roachtestutil.NewCommand("./cockroach workload run tpcc").
 				Arg("{pgurl%s}", c.CRDBNodes()).
-				Flag("duration", "3m").
+				Flag("duration", "30s").
 				Flag("warehouses", 10).
-				Flag("ramp", "1m").
+				//Flag("ramp", "1m").
 				String()
 			c.Run(ctx, option.WithNodes(c.WorkloadNode()), cmd)
 		},

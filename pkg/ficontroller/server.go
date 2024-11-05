@@ -48,12 +48,22 @@ func (c *Controller) ListenAndServe(ctx context.Context, port int) error {
 		select {
 		case plan := <-c.PlanQueue:
 			go func() {
+				// TODO: don't let a panic take down the server
 				c.RunFailureInjectionTest(ctx, plan)
 			}()
 		case <-ctx.Done():
-			server.Stop()
+			fmt.Printf("context cancelled, stopping server")
+			c.Stop(server)
 			return err
 		}
+	}
+}
+
+func (c *Controller) Stop(server *grpc.Server) {
+	server.Stop()
+	close(c.PlanQueue)
+	for _, plan := range c.ActivePlans {
+		plan.CancelFunc()
 	}
 }
 
