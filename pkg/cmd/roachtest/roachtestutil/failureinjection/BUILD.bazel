@@ -1,0 +1,14 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "failureinjection",
+    srcs = ["spec.go"],
+    importpath = "github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/failureinjection",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/cmd/roachtest/cluster",
+        "//pkg/cmd/roachtest/test",
+        "//pkg/fiplanner",
+        "//pkg/util/randutil",
+    ],
+)

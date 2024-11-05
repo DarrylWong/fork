@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/failureinjection"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
-	"github.com/cockroachdb/cockroach/pkg/fiplanner"
 )
 
 // LibGEOS is a list of native libraries for libgeos.
@@ -176,7 +176,7 @@ type TestSpec struct {
 
 	// TODO: document me :(
 	FailureInjectionTest bool
-	FailureInjectionPlan *fiplanner.DynamicFailurePlanSpec
+	FailureInjectionOpts []failureinjection.Option
 
 	// stats are populated by test selector based on previous execution data
 	stats *testStats

@@ -932,6 +932,20 @@ func (mr *MockClusterMockRecorder) StartE(arg0, arg1, arg2, arg3 interface{}, ar
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StartE", reflect.TypeOf((*MockCluster)(nil).StartE), varargs...)
 }
 
+// StartFailureInjectionPlan mocks base method.
+func (m *MockCluster) StartFailureInjectionPlan(arg0 context.Context, arg1 *logger.Logger) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "StartFailureInjectionPlan", arg0, arg1)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// StartFailureInjectionPlan indicates an expected call of StartFailureInjectionPlan.
+func (mr *MockClusterMockRecorder) StartFailureInjectionPlan(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StartFailureInjectionPlan", reflect.TypeOf((*MockCluster)(nil).StartFailureInjectionPlan), arg0, arg1)
+}
+
 // StartGrafana mocks base method.
 func (m *MockCluster) StartGrafana(arg0 context.Context, arg1 *logger.Logger, arg2 *prometheus.Config) error {
 	m.ctrl.T.Helper()
@@ -1006,6 +1020,20 @@ func (mr *MockClusterMockRecorder) StopE(arg0, arg1, arg2 interface{}, arg3 ...i
 	mr.mock.ctrl.T.Helper()
 	varargs := append([]interface{}{arg0, arg1, arg2}, arg3...)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StopE", reflect.TypeOf((*MockCluster)(nil).StopE), varargs...)
+}
+
+// StopFailureInjectionPlan mocks base method.
+func (m *MockCluster) StopFailureInjectionPlan(arg0 context.Context, arg1 *logger.Logger) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "StopFailureInjectionPlan", arg0, arg1)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// StopFailureInjectionPlan indicates an expected call of StopFailureInjectionPlan.
+func (mr *MockClusterMockRecorder) StopFailureInjectionPlan(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StopFailureInjectionPlan", reflect.TypeOf((*MockCluster)(nil).StopFailureInjectionPlan), arg0, arg1)
 }
 
 // StopGrafana mocks base method.

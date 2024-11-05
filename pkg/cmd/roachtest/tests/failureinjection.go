@@ -14,9 +14,9 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/failureinjection"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
-	"github.com/cockroachdb/cockroach/pkg/fiplanner"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/stretchr/testify/require"
 )
@@ -31,10 +31,9 @@ func registerFailureInjection(r registry.Registry) {
 		Suites:               registry.ManualOnly,
 		Cluster:              r.MakeClusterSpec(4, spec.WorkloadNode()),
 		FailureInjectionTest: true,
-		FailureInjectionPlan: &fiplanner.DynamicFailurePlanSpec{
-			User:    "test-user", // Should use roachprod user or cluster name
-			MinWait: 10 * time.Second,
-			MaxWait: 30 * time.Second,
+		FailureInjectionOpts: []failureinjection.Option{
+			failureinjection.MinWait(10 * time.Second),
+			failureinjection.MaxWait(30 * time.Second),
 		},
 		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 			c.Start(ctx, t.L(), option.DefaultStartOpts(), install.MakeClusterSettings(), c.CRDBNodes())

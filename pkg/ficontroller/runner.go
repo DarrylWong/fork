@@ -3,9 +3,8 @@ package ficontroller
 import (
 	"context"
 	"fmt"
-	"log"
-	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -23,27 +22,22 @@ func (c *Controller) RunFailureInjectionTest(ctx context.Context, plan *FailureP
 	defer cancel()
 	plan.CancelFunc = cancel
 
-	err := os.MkdirAll(c.PlanDir, 0755)
+	dir := c.GetLogDir(plan)
+	stepsFile := sanitizeFileName(fmt.Sprintf("%s-steps.log", plan.getPlanID()))
+	stepLogger, err := newLogger(filepath.Join(dir, stepsFile))
 	if err != nil {
 		// TODO error handling
-		fmt.Printf("error creating plan dir: %v\n", err)
+		fmt.Printf("error creating logger: %v\n", err)
 		return
-	}
-	// TODO: should/can we use a different logger here to make creating child loggers easier?
-	// TODO we should make a plan interface
-	planID := plan.DynamicPlan.PlanID
-	if plan.IsStatic {
-		planID = plan.StaticPlan.PlanID
 	}
 
-	f, err := os.Create(filepath.Join(c.PlanDir, planID))
+	logFile := sanitizeFileName(fmt.Sprintf("%s.log", plan.getPlanID()))
+	runLogger, err := newLogger(filepath.Join(dir, logFile))
 	if err != nil {
-		fmt.Printf("error creating plan logs: %v\n", err)
+		// TODO error handling
+		fmt.Printf("error creating logger: %v\n", err)
 		return
 	}
-	defer f.Close()
-	// TODO not sure what this should be configured to
-	l := log.New(f, "", 0)
 
 	for stepID := 1; plan.Status == Running; stepID++ {
 		select {
@@ -52,11 +46,10 @@ func (c *Controller) RunFailureInjectionTest(ctx context.Context, plan *FailureP
 		default:
 		}
 
-		// TODO: we should save these steps so we can rerun the plan as a static plan
-		step, err := plan.NextStep(ctx, l, stepID)
+		step, err := plan.NextStep(ctx, stepLogger, stepID)
 		if err != nil {
 			// TODO error handling
-			l.Printf("error getting next step: %v", err)
+			runLogger.Printf("error getting next step: %v", err)
 			plan.Status = Failed
 			return
 		}
@@ -64,7 +57,7 @@ func (c *Controller) RunFailureInjectionTest(ctx context.Context, plan *FailureP
 		if plan.Status != Running {
 			return
 		}
-		err = plan.ExecuteStep(runCtx, l, step)
+		err = plan.ExecuteStep(runCtx, runLogger, step)
 		if err != nil {
 			// TODO error handling
 			plan.Status = Failed
@@ -74,7 +67,7 @@ func (c *Controller) RunFailureInjectionTest(ctx context.Context, plan *FailureP
 }
 
 func (plan *FailurePlan) NextStep(
-	ctx context.Context, l *log.Logger, stepID int,
+	ctx context.Context, l *logger, stepID int,
 ) (fiplanner.FailureStep, error) {
 	if plan.IsStatic {
 		if stepID <= 0 {
@@ -95,19 +88,24 @@ func (plan *FailurePlan) NextStep(
 		clusterSizes = append(clusterSizes, int(cluster.ClusterSize))
 	}
 
-	return plan.stepGenerator.GenerateStep(stepID, clusterNames, clusterSizes)
+	newStep, err := plan.stepGenerator.GenerateStep(stepID, clusterNames, clusterSizes)
+	if err != nil {
+		return fiplanner.FailureStep{}, err
+	}
+	l.Printf("%s", newStep)
+	return newStep, nil
 }
 
 func (plan *FailurePlan) ExecuteStep(
-	ctx context.Context, l *log.Logger, step fiplanner.FailureStep,
+	ctx context.Context, l *logger, step fiplanner.FailureStep,
 ) error {
+	l.Printf("executing step: %d", step.StepID)
 	clusterInfo := plan.Clusters[step.Cluster]
 	// TODO actually do this stuff
 	// TODO this should be logged in it's own per plan log
-	l.Printf("connecting to %s\n", clusterInfo.ConnectionString)
+	l.Printf("connecting to %s", clusterInfo.ConnectionString)
 
-	l.Printf("executing step %v\n", step)
-	failure, err := parseStep(step)
+	failure, err := parseStep(l, step)
 	if err != nil {
 		return err
 	}
@@ -120,14 +118,14 @@ func (plan *FailurePlan) ExecuteStep(
 	if err != nil {
 		return err
 	}
-	l.Printf("pausing for %s\n", step.Delay)
+	l.Printf("pausing for %s", step.Delay)
 
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-time.After(step.Delay):
 	}
-	l.Printf("reverting failure\n")
+	l.Printf("reverting failure")
 	err = failure.Restore(func() {})
 	if err != nil {
 		return err
@@ -138,28 +136,34 @@ func (plan *FailurePlan) ExecuteStep(
 // TODO: think about better ways to do this, this will get long fast.
 // Maybe failureStep should contain a method to convert to failureMode since
 // controller should have to care about the specifics of the failure args.
-func parseStep(step fiplanner.FailureStep) (failureinjection.FailureMode, error) {
+func parseStep(l *logger, step fiplanner.FailureStep) (failureinjection.FailureMode, error) {
+	logFunc := l.Printf
+
 	switch step.FailureType {
 	case "Node Restart":
 		return failureinjection.NodeRestart{
+			LogFunc:            logFunc,
 			GracefulRestart:    mustParseBool(step.Args["graceful_restart"]),
 			WaitForReplication: mustParseBool(step.Args["wait_for_replication"]),
 		}, nil
 	case "Disk Stall":
 		types := step.Args["type"]
 		return failureinjection.DiskStall{
+			LogFunc:    logFunc,
 			ReadStall:  strings.Contains(types, "read"),
 			WriteStall: strings.Contains(types, "write"),
 		}, nil
 	case "Page Fault":
 		types := step.Args["type"]
 		return failureinjection.PageFault{
+			LogFunc:    logFunc,
 			MajorFault: strings.Contains(types, "major"),
 			MinorFault: strings.Contains(types, "minor"),
 		}, nil
 	case "Limit Bandwidth":
 		return failureinjection.LimitBandwidth{
-			Rate: step.Args["rate"],
+			LogFunc: logFunc,
+			Rate:    step.Args["rate"],
 		}, nil
 	}
 	return nil, errors.Newf("unknown failure type %s", step.FailureType)
@@ -171,4 +175,22 @@ func mustParseBool(arg string) bool {
 		return false
 	}
 	return b
+}
+
+func (c *Controller) GetLogDir(p *FailurePlan) string {
+	dir := p.DynamicPlan.LogDir
+	if p.IsStatic {
+		dir = p.StaticPlan.LogDir
+	}
+	if dir == "" {
+		dir = c.DefaultPlanDir
+	}
+	return dir
+}
+
+var fileNameRegex = regexp.MustCompile("[^a-zA-Z0-9.]+")
+
+func sanitizeFileName(name string) string {
+	name = fileNameRegex.ReplaceAllString(name, "-")
+	return strings.ToLower(name)
 }

@@ -18,6 +18,7 @@ import (
 // until the test is complete.
 type DynamicFailurePlan struct {
 	PlanID           string        `yaml:"plan_id"`
+	LogDir           string        `yaml:"log_dir,omitempty"`
 	TolerateErrors   bool          `yaml:"tolerate_errors,omitempty"`
 	Seed             int64         `yaml:"seed"`
 	DisabledFailures []string      `yaml:"disabled_failures,omitempty"`
@@ -34,6 +35,12 @@ func (p DynamicFailurePlan) GetStep(stepID int) (*FailureStep, error) {
 type DynamicFailurePlanSpec struct {
 	// User is used along with the current time to generate a unique plan ID.
 	User string
+	// LogDir is the directory where logs for this plan will be written.
+	// Intended for deployments where the controller lives in the same
+	// process as the test and can write logs directly. For standalone
+	// mode, this should be left empty and the controller will write logs
+	// to a default directory.
+	LogDir string
 	// If true, continue executing the plan even if some steps fail.
 	TolerateErrors bool
 	// Seed used to generate new failure injection steps. 0 indicates
@@ -65,6 +72,7 @@ func (spec DynamicFailurePlanSpec) GeneratePlan() ([]byte, error) {
 
 	plan := DynamicFailurePlan{
 		PlanID:           generatePlanIDHook(spec.User),
+		LogDir:           spec.LogDir,
 		TolerateErrors:   spec.TolerateErrors,
 		Seed:             spec.Seed,
 		DisabledFailures: spec.DisabledFailures,

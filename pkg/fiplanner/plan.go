@@ -8,6 +8,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/fiplanner/failures"
 	"github.com/cockroachdb/cockroach/pkg/util/randutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
+	"gopkg.in/yaml.v2"
 )
 
 var registerFailuresHook = failures.RegisterFailures
@@ -27,6 +28,16 @@ type FailureStep struct {
 	Node        int               `yaml:"node"`
 	Delay       time.Duration     `yaml:"delay"`          // Amount of time to delay before reversing a failure.
 	Args        map[string]string `yaml:"args,omitempty"` // FailureType specific arguments.
+}
+
+func (s FailureStep) YAML() []byte {
+	// Safe to ignore error since it's a fixed struct we define above.
+	b, _ := yaml.Marshal(s)
+	return b
+}
+
+func (s FailureStep) String() string {
+	return string(s.YAML())
 }
 
 // Helper to generate a new planID based on the user and current time.

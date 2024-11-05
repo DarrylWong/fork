@@ -33,11 +33,11 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestflags"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/failureinjection"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/task"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
 	"github.com/cockroachdb/cockroach/pkg/ficontroller"
-	"github.com/cockroachdb/cockroach/pkg/fiplanner"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/config"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/vm"
@@ -1117,11 +1117,7 @@ func (r *testRunner) runTest(
 
 	// If the test is a failure injection test, generate a failure plan and upload it to the controller.
 	if t.spec.FailureInjectionTest {
-		plan := fiplanner.DynamicFailurePlanSpec{
-			User:    "test-user", // Should use roachprod user or cluster name
-			MinWait: 10 * time.Second,
-			MaxWait: 30 * time.Second,
-		}
+		plan := failureinjection.MakeFailureInjectionPlan(t, c, t.spec.FailureInjectionOpts...)
 		planBytes, err := plan.GeneratePlan()
 		if err != nil {
 			t.Error("failed to generate plan", err)

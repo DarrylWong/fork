@@ -13,16 +13,22 @@ import (
 
 type ControllerConfig struct {
 	// TODO support more than just localhost
-	Port        int
+	Port int
+	// PlanDir is the directory where the controller will store plan logs if
+	// not specified by the plan itself. This is intended for standalone controller
+	// usage, where the user must get the logs from the controller. If the controller
+	// is in the same process as the test, it makes more sense for the controller to
+	// write directly to desired location.
 	PlanDir     string
 	Concurrency int
 }
 
 func (config ControllerConfig) Start(ctx context.Context) error {
 	c := &Controller{
-		PlanDir:     config.PlanDir,
-		PlanLogs:    make(map[string]string),
-		ActivePlans: make(map[string]*FailurePlan),
+		DefaultPlanDir: config.PlanDir,
+		PlanLogs:       make(map[string]string),
+		ActivePlans:    make(map[string]*FailurePlan),
+		PlanQueue:      make(chan *FailurePlan),
 	}
 	return c.ListenAndServe(ctx, config.Port)
 }
@@ -38,10 +44,17 @@ func (c *Controller) ListenAndServe(ctx context.Context, port int) error {
 		err = server.Serve(lis)
 	}()
 
-	<-ctx.Done()
-	server.Stop()
-
-	return err
+	for {
+		select {
+		case plan := <-c.PlanQueue:
+			go func() {
+				c.RunFailureInjectionTest(ctx, plan)
+			}()
+		case <-ctx.Done():
+			server.Stop()
+			return err
+		}
+	}
 }
 
 type PlanStatus string
@@ -66,10 +79,19 @@ type FailurePlan struct {
 	Clusters      map[string]*ClusterInfo
 }
 
+func (plan *FailurePlan) getPlanID() string {
+	planID := plan.DynamicPlan.PlanID
+	if plan.IsStatic {
+		planID = plan.StaticPlan.PlanID
+	}
+	return planID
+}
+
 type Controller struct {
-	PlanDir     string            // directory to store plan and plan logs
-	PlanLogs    map[string]string // map of plan ID to plan logs
-	ActivePlans map[string]*FailurePlan
+	DefaultPlanDir string            // directory to store plan and plan logs
+	PlanLogs       map[string]string // map of plan ID to plan logs
+	ActivePlans    map[string]*FailurePlan
+	PlanQueue      chan *FailurePlan
 }
 
 func (c *Controller) UploadFailureInjectionPlan(
@@ -131,9 +153,7 @@ func (c *Controller) StartFailureInjection(
 	}
 	// TODO check if plan already active
 	plan.Status = Running
-	go func() {
-		c.RunFailureInjectionTest(ctx, plan)
-	}()
+	c.PlanQueue <- plan
 	return &StartFailureInjectionResponse{}, nil
 }
 
