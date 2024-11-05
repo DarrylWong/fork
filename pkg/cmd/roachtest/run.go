@@ -180,8 +180,7 @@ func runTests(register func(registry.Registry), filter *registry.TestFilter) err
 	// TODO: don't start this if no tests are going to use the FI controller
 	go func() {
 		config := ficontroller.ControllerConfig{
-			Port:    roachtestflags.FIPort,
-			PlanDir: artifactsDir,
+			Port: roachtestflags.FIPort,
 		}
 
 		if err := config.Start(ctx); err != nil {

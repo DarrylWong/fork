@@ -15,6 +15,7 @@ import (
 // pre-generated can be manually edited.
 type StaticFailurePlan struct {
 	PlanID         string        `yaml:"plan_id"`
+	LogDir         string        `yaml:"log_dir,omitempty"`
 	ClusterNames   []string      `yaml:"cluster_names"`
 	TolerateErrors bool          `yaml:"tolerate_errors,omitempty"`
 	Steps          []FailureStep `yaml:"steps"`
@@ -31,6 +32,12 @@ type StaticFailurePlan struct {
 type StaticFailurePlanSpec struct {
 	// User is used along with the current time to generate a unique plan ID.
 	User string
+	// LogDir is the directory where logs for this plan will be written.
+	// Intended for deployments where the controller lives in the same
+	// process as the test and can write logs directly. For standalone
+	// mode, this should be left empty and the controller will write logs
+	// to a default directory.
+	LogDir string
 	// Cluster(s) to target. Note the support for test that use multiple
 	// clusters i.e. c2c.
 	ClusterNames []string
@@ -81,6 +88,7 @@ func (spec StaticFailurePlanSpec) GeneratePlan() ([]byte, error) {
 
 	plan := StaticFailurePlan{
 		PlanID:         generatePlanIDHook(spec.User),
+		LogDir:         spec.LogDir,
 		ClusterNames:   spec.ClusterNames,
 		TolerateErrors: spec.TolerateErrors,
 		Steps:          steps,

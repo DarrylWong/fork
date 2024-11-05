@@ -13,6 +13,7 @@ proto_library(
 go_library(
     name = "ficontroller",
     srcs = [
+        "logger.go",
         "main.go",
         "runner.go",
         "server.go",
@@ -23,11 +24,13 @@ go_library(
     deps = [
         "//pkg/failureinjection",
         "//pkg/fiplanner",
+        "//pkg/util/log",
+        "//pkg/util/syncutil",
         "@com_github_cockroachdb_errors//:errors",
         "@com_github_lib_pq//:pq",
         "@com_github_spf13_cobra//:cobra",
         "@in_gopkg_yaml_v2//:yaml_v2",
-        "@org_golang_google_grpc//:go_default_library",
+        "@org_golang_google_grpc//:grpc",
     ],
 )
 
@@ -38,7 +41,7 @@ go_test(
     deps = [
         "//pkg/fiplanner",
         "@com_github_stretchr_testify//require",
-        "@org_golang_google_grpc//:go_default_library",
+        "@org_golang_google_grpc//:grpc",
     ],
 )
 
