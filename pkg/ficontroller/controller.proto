@@ -35,8 +35,7 @@ message StopFailureInjectionResponse {
 
 message ClusterInfo {
   int32 cluster_size = 1 [(gogoproto.customname) = "ClusterSize"];
-  // TODO: this should be a list of connection strings, one for each node in the cluster
-  string connection_string = 2 [(gogoproto.customname) = "ConnectionString"];
+  repeated string connection_string = 2 [(gogoproto.customname) = "ConnectionString"];
 }
 
 message UpdateClusterStateRequest {

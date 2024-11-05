@@ -2202,15 +2202,14 @@ func (c *clusterImpl) StartE(
 	// If used for a failure injection test, we need to upload the cluster state
 	// to the controller.
 	if c.failureInjectionState.client != nil {
-		// TODO: we should pass the IPs for all crdb clusters
-		ip, _ := c.ExternalIP(ctx, l, c.Node(1))
+		ips, _ := c.ExternalIP(ctx, l, c.CRDBNodes())
 		client := *c.failureInjectionState.client
 		_, err := client.UpdateClusterState(ctx, &ficontroller.UpdateClusterStateRequest{
 			PlanID: c.failureInjectionState.planID,
 			ClusterState: map[string]*ficontroller.ClusterInfo{
 				c.Name(): {
-					ClusterSize:      int32(c.Spec().NodeCount),
-					ConnectionString: ip[0],
+					ClusterSize:      int32(len(c.CRDBNodes())),
+					ConnectionString: ips,
 				},
 			}})
 		if err != nil {

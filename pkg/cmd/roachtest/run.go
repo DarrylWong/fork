@@ -182,7 +182,6 @@ func runTests(register func(registry.Registry), filter *registry.TestFilter) err
 		config := ficontroller.ControllerConfig{
 			Port: roachtestflags.FIPort,
 		}
-
 		if err := config.Start(ctx); err != nil {
 			// TODO should we preemptively skip failure injection tests if this happens?
 			l.Errorf("error serving failure injection controller: %v", err)

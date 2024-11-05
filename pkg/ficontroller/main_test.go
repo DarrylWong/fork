@@ -12,7 +12,10 @@ import (
 )
 
 func StartController(t *testing.T, ctx context.Context) {
-	config := ControllerConfig{Port: 8081}
+	config := ControllerConfig{
+		Port:    8081,
+		PlanDir: t.TempDir(),
+	}
 	go func() {
 		err := config.Start(ctx)
 		require.NoError(t, err)
@@ -20,6 +23,8 @@ func StartController(t *testing.T, ctx context.Context) {
 }
 
 func Test_UploadStaticPlan(t *testing.T) {
+	// TODO fix leaking goroutine
+	//defer leaktest.AfterTest(t)()
 	ctx := context.Background()
 	controllerCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -48,7 +53,7 @@ func Test_UploadStaticPlan(t *testing.T) {
 
 	clusterInfo := ClusterInfo{
 		ClusterSize:      3,
-		ConnectionString: "TODO: implement me",
+		ConnectionString: []string{"TODO: implement me"},
 	}
 
 	clusterState := map[string]*ClusterInfo{"test_cluster": &clusterInfo}
@@ -101,7 +106,7 @@ func Test_UploadDynamicPlan(t *testing.T) {
 
 	clusterInfo := ClusterInfo{
 		ClusterSize:      3,
-		ConnectionString: "TODO: implement me",
+		ConnectionString: []string{"TODO: implement me"},
 	}
 
 	clusterState := map[string]*ClusterInfo{"test_cluster": &clusterInfo}
