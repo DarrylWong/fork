@@ -1635,7 +1635,6 @@ func (r *testRunner) teardownTest(
 			t.L().Printf("test timed out; check __stacks.log and CRDB logs for goroutine dumps")
 		}
 
-		// TODO: we should also grab the logs from the controller.
 		err = c.StopFailureInjectionPlan(ctx, t.L())
 		if err != nil {
 			t.L().Printf("error stopping failure injection plan: %v", err)

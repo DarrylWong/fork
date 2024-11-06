@@ -6,7 +6,6 @@ package failureinjection
 // included in the /LICENSE file.
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
@@ -21,7 +20,7 @@ func MakeFailureInjectionPlan(
 	_, seed := randutil.NewPseudoRand()
 
 	spec := fiplanner.DynamicFailurePlanSpec{
-		User:           fmt.Sprintf("%s-%s", c.Name(), t.Name()),
+		User:           t.Name(),
 		LogDir:         t.ArtifactsDir(),
 		TolerateErrors: true,
 		Seed:           seed,
