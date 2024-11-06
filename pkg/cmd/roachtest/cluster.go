@@ -2202,7 +2202,7 @@ func (c *clusterImpl) StartE(
 	// If used for a failure injection test, we need to upload the cluster state
 	// to the controller.
 	if c.failureInjectionState.client != nil {
-		ips, _ := c.ExternalIP(ctx, l, c.CRDBNodes())
+		ips, _ := c.InternalPGUrl(ctx, l, c.CRDBNodes(), roachprod.PGURLOptions{})
 		client := *c.failureInjectionState.client
 		_, err := client.UpdateClusterState(ctx, &ficontroller.UpdateClusterStateRequest{
 			PlanID: c.failureInjectionState.planID,
