@@ -3,6 +3,7 @@ package ficontroller
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -59,6 +60,7 @@ func (c *Controller) RunFailureInjectionTest(ctx context.Context, plan *FailureP
 		}
 		err = plan.ExecuteStep(runCtx, runLogger, step)
 		if err != nil {
+			runLogger.Printf("error executing step: %v", err)
 			// TODO error handling
 			plan.Status = Failed
 			return
@@ -100,21 +102,29 @@ func (plan *FailurePlan) ExecuteStep(
 	ctx context.Context, l *logger, step fiplanner.FailureStep,
 ) error {
 	l.Printf("executing step: %d", step.StepID)
-	clusterInfo := plan.Clusters[step.Cluster]
-	// TODO actually do this stuff
-	l.Printf("connecting to node %d with %s", step.Node, clusterInfo.ConnectionString[step.Node-1])
+	//clusterInfo := plan.Clusters[step.Cluster]
+	// TODO: the controller should have the info needed to establish SSH connections
+	// itself, so that way we don't couple it too tightly with roachprod. For now we're
+	// just using roachprod as a POC because it's easy.
+	runFunc := func(args ...string) error {
+		args = []string{"run", fmt.Sprintf("%s:%d", step.Cluster, step.Node), strings.Join(args, " ")}
+		//args = append(args, clusterInfo.ConnectionString[step.Node-1])
+		cmd := exec.Command("./roachprod", args...)
+		l.Printf("running command: %s", cmd.String())
+		return cmd.Run()
+	}
 
 	failure, err := parseStep(l, step)
 	if err != nil {
 		return err
 	}
 
-	err = failure.Setup(func() {})
+	err = failure.Setup(runFunc)
 	if err != nil {
 		return err
 	}
 
-	err = failure.Attack(func() {})
+	err = failure.Attack(runFunc)
 	if err != nil {
 		return err
 	}
@@ -126,7 +136,7 @@ func (plan *FailurePlan) ExecuteStep(
 	case <-time.After(step.Delay):
 	}
 	l.Printf("reverting failure")
-	err = failure.Restore(func() {})
+	err = failure.Restore(runFunc)
 	if err != nil {
 		return err
 	}

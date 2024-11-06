@@ -35,6 +35,9 @@ message StopFailureInjectionResponse {
 
 message ClusterInfo {
   int32 cluster_size = 1 [(gogoproto.customname) = "ClusterSize"];
+  // TODO: we probably need more than just this, as the controller should
+  // have all the info needed to set up SSH connections. As of right now,
+  // i'm just using roachprod ssh for this.
   repeated string connection_string = 2 [(gogoproto.customname) = "ConnectionString"];
 }
 
