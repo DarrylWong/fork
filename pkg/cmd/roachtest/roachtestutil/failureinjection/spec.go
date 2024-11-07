@@ -19,11 +19,18 @@ func MakeFailureInjectionPlan(
 ) fiplanner.DynamicFailurePlanSpec {
 	_, seed := randutil.NewPseudoRand()
 
+	var defaultDisabledFailures []string
+	if c.IsLocal() {
+		// Disable IP tables usage when running on locally.
+		defaultDisabledFailures = append(defaultDisabledFailures, "Partition Node")
+	}
+
 	spec := fiplanner.DynamicFailurePlanSpec{
-		User:           t.Name(),
-		LogDir:         t.ArtifactsDir(),
-		TolerateErrors: true,
-		Seed:           seed,
+		User:             t.Name(),
+		LogDir:           t.ArtifactsDir(),
+		TolerateErrors:   true,
+		DisabledFailures: defaultDisabledFailures,
+		Seed:             seed,
 	}
 	defaultOpts := []Option{
 		MinWait(1 * time.Minute),
@@ -41,7 +48,7 @@ type Option func(spec *fiplanner.DynamicFailurePlanSpec)
 
 func DisabledFailureTypes(disabledFailureTypes []string) Option {
 	return func(spec *fiplanner.DynamicFailurePlanSpec) {
-		spec.DisabledFailures = disabledFailureTypes
+		spec.DisabledFailures = append(spec.DisabledFailures, disabledFailureTypes...)
 	}
 }
 

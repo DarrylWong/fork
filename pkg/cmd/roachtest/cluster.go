@@ -2197,14 +2197,19 @@ func (c *clusterImpl) StartE(
 	// If used for a failure injection test, we need to upload the cluster state
 	// to the controller.
 	if c.failureInjectionState.client != nil {
-		ips, _ := c.InternalPGUrl(ctx, l, c.CRDBNodes(), roachprod.PGURLOptions{})
+		ports, _ := c.SQLPorts(ctx, l, c.CRDBNodes(), "" /* tenant */, 0 /* sqlInstance */)
+		int64Ports := make([]int64, 0, len(ports))
+		for _, port := range ports {
+			int64Ports = append(int64Ports, int64(port))
+		}
+
 		client := *c.failureInjectionState.client
 		_, err := client.UpdateClusterState(ctx, &ficontroller.UpdateClusterStateRequest{
 			PlanID: c.failureInjectionState.planID,
 			ClusterState: map[string]*ficontroller.ClusterInfo{
 				c.Name(): {
-					ClusterSize:      int32(len(c.CRDBNodes())),
-					ConnectionString: ips,
+					ClusterSize: int64(len(c.CRDBNodes())),
+					SQLPort:     int64Ports,
 				},
 			}})
 		if err != nil {

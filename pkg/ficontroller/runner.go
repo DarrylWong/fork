@@ -102,7 +102,7 @@ func (plan *FailurePlan) ExecuteStep(
 	ctx context.Context, l *logger, step fiplanner.FailureStep,
 ) error {
 	l.Printf("executing step: %d", step.StepID)
-	//clusterInfo := plan.Clusters[step.Cluster]
+	clusterInfo := plan.Clusters[step.Cluster]
 	// TODO: the controller should have the info needed to establish SSH connections
 	// itself, so that way we don't couple it too tightly with roachprod. For now we're
 	// just using roachprod as a POC because it's easy.
@@ -114,7 +114,7 @@ func (plan *FailurePlan) ExecuteStep(
 		return cmd.Run()
 	}
 
-	failure, err := parseStep(l, step)
+	failure, err := parseStep(l, clusterInfo, step)
 	if err != nil {
 		return err
 	}
@@ -146,7 +146,9 @@ func (plan *FailurePlan) ExecuteStep(
 // TODO: think about better ways to do this, this will get long fast.
 // Maybe failureStep should contain a method to convert to failureMode since
 // controller should have to care about the specifics of the failure args.
-func parseStep(l *logger, step fiplanner.FailureStep) (failureinjection.FailureMode, error) {
+func parseStep(
+	l *logger, clusterInfo *ClusterInfo, step fiplanner.FailureStep,
+) (failureinjection.FailureMode, error) {
 	logFunc := l.Printf
 
 	switch step.FailureType {
@@ -174,6 +176,11 @@ func parseStep(l *logger, step fiplanner.FailureStep) (failureinjection.FailureM
 		return failureinjection.LimitBandwidth{
 			LogFunc: logFunc,
 			Rate:    step.Args["rate"],
+		}, nil
+	case "Partition Node":
+		return failureinjection.PartitionNode{
+			LogFunc: logFunc,
+			Port:    int(clusterInfo.SQLPort[step.Node-1]),
 		}, nil
 	}
 	return nil, errors.Newf("unknown failure type %s", step.FailureType)
