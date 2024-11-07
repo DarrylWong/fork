@@ -26,8 +26,8 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestflags"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/operations"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
-	"github.com/cockroachdb/cockroach/pkg/ficontroller"
 	"github.com/cockroachdb/cockroach/pkg/roachprod"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/ficontroller"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/util/allstacks"
@@ -65,6 +65,8 @@ type testReportForGitHub struct {
 	duration time.Duration
 	status   testResult
 }
+
+var FailureInjectionController *ficontroller.Controller
 
 // runTests is the main function for the run and bench commands.
 // Assumes initRunFlagsBinariesAndLibraries was called.
@@ -178,15 +180,14 @@ func runTests(register func(registry.Registry), filter *registry.TestFilter) err
 	CtrlC(ctx, l, cancel, cr)
 
 	// TODO: don't start this if no tests are going to use the FI controller
-	go func() {
-		config := ficontroller.ControllerConfig{
-			Port: roachtestflags.FIPort,
-		}
-		if err := config.Start(ctx); err != nil {
-			// TODO should we preemptively skip failure injection tests if this happens?
-			l.Errorf("error serving failure injection controller: %v", err)
-		}
-	}()
+	config := ficontroller.ControllerConfig{
+		Port: roachtestflags.FIPort,
+		L:    l,
+	}
+	controller := ficontroller.NewController(config)
+	FailureInjectionController = &controller
+	// TODO should we preemptively skip failure injection tests if anything goes wrong with the controller?
+	controller.Start(ctx)
 
 	// Install goroutine leak checker and run it at the end of the entire test
 	// run. If a test is leaking a goroutine, then it will likely be still around.

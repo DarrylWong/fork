@@ -12,6 +12,7 @@ import (
 	"os"
 
 	"github.com/cockroachdb/cockroach/pkg/ficontroller"
+	ficontroller2 "github.com/cockroachdb/cockroach/pkg/roachprod/ficontroller"
 	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
@@ -91,7 +92,7 @@ var rootCmd = &cobra.Command{
 }
 
 var (
-	config = &ficontroller.ControllerConfig{}
+	config = &ficontroller2.ControllerConfig{}
 )
 
 var startCmd = &cobra.Command{

@@ -15,3 +15,13 @@ func registerLimitBandwidth(r *FailureRegistry) {
 		GenerateArgs: gen,
 	})
 }
+
+func registerPartitionNode(r *FailureRegistry) {
+	gen := func(rng *rand.Rand) map[string]string {
+		return make(map[string]string)
+	}
+	r.Add(FailureSpec{
+		Name:         "Partition Node",
+		GenerateArgs: gen,
+	})
+}

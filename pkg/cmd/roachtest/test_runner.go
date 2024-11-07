@@ -37,7 +37,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/task"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
-	"github.com/cockroachdb/cockroach/pkg/ficontroller"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/config"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/vm"
@@ -51,8 +50,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/version"
 	"github.com/cockroachdb/errors"
 	"github.com/petermattis/goid"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 func init() {
@@ -1122,18 +1119,11 @@ func (r *testRunner) runTest(
 		if err != nil {
 			t.Error("failed to generate plan", err)
 		}
-		conn, err := grpc.DialContext(ctx, fmt.Sprintf(":%d", roachtestflags.FIPort), grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			t.Error("failed to dial failure injection controller", err)
-		}
-		client := ficontroller.NewControllerClient(conn)
-		c.failureInjectionState.client = &client
-
-		resp, err := client.UploadFailureInjectionPlan(ctx, &ficontroller.UploadFailureInjectionPlanRequest{FailurePlan: planBytes})
+		resp, err := FailureInjectionController.UploadFailureInjectionPlan(planBytes, false)
 		if err != nil {
 			t.Error("failed to upload failure injection plan", err)
 		}
-		c.failureInjectionState.planID = resp.PlanID
+		c.failureInjectionState.planID = resp
 	}
 
 	// sideEyeTimeoutSnapshotURL may be set during teardown to communicate to the

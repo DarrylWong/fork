@@ -3,7 +3,6 @@ package ficontroller
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -12,20 +11,30 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/failureinjection"
 	"github.com/cockroachdb/cockroach/pkg/fiplanner"
+	"github.com/cockroachdb/cockroach/pkg/roachprod"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/errors"
 )
 
 // 1. Server gets request to start a plan.
 // 2. Server spins up a worker to execute the plan.
 
-func (c *Controller) RunFailureInjectionTest(ctx context.Context, plan *FailurePlan) {
+func (c *Controller) RunFailureInjectionTest(
+	ctx context.Context, l *logger.Logger, plan *FailurePlan,
+) {
 	runCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	plan.CancelFunc = cancel
+
+	plan.mu.Lock()
+	plan.mu.CancelFunc = cancel
+	plan.mu.Unlock()
+	defer func() {
+		plan.mu.CancelFunc()
+	}()
 
 	dir := c.GetLogDir(plan)
 	stepsFile := sanitizeFileName(fmt.Sprintf("%s-steps.log", plan.getPlanID()))
-	stepLogger, err := newLogger(filepath.Join(dir, stepsFile))
+	stepLogger, err := l.ChildLogger(filepath.Join(dir, stepsFile))
 	if err != nil {
 		// TODO error handling
 		fmt.Printf("error creating logger: %v\n", err)
@@ -33,14 +42,14 @@ func (c *Controller) RunFailureInjectionTest(ctx context.Context, plan *FailureP
 	}
 
 	logFile := sanitizeFileName(fmt.Sprintf("%s.log", plan.getPlanID()))
-	runLogger, err := newLogger(filepath.Join(dir, logFile))
+	runLogger, err := l.ChildLogger(filepath.Join(dir, logFile))
 	if err != nil {
 		// TODO error handling
 		fmt.Printf("error creating logger: %v\n", err)
 		return
 	}
 
-	for stepID := 1; plan.Status == Running; stepID++ {
+	for stepID := 1; plan.getStatus() == Running; stepID++ {
 		select {
 		case <-runCtx.Done():
 			return
@@ -51,32 +60,32 @@ func (c *Controller) RunFailureInjectionTest(ctx context.Context, plan *FailureP
 		if err != nil {
 			// TODO error handling
 			runLogger.Printf("error getting next step: %v", err)
-			plan.Status = Failed
+			plan.setStatus(Failed)
 			return
 		}
 		// TODO cleaner way of exiting
-		if plan.Status != Running {
+		if plan.getStatus() != Running {
 			return
 		}
 		err = plan.ExecuteStep(runCtx, runLogger, step)
 		if err != nil {
 			runLogger.Printf("error executing step: %v", err)
 			// TODO error handling
-			plan.Status = Failed
+			plan.setStatus(Failed)
 			return
 		}
 	}
 }
 
 func (plan *FailurePlan) NextStep(
-	ctx context.Context, l *logger, stepID int,
+	ctx context.Context, l *logger.Logger, stepID int,
 ) (fiplanner.FailureStep, error) {
 	if plan.IsStatic {
 		if stepID <= 0 {
 			return fiplanner.FailureStep{}, errors.Newf("step %d is not defined in plan", stepID)
 		}
 		if stepID > len(plan.StaticPlan.Steps) {
-			plan.Status = Completed
+			plan.setStatus(Completed)
 			return fiplanner.FailureStep{}, nil
 		}
 		return plan.StaticPlan.Steps[stepID-1], nil
@@ -87,7 +96,7 @@ func (plan *FailurePlan) NextStep(
 	var clusterSizes []int
 	for clusterName, cluster := range plan.Clusters {
 		clusterNames = append(clusterNames, clusterName)
-		clusterSizes = append(clusterSizes, int(cluster.ClusterSize))
+		clusterSizes = append(clusterSizes, cluster.ClusterSize)
 	}
 
 	newStep, err := plan.stepGenerator.GenerateStep(stepID, clusterNames, clusterSizes)
@@ -98,23 +107,23 @@ func (plan *FailurePlan) NextStep(
 	return newStep, nil
 }
 
+var runFunc func(args ...string) error
+
 func (plan *FailurePlan) ExecuteStep(
-	ctx context.Context, l *logger, step fiplanner.FailureStep,
+	ctx context.Context, l *logger.Logger, step fiplanner.FailureStep,
 ) error {
 	l.Printf("executing step: %d", step.StepID)
-	//clusterInfo := plan.Clusters[step.Cluster]
+	clusterInfo := plan.Clusters[step.Cluster]
 	// TODO: the controller should have the info needed to establish SSH connections
 	// itself, so that way we don't couple it too tightly with roachprod. For now we're
 	// just using roachprod as a POC because it's easy.
-	runFunc := func(args ...string) error {
-		args = []string{"run", fmt.Sprintf("%s:%d", step.Cluster, step.Node), strings.Join(args, " ")}
-		//args = append(args, clusterInfo.ConnectionString[step.Node-1])
-		cmd := exec.Command("./roachprod", args...)
-		l.Printf("running command: %s", cmd.String())
-		return cmd.Run()
+	if runFunc == nil {
+		runFunc = func(args ...string) error {
+			return roachprod.Run(ctx, l, fmt.Sprintf("%s:%d", step.Cluster, step.Node), "", "", true, l.Stdout, l.Stderr, args, install.DefaultRunOptions())
+		}
 	}
 
-	failure, err := parseStep(l, step)
+	failure, err := parseStep(l, clusterInfo, step)
 	if err != nil {
 		return err
 	}
@@ -146,7 +155,9 @@ func (plan *FailurePlan) ExecuteStep(
 // TODO: think about better ways to do this, this will get long fast.
 // Maybe failureStep should contain a method to convert to failureMode since
 // controller should have to care about the specifics of the failure args.
-func parseStep(l *logger, step fiplanner.FailureStep) (failureinjection.FailureMode, error) {
+func parseStep(
+	l *logger.Logger, clusterInfo *ClusterInfo, step fiplanner.FailureStep,
+) (failureinjection.FailureMode, error) {
 	logFunc := l.Printf
 
 	switch step.FailureType {
@@ -174,6 +185,11 @@ func parseStep(l *logger, step fiplanner.FailureStep) (failureinjection.FailureM
 		return failureinjection.LimitBandwidth{
 			LogFunc: logFunc,
 			Rate:    step.Args["rate"],
+		}, nil
+	case "Partition Node":
+		return failureinjection.PartitionNode{
+			LogFunc: logFunc,
+			Port:    clusterInfo.SQLPorts[step.Node-1],
 		}, nil
 	}
 	return nil, errors.Newf("unknown failure type %s", step.FailureType)

@@ -59,6 +59,7 @@ func (r *FailureRegistry) GetRandomFailure(rng *rand.Rand) FailureSpec {
 func RegisterFailures(r *FailureRegistry) {
 	registerNodeRestart(r)
 	registerLimitBandwidth(r)
+	registerPartitionNode(r)
 	registerPageFault(r)
 	registerDiskStall(r)
 }

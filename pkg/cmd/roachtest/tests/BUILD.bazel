@@ -232,8 +232,6 @@ go_library(
         "//pkg/cmd/roachtest/spec",
         "//pkg/cmd/roachtest/test",
         "//pkg/cmd/roachtest/tests/perturbation",
-        "//pkg/ficontroller",
-        "//pkg/fiplanner",
         "//pkg/gossip",
         "//pkg/internal/sqlsmith",
         "//pkg/internal/workloadreplay",

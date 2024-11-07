@@ -20,7 +20,6 @@ PROTOBUF_SRCS = [
     "//pkg/clusterversion:clusterversion_go_proto",
     "//pkg/config/zonepb:zonepb_go_proto",
     "//pkg/config:config_go_proto",
-    "//pkg/ficontroller:ficontroller_go_proto",
     "//pkg/geo/geopb:geopb_go_proto",
     "//pkg/gossip:gossip_go_proto",
     "//pkg/inspectz/inspectzpb:inspectzpb_go_proto",

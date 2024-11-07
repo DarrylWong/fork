@@ -39,10 +39,10 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
-	"github.com/cockroachdb/cockroach/pkg/ficontroller"
 	"github.com/cockroachdb/cockroach/pkg/roachprod"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/cloud"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/config"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/ficontroller"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/prometheus"
@@ -684,7 +684,6 @@ type clusterImpl struct {
 
 	// TODO document me :(
 	failureInjectionState struct {
-		client *ficontroller.ControllerClient
 		planID string
 	}
 }
@@ -2201,17 +2200,17 @@ func (c *clusterImpl) StartE(
 
 	// If used for a failure injection test, we need to upload the cluster state
 	// to the controller.
-	if c.failureInjectionState.client != nil {
-		ips, _ := c.InternalPGUrl(ctx, l, c.CRDBNodes(), roachprod.PGURLOptions{})
-		client := *c.failureInjectionState.client
-		_, err := client.UpdateClusterState(ctx, &ficontroller.UpdateClusterStateRequest{
-			PlanID: c.failureInjectionState.planID,
-			ClusterState: map[string]*ficontroller.ClusterInfo{
+	if FailureInjectionController != nil {
+		ports, _ := c.SQLPorts(ctx, l, c.CRDBNodes(), "" /* tenant */, 0 /* sqlInstance */)
+
+		client := FailureInjectionController
+		err := client.UpdateClusterState(c.failureInjectionState.planID,
+			map[string]*ficontroller.ClusterInfo{
 				c.Name(): {
-					ClusterSize:      int32(len(c.CRDBNodes())),
-					ConnectionString: ips,
+					ClusterSize: len(c.CRDBNodes()),
+					SQLPorts:    ports,
 				},
-			}})
+			})
 		if err != nil {
 			return errors.Wrap(err, "failed to update cluster state to failure injection controller")
 		}
@@ -3346,9 +3345,9 @@ func (c *clusterImpl) GetHostErrorVMs(ctx context.Context, l *logger.Logger) ([]
 }
 
 func (c *clusterImpl) StartFailureInjectionPlan(ctx context.Context, l *logger.Logger) error {
-	if c.failureInjectionState.client != nil {
-		client := *c.failureInjectionState.client
-		_, err := client.StartFailureInjection(ctx, &ficontroller.StartFailureInjectionRequest{PlanID: c.failureInjectionState.planID})
+	client := FailureInjectionController
+	if client != nil {
+		err := client.StartFailureInjection(c.failureInjectionState.planID)
 		if err != nil {
 			return err
 		}
@@ -3357,9 +3356,9 @@ func (c *clusterImpl) StartFailureInjectionPlan(ctx context.Context, l *logger.L
 }
 
 func (c *clusterImpl) StopFailureInjectionPlan(ctx context.Context, l *logger.Logger) error {
-	if c.failureInjectionState.client != nil {
-		client := *c.failureInjectionState.client
-		_, err := client.StopFailureInjection(ctx, &ficontroller.StopFailureInjectionRequest{PlanID: c.failureInjectionState.planID})
+	client := FailureInjectionController
+	if client != nil {
+		err := client.StopFailureInjection(c.failureInjectionState.planID)
 		if err != nil {
 			return err
 		}

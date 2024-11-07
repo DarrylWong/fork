@@ -6,7 +6,8 @@ go_library(
     importpath = "github.com/cockroachdb/cockroach/pkg/cmd/ficontroller",
     visibility = ["//visibility:private"],
     deps = [
-        "//pkg/ficontroller:ficontroller_lib",
+        "//pkg/roachprod/ficontroller",
+        "//pkg/roachprod/ficontroller:ficontroller_lib",
         "@com_github_manifoldco_promptui//:promptui",
         "@com_github_spf13_cobra//:cobra",
         "@org_golang_google_grpc//:grpc",
