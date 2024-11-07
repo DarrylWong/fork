@@ -6116,6 +6116,14 @@ def go_deps():
         ],
     )
     go_repository(
+        name = "com_github_manifoldco_promptui",
+        build_file_proto_mode = "disable_global",
+        importpath = "github.com/manifoldco/promptui",
+        # TODO: mirror this repo (to fix, run `./dev generate bazel --mirror`)
+        sum = "h1:3V4HzJk1TtXW1MTZMP7mdlwbBpIinw3HztaIlYthEiA=",
+        version = "v0.9.0",
+    )
+    go_repository(
         name = "com_github_markbates_oncer",
         build_file_proto_mode = "disable_global",
         importpath = "github.com/markbates/oncer",
