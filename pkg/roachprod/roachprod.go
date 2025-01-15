@@ -413,7 +413,7 @@ func Run(
 	cmdArray []string,
 	options install.RunOptions,
 ) error {
-	c, err := getClusterFromCache(l, clusterName, install.SecureOption(secure), install.TagOption(processTag))
+	c, err := GetClusterFromCache(l, clusterName, install.SecureOption(secure), install.TagOption(processTag))
 	if err != nil {
 		return err
 	}
@@ -441,7 +441,7 @@ func RunWithDetails(
 	cmdArray []string,
 	options install.RunOptions,
 ) ([]install.RunResultDetails, error) {
-	c, err := getClusterFromCache(l, clusterName, install.SecureOption(secure), install.TagOption(processTag))
+	c, err := GetClusterFromCache(l, clusterName, install.SecureOption(secure), install.TagOption(processTag))
 	if err != nil {
 		return nil, err
 	}
@@ -478,7 +478,7 @@ func SQL(
 	database string,
 	cmdArray []string,
 ) error {
-	c, err := getClusterFromCache(l, clusterName, install.SecureOption(secure))
+	c, err := GetClusterFromCache(l, clusterName, install.SecureOption(secure))
 	if err != nil {
 		return err
 	}
@@ -544,7 +544,7 @@ func printSQLResult(l *logger.Logger, i int, r *install.RunResultDetails, args [
 
 // IP gets the ip addresses of the nodes in a cluster.
 func IP(l *logger.Logger, clusterName string, external bool) ([]string, error) {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return nil, err
 	}
@@ -571,7 +571,7 @@ func IP(l *logger.Logger, clusterName string, external bool) ([]string, error) {
 func Status(
 	ctx context.Context, l *logger.Logger, clusterName, processTag string,
 ) ([]install.NodeStatus, error) {
-	c, err := getClusterFromCache(l, clusterName, install.TagOption(processTag))
+	c, err := GetClusterFromCache(l, clusterName, install.TagOption(processTag))
 	if err != nil {
 		return nil, err
 	}
@@ -586,7 +586,7 @@ func Stage(
 	clusterName string,
 	stageOS, stageArch, stageDir, applicationName, version string,
 ) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -774,7 +774,7 @@ func Start(
 	startOpts install.StartOpts,
 	clusterSettingsOpts ...install.ClusterSettingOption,
 ) error {
-	c, err := getClusterFromCache(l, clusterName, clusterSettingsOpts...)
+	c, err := GetClusterFromCache(l, clusterName, clusterSettingsOpts...)
 	if err != nil {
 		return err
 	}
@@ -916,7 +916,7 @@ func DefaultStopOpts() StopOpts {
 
 // Stop stops nodes on a cluster.
 func Stop(ctx context.Context, l *logger.Logger, clusterName string, opts StopOpts) error {
-	c, err := getClusterFromCache(l, clusterName, install.TagOption(opts.ProcessTag))
+	c, err := GetClusterFromCache(l, clusterName, install.TagOption(opts.ProcessTag))
 	if err != nil {
 		return err
 	}
@@ -926,7 +926,7 @@ func Stop(ctx context.Context, l *logger.Logger, clusterName string, opts StopOp
 
 // Signal sends a signal to nodes in the cluster.
 func Signal(ctx context.Context, l *logger.Logger, clusterName string, sig int) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -935,7 +935,7 @@ func Signal(ctx context.Context, l *logger.Logger, clusterName string, sig int) 
 
 // Init initializes the cluster.
 func Init(ctx context.Context, l *logger.Logger, clusterName string, opts install.StartOpts) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -944,7 +944,7 @@ func Init(ctx context.Context, l *logger.Logger, clusterName string, opts instal
 
 // Wipe wipes the nodes in a cluster.
 func Wipe(ctx context.Context, l *logger.Logger, clusterName string, preserveCerts bool) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -953,7 +953,7 @@ func Wipe(ctx context.Context, l *logger.Logger, clusterName string, preserveCer
 
 // Reformat reformats disks in a cluster to use the specified filesystem.
 func Reformat(ctx context.Context, l *logger.Logger, clusterName string, fs string) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -992,7 +992,7 @@ sudo chmod 777 /mnt/data1
 //
 // The cluster name can include a node selector (e.g. "foo:1-3").
 func Install(ctx context.Context, l *logger.Logger, clusterName string, software []string) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -1017,7 +1017,7 @@ func Install(ctx context.Context, l *logger.Logger, clusterName string, software
 func Download(
 	ctx context.Context, l *logger.Logger, clusterName string, src, sha, dest string,
 ) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -1027,7 +1027,7 @@ func Download(
 // DistributeCerts distributes certificates to the nodes in a cluster.
 // If the certificates already exist, no action is taken.
 func DistributeCerts(ctx context.Context, l *logger.Logger, clusterName string) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -1038,7 +1038,7 @@ func DistributeCerts(ctx context.Context, l *logger.Logger, clusterName string) 
 func Put(
 	ctx context.Context, l *logger.Logger, clusterName, src, dest string, useTreeDist bool,
 ) error {
-	c, err := getClusterFromCache(l, clusterName, install.UseTreeDistOption(useTreeDist))
+	c, err := GetClusterFromCache(l, clusterName, install.UseTreeDistOption(useTreeDist))
 	if err != nil {
 		return err
 	}
@@ -1049,7 +1049,7 @@ func Put(
 // If the file is retrieved from multiple nodes the destination
 // file name will be prefixed with the node number.
 func Get(ctx context.Context, l *logger.Logger, clusterName, src, dest string) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -1069,7 +1069,7 @@ type PGURLOptions struct {
 func PgURL(
 	ctx context.Context, l *logger.Logger, clusterName, certsDir string, opts PGURLOptions,
 ) ([]string, error) {
-	c, err := getClusterFromCache(l, clusterName, install.SecureOption(opts.Secure), install.PGUrlCertsDirOption(certsDir))
+	c, err := GetClusterFromCache(l, clusterName, install.SecureOption(opts.Secure), install.PGUrlCertsDirOption(certsDir))
 	if err != nil {
 		return nil, err
 	}
@@ -1197,7 +1197,7 @@ func AdminURL(
 	path string,
 	usePublicIP, openInBrowser, secure bool,
 ) ([]string, error) {
-	c, err := getClusterFromCache(l, clusterName, install.SecureOption(secure))
+	c, err := GetClusterFromCache(l, clusterName, install.SecureOption(secure))
 	if err != nil {
 		return nil, err
 	}
@@ -1221,7 +1221,7 @@ func SQLPorts(
 	virtualClusterName string,
 	sqlInstance int,
 ) ([]int, error) {
-	c, err := getClusterFromCache(l, clusterName, install.SecureOption(secure))
+	c, err := GetClusterFromCache(l, clusterName, install.SecureOption(secure))
 	if err != nil {
 		return nil, err
 	}
@@ -1245,7 +1245,7 @@ func AdminPorts(
 	virtualClusterName string,
 	sqlInstance int,
 ) ([]int, error) {
-	c, err := getClusterFromCache(l, clusterName, install.SecureOption(secure))
+	c, err := GetClusterFromCache(l, clusterName, install.SecureOption(secure))
 	if err != nil {
 		return nil, err
 	}
@@ -1270,7 +1270,7 @@ type PprofOpts struct {
 
 // Pprof TODO
 func Pprof(ctx context.Context, l *logger.Logger, clusterName string, opts PprofOpts) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -1528,7 +1528,7 @@ func cleanupFailedCreate(l *logger.Logger, clusterName string) error {
 // AddLabels adds (or updates) the given labels to the VMs corresponding to the given cluster.
 // N.B. If a VM contains a label with the same key, its value will be updated.
 func AddLabels(l *logger.Logger, clusterName string, labels map[string]string) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -1557,7 +1557,7 @@ func AddLabels(l *logger.Logger, clusterName string, labels map[string]string) e
 }
 
 func RemoveLabels(l *logger.Logger, clusterName string, labels []string) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -1684,7 +1684,7 @@ func Grow(
 		return fmt.Errorf("number of nodes must be in [1..999]")
 	}
 
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -1713,7 +1713,7 @@ func Grow(
 	if secure {
 		// Grab the cluster from the cache again to ensure we have the latest
 		// information.
-		c, err = getClusterFromCache(l, clusterName)
+		c, err = GetClusterFromCache(l, clusterName)
 		if err != nil {
 			return err
 		}
@@ -1726,7 +1726,7 @@ func Grow(
 }
 
 func Shrink(ctx context.Context, l *logger.Logger, clusterName string, numNodes int) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -1808,7 +1808,7 @@ type LogsOpts struct {
 
 // Logs TODO
 func Logs(l *logger.Logger, clusterName, dest string, logsOpts LogsOpts) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -1883,7 +1883,7 @@ func StartGrafana(
 	if (grafanaURL != "" || len(grafanaJSON) > 0) && promCfg != nil {
 		return errors.New("cannot pass grafanaURL or grafanaJSON and a non empty promCfg")
 	}
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -1929,7 +1929,7 @@ func StartGrafana(
 // StopGrafana shuts down prometheus and grafana servers on the last node in
 // the cluster, if they exist.
 func StopGrafana(ctx context.Context, l *logger.Logger, clusterName string, dumpDir string) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -1947,7 +1947,7 @@ func StopGrafana(ctx context.Context, l *logger.Logger, clusterName string, dump
 func GrafanaURL(
 	ctx context.Context, l *logger.Logger, clusterName string, openInBrowser bool,
 ) (string, error) {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return "", err
 	}
@@ -1983,7 +1983,7 @@ func AddGrafanaAnnotation(
 func PrometheusSnapshot(
 	ctx context.Context, l *logger.Logger, clusterName string, dumpDir string,
 ) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -2011,7 +2011,7 @@ const SnapshotTTL = 30 * 24 * time.Hour // 30 days
 func CreateSnapshot(
 	ctx context.Context, l *logger.Logger, clusterName string, vsco vm.VolumeSnapshotCreateOpts,
 ) ([]vm.VolumeSnapshot, error) {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return nil, err
 	}
@@ -2143,7 +2143,7 @@ func ApplySnapshots(
 	snapshots []vm.VolumeSnapshot,
 	opts vm.VolumeCreateOpts,
 ) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -2281,7 +2281,7 @@ func StartJaeger(
 	secure bool,
 	configureNodes string,
 ) error {
-	c, err := getClusterFromCache(l, clusterName, install.SecureOption(secure))
+	c, err := GetClusterFromCache(l, clusterName, install.SecureOption(secure))
 	if err != nil {
 		return err
 	}
@@ -2339,7 +2339,7 @@ func StartJaeger(
 
 // StopJaeger stops and removes the jaeger container.
 func StopJaeger(ctx context.Context, l *logger.Logger, clusterName string) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -2358,7 +2358,7 @@ func StopJaeger(ctx context.Context, l *logger.Logger, clusterName string) error
 func JaegerURL(
 	ctx context.Context, l *logger.Logger, clusterName string, openInBrowser bool,
 ) (string, error) {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return "", err
 	}
@@ -2459,7 +2459,7 @@ func StopOpenTelemetry(ctx context.Context, l *logger.Logger, clusterName string
 func StartSideEyeAgents(
 	ctx context.Context, l *logger.Logger, clusterName string, envName string, apiToken string,
 ) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -2487,7 +2487,7 @@ func StartSideEyeAgents(
 func UpdateSideEyeEnvironmentName(
 	ctx context.Context, l *logger.Logger, clusterName string, newEnvName string,
 ) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -2509,7 +2509,7 @@ func UpdateSideEyeEnvironmentName(
 
 // DestroyDNS destroys the DNS records for the given cluster.
 func DestroyDNS(ctx context.Context, l *logger.Logger, clusterName string) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -2538,7 +2538,7 @@ func StorageCollectionPerformAction(
 	action string,
 	opts vm.VolumeCreateOpts,
 ) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
@@ -2714,7 +2714,7 @@ func CreateLoadBalancer(
 	virtualClusterName string,
 	sqlInstance int,
 ) error {
-	c, err := getClusterFromCache(l, clusterName, install.SecureOption(secure))
+	c, err := GetClusterFromCache(l, clusterName, install.SecureOption(secure))
 	if err != nil {
 		return err
 	}
@@ -2783,7 +2783,7 @@ func CreateLoadBalancer(
 func LoadBalancerPgURL(
 	ctx context.Context, l *logger.Logger, clusterName, certsDir string, opts PGURLOptions,
 ) (string, error) {
-	c, err := getClusterFromCache(l, clusterName, install.SecureOption(opts.Secure), install.PGUrlCertsDirOption(certsDir))
+	c, err := GetClusterFromCache(l, clusterName, install.SecureOption(opts.Secure), install.PGUrlCertsDirOption(certsDir))
 	if err != nil {
 		return "", err
 	}
@@ -2811,7 +2811,7 @@ func LoadBalancerPgURL(
 func LoadBalancerIP(
 	ctx context.Context, l *logger.Logger, clusterName, virtualClusterName string, sqlInstance int,
 ) (string, error) {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return "", err
 	}
@@ -2850,7 +2850,7 @@ func Deploy(
 	if !slices.Contains(supportedApplicationNames, applicationName) {
 		return errors.Errorf("unsupported application name %s, supported names are %v", applicationName, supportedApplicationNames)
 	}
-	c, err := getClusterFromCache(l, clusterName, install.SecureOption(secure))
+	c, err := GetClusterFromCache(l, clusterName, install.SecureOption(secure))
 	if err != nil {
 		return err
 	}
@@ -2978,11 +2978,11 @@ func CaptureSideEyeSnapshot(
 	return snapRes.SnapshotURL, true
 }
 
-// getClusterFromCache finds and returns a SyncedCluster from
+// GetClusterFromCache finds and returns a SyncedCluster from
 // the local cluster cache.
 //
 // The cluster name can include a node selector (e.g. "foo:1-3").
-func getClusterFromCache(
+func GetClusterFromCache(
 	l *logger.Logger, clusterName string, opts ...install.ClusterSettingOption,
 ) (*install.SyncedCluster, error) {
 	if err := LoadClusters(); err != nil {
@@ -3023,7 +3023,7 @@ func FetchLogs(
 	clusterName, destination string,
 	fetchLogsTimeout time.Duration,
 ) error {
-	c, err := getClusterFromCache(l, clusterName)
+	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
 	}
