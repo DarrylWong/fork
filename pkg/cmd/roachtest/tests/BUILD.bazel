@@ -228,6 +228,7 @@ go_library(
         "//pkg/cmd/roachtest/registry",
         "//pkg/cmd/roachtest/roachtestutil",
         "//pkg/cmd/roachtest/roachtestutil/clusterupgrade",
+        "//pkg/cmd/roachtest/roachtestutil/failureinjection",
         "//pkg/cmd/roachtest/roachtestutil/mixedversion",
         "//pkg/cmd/roachtest/roachtestutil/task",
         "//pkg/cmd/roachtest/spec",

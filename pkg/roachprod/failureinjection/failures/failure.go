@@ -2,30 +2,33 @@ package failures
 
 import (
 	"context"
-	"strings"
 )
 
+// FailureArgs describes the args passed to a failure mode.
+//
+// For now, this interface is not necessarily needed, however it sets up for
+// future failure injection work when we want a failure controller to be
+// able to inject multiple different types of failures.
+type FailureArgs interface {
+}
+
+// FailureMode describes a failure that can be injected into a system.
+//
+// For now, this interface is not necessarily needed, however it sets up for
+// future failure injection work when we want a failure controller to be
+// able to inject multiple different types of failures.
 type FailureMode interface {
 	Description() string
 
 	// Setup any dependencies required for the failure to be injected.
-	Setup(ctx context.Context, args ...string) error
+	Setup(ctx context.Context, args FailureArgs) error
 
 	// Inject a failure into the system.
-	Inject(ctx context.Context, args ...string) error
+	Inject(ctx context.Context, args FailureArgs) error
 
 	// Restore reverses the effects of Inject.
-	Restore(ctx context.Context, args ...string) error
+	Restore(ctx context.Context, args FailureArgs) error
 
 	// Cleanup uninstalls any dependencies that were installed by Setup.
 	Cleanup(ctx context.Context) error
-}
-
-func parseArgs(args ...string) map[string]string {
-	m := make(map[string]string)
-	for _, arg := range args {
-		key, value, _ := strings.Cut(arg, "=")
-		m[key] = value
-	}
-	return m
 }
