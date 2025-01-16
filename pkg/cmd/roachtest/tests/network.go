@@ -8,6 +8,7 @@ package tests
 import (
 	"context"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/failureinjection"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -26,7 +27,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/testutils"
 	"github.com/cockroachdb/cockroach/pkg/util/ctxgroup"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
-	errors "github.com/cockroachdb/errors"
+	"github.com/cockroachdb/errors"
 	_ "github.com/lib/pq" // register postgres driver
 	"github.com/stretchr/testify/require"
 )
@@ -249,24 +250,13 @@ SELECT $1::INT = ALL (
 			return nil
 		})
 
+		networkPartition, err := failureinjection.MakeNetworkPartitionNode(c, t.L())
+		if err != nil {
+			t.Fatal(err)
+		}
+
 		t.L().Printf("blocking networking on node 1...")
-		netConfigCmd := fmt.Sprintf(`
-# ensure any failure fails the entire script.
-set -e;
-
-# Setting default filter policy
-sudo iptables -P INPUT ACCEPT;
-sudo iptables -P OUTPUT ACCEPT;
-
-# Drop any node-to-node crdb traffic.
-sudo iptables -A INPUT -p tcp --dport {pgport%s} -j DROP;
-sudo iptables -A OUTPUT -p tcp --dport {pgport%s} -j DROP;
-
-sudo iptables-save
-`,
-			c.Node(expectedLeaseholder), c.Node(expectedLeaseholder))
-		t.L().Printf("partitioning using iptables; config cmd:\n%s", netConfigCmd)
-		require.NoError(t, c.RunE(ctx, option.WithNodes(c.Node(expectedLeaseholder)), netConfigCmd))
+		require.NoError(t, networkPartition.PartitionNode(ctx, c.Node(expectedLeaseholder)))
 
 		defer func() {
 			// Check that iptable DROP actually blocked traffic.
@@ -281,15 +271,7 @@ sudo iptables-save
 
 			// (attempt to) restore iptables when test end, so that cluster
 			// can be investigated afterwards.
-			restoreNet := fmt.Sprintf(`
-set -e;
-sudo iptables -D INPUT -p tcp --dport {pgport%s} -j DROP;
-sudo iptables -D OUTPUT -p tcp --dport {pgport%s} -j DROP;
-sudo iptables-save
-`,
-				c.Node(expectedLeaseholder), c.Node(expectedLeaseholder))
-			t.L().Printf("restoring iptables; config cmd:\n%s", restoreNet)
-			require.NoError(t, c.RunE(ctx, option.WithNodes(c.Node(expectedLeaseholder)), restoreNet))
+			require.NoError(t, networkPartition.RestoreNode(ctx, c.Node(expectedLeaseholder)))
 		}()
 
 		t.L().Printf("waiting while clients attempt to connect...")
@@ -355,33 +337,19 @@ func runClientNetworkConnectionTimeout(ctx context.Context, t test.Test, c clust
 		return nil
 	})
 
-	netConfigCmd := fmt.Sprintf(`
-# ensure any failure fails the entire script.
-set -e;
+	networkPartition, err := failureinjection.MakeNetworkPartitionNode(c, t.L())
+	if err != nil {
+		t.Fatal(err)
+	}
 
-# Setting default filter policy
-sudo iptables -P INPUT ACCEPT;
-sudo iptables -P OUTPUT ACCEPT;
-
-# Drop any client traffic to CRDB.
-sudo iptables -A INPUT -p tcp --sport {pgport%s} -j DROP;
-sudo iptables -A OUTPUT -p tcp --dport {pgport%s} -j DROP;
-`,
-		c.Node(1), c.Node(1))
-	t.L().Printf("blocking networking on client; config cmd:\n%s", netConfigCmd)
+	t.L().Printf("blocking networking on client")
 	blockStartTime := timeutil.Now()
-	require.NoError(t, c.RunE(ctx, option.WithNodes(clientNode), netConfigCmd))
+	require.NoError(t, networkPartition.PartitionNode(ctx, clientNode))
 
 	// (attempt to) restore iptables when test end, so that the client
 	// can be investigated afterward.
 	defer func() {
-		const restoreNet = `
-set -e;
-sudo iptables -F INPUT;
-sudo iptables -F OUTPUT;
-`
-		t.L().Printf("restoring iptables; config cmd:\n%s", restoreNet)
-		require.NoError(t, c.RunE(ctx, option.WithNodes(clientNode), restoreNet))
+		require.NoError(t, networkPartition.RestoreAll(ctx))
 	}()
 
 	// We expect the connection to timeout within 30 seconds based on

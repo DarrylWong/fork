@@ -7,7 +7,6 @@ package roachtestutil
 
 import (
 	"context"
-	"fmt"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/failureinjection/failures"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
@@ -45,16 +44,21 @@ type Fataler interface {
 }
 
 type cgroupDiskStaller struct {
-	f        Fataler
-	c        cluster.Cluster
-	readsToo bool
-	logsToo  bool
+	f           Fataler
+	c           cluster.Cluster
+	readsToo    bool
+	logsToo     bool
+	diskStaller failures.FailureMode
 }
 
 var _ DiskStaller = (*cgroupDiskStaller)(nil)
 
 func MakeCgroupDiskStaller(f Fataler, c cluster.Cluster, readsToo bool, logsToo bool) DiskStaller {
-	return &cgroupDiskStaller{f: f, c: c, readsToo: readsToo, logsToo: logsToo}
+	diskStaller, err := failures.MakeCgroupDiskStaller(c.MakeNodes(), f.L(), c.IsSecure())
+	if err != nil {
+		f.Fatalf("failed to create cgroup disk staller: %v", err)
+	}
+	return &cgroupDiskStaller{f: f, c: c, readsToo: readsToo, logsToo: logsToo, diskStaller: diskStaller}
 }
 
 func (s *cgroupDiskStaller) DataDir() string { return "{store-dir}" }
@@ -66,41 +70,25 @@ func (s *cgroupDiskStaller) Setup(ctx context.Context) {
 		// Safety measure.
 		s.f.Fatalf("cluster needs ReusePolicyNone to support disk stalls")
 	}
-	diskStaller, err := failures.MakeCgroupDiskStaller(s.c.MakeNodes(), s.f.L())
-	if err != nil {
-		s.f.Fatalf("failed to create cgroup disk staller: %v", err)
+	args := failures.DiskStallArgs{
+		LogsToo:  s.logsToo,
+		ReadsToo: s.readsToo,
 	}
-
-	var args []string
-	if s.logsToo {
-		args = append(args, "logs-too")
-	}
-	if s.readsToo {
-		args = append(args, "reads-too")
-	}
-
-	if err = diskStaller.Setup(ctx, args...); err != nil {
+	if err := s.diskStaller.Setup(ctx, args); err != nil {
 		s.f.Fatalf("error setting up the disk staller: %v", err)
 	}
 }
 func (s *cgroupDiskStaller) Cleanup(ctx context.Context) {
-	diskStaller, err := failures.MakeCgroupDiskStaller(s.c.MakeNodes(), s.f.L())
-	if err != nil {
-		s.f.Fatalf("failed to create cgroup disk staller: %v", err)
-	}
-	if err = diskStaller.Cleanup(ctx); err != nil {
+	if err := s.diskStaller.Cleanup(ctx); err != nil {
 		s.f.Fatalf("error cleaning up the disk staller: %v", err)
 	}
 }
 
 func (s *cgroupDiskStaller) Stall(ctx context.Context, nodes option.NodeListOption) {
-	diskStaller, err := failures.MakeCgroupDiskStaller(s.c.MakeNodes(nodes), s.f.L())
-	if err != nil {
-		s.f.Fatalf("failed to create cgroup disk staller: %v", err)
+	args := failures.DiskStallArgs{
+		Nodes: nodes.InstallNodes(),
 	}
-	// NB: I don't understand why, but attempting to set a bytesPerSecond={0,1}
-	// results in Invalid argument from the io.max cgroupv2 API.
-	if err = diskStaller.Inject(ctx, "throughput=4"); err != nil {
+	if err := s.diskStaller.Inject(ctx, args); err != nil {
 		s.f.Fatalf("error stalling the disk: %v", err)
 	}
 }
@@ -108,28 +96,28 @@ func (s *cgroupDiskStaller) Stall(ctx context.Context, nodes option.NodeListOpti
 func (s *cgroupDiskStaller) Slow(
 	ctx context.Context, nodes option.NodeListOption, bytesPerSecond int,
 ) {
-	diskStaller, err := failures.MakeCgroupDiskStaller(s.c.MakeNodes(nodes), s.f.L())
-	if err != nil {
-		s.f.Fatalf("failed to create cgroup disk staller: %v", err)
+	args := failures.DiskStallArgs{
+		Throughput: bytesPerSecond,
+		Nodes:      nodes.InstallNodes(),
 	}
-	if err = diskStaller.Inject(ctx, fmt.Sprintf("throughput=%d", bytesPerSecond)); err != nil {
+	if err := s.diskStaller.Inject(ctx, args); err != nil {
 		s.f.Fatalf("error slowing the disk: %v", err)
 	}
 }
 
 func (s *cgroupDiskStaller) Unstall(ctx context.Context, nodes option.NodeListOption) {
-	diskStaller, err := failures.MakeCgroupDiskStaller(s.c.MakeNodes(nodes), s.f.L())
-	if err != nil {
-		s.f.Fatalf("failed to create cgroup disk staller: %v", err)
+	args := failures.DiskStallArgs{
+		Nodes: nodes.InstallNodes(),
 	}
-	if err = diskStaller.Restore(ctx); err != nil {
+	if err := s.diskStaller.Restore(ctx, args); err != nil {
 		s.f.Fatalf("error slowing the disk: %v", err)
 	}
 }
 
 type dmsetupDiskStaller struct {
-	f Fataler
-	c cluster.Cluster
+	f           Fataler
+	c           cluster.Cluster
+	diskStaller failures.FailureMode
 
 	dev string // set in Setup; s.device() doesn't work when volume is not set up
 }
@@ -141,32 +129,19 @@ func (s *dmsetupDiskStaller) Setup(ctx context.Context) {
 		// We disable journaling and do all kinds of things below.
 		s.f.Fatalf("cluster needs ReusePolicyNone to support disk stalls")
 	}
-
-	diskStaller, err := failures.MakeDmsetupDiskStaller(s.c.MakeNodes(), s.f.L())
-	if err != nil {
-		s.f.Fatalf("failed to create cgroup disk staller: %v", err)
-	}
-	if err = diskStaller.Setup(ctx); err != nil {
+	if err := s.diskStaller.Setup(ctx, failures.DiskStallArgs{}); err != nil {
 		s.f.Fatalf("error setting up the disk staller: %v", err)
 	}
 }
 
 func (s *dmsetupDiskStaller) Cleanup(ctx context.Context) {
-	diskStaller, err := failures.MakeDmsetupDiskStaller(s.c.MakeNodes(), s.f.L())
-	if err != nil {
-		s.f.Fatalf("failed to create cgroup disk staller: %v", err)
-	}
-	if err = diskStaller.Cleanup(ctx); err != nil {
+	if err := s.diskStaller.Cleanup(ctx); err != nil {
 		s.f.Fatalf("error cleaning up the disk staller: %v", err)
 	}
 }
 
 func (s *dmsetupDiskStaller) Stall(ctx context.Context, nodes option.NodeListOption) {
-	diskStaller, err := failures.MakeDmsetupDiskStaller(s.c.MakeNodes(nodes), s.f.L())
-	if err != nil {
-		s.f.Fatalf("failed to create cgroup disk staller: %v", err)
-	}
-	if err = diskStaller.Inject(ctx); err != nil {
+	if err := s.diskStaller.Inject(ctx, failures.DiskStallArgs{Nodes: nodes.InstallNodes()}); err != nil {
 		s.f.Fatalf("error stalling the disk: %v", err)
 	}
 }
@@ -174,21 +149,18 @@ func (s *dmsetupDiskStaller) Stall(ctx context.Context, nodes option.NodeListOpt
 func (s *dmsetupDiskStaller) Slow(
 	ctx context.Context, nodes option.NodeListOption, bytesPerSecond int,
 ) {
-	diskStaller, err := failures.MakeDmsetupDiskStaller(s.c.MakeNodes(nodes), s.f.L())
-	if err != nil {
-		s.f.Fatalf("failed to create cgroup disk staller: %v", err)
+	args := failures.DiskStallArgs{
+		Throughput: bytesPerSecond,
+		Nodes:      nodes.InstallNodes(),
 	}
-	if err = diskStaller.Inject(ctx, fmt.Sprintf("throughput=%d", bytesPerSecond)); err != nil {
+
+	if err := s.diskStaller.Inject(ctx, args); err != nil {
 		s.f.Fatalf("error slowing the disk: %v", err)
 	}
 }
 
 func (s *dmsetupDiskStaller) Unstall(ctx context.Context, nodes option.NodeListOption) {
-	diskStaller, err := failures.MakeDmsetupDiskStaller(s.c.MakeNodes(nodes), s.f.L())
-	if err != nil {
-		s.f.Fatalf("failed to create cgroup disk staller: %v", err)
-	}
-	if err = diskStaller.Restore(ctx); err != nil {
+	if err := s.diskStaller.Restore(ctx, failures.DiskStallArgs{Nodes: nodes.InstallNodes()}); err != nil {
 		s.f.Fatalf("error unstalling the disk: %v", err)
 	}
 }
@@ -197,5 +169,9 @@ func (s *dmsetupDiskStaller) DataDir() string { return "{store-dir}" }
 func (s *dmsetupDiskStaller) LogDir() string  { return "logs" }
 
 func MakeDmsetupDiskStaller(f Fataler, c cluster.Cluster) DiskStaller {
-	return &dmsetupDiskStaller{f: f, c: c}
+	diskStaller, err := failures.MakeDmsetupDiskStaller(c.MakeNodes(), f.L(), c.IsSecure())
+	if err != nil {
+		f.Fatalf("failed to create dmsetup disk staller: %v", err)
+	}
+	return &dmsetupDiskStaller{f: f, c: c, diskStaller: diskStaller}
 }
