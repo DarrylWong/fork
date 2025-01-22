@@ -11,8 +11,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/failureinjection"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -23,7 +21,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
 	"github.com/cockroachdb/cockroach/pkg/roachprod"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
-	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
 	"github.com/cockroachdb/cockroach/pkg/util/ctxgroup"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
@@ -250,7 +247,7 @@ SELECT $1::INT = ALL (
 			return nil
 		})
 
-		networkPartition, err := failureinjection.MakeNetworkPartitionNode(c, t.L())
+		networkPartition, err := failureinjection.MakeNetworkPartitioner(c, t.L())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -261,7 +258,7 @@ SELECT $1::INT = ALL (
 		defer func() {
 			// Check that iptable DROP actually blocked traffic.
 			t.L().Printf("verify that traffic to node %d is blocked", expectedLeaseholder)
-			packetsDropped, err := iptablesPacketsDropped(ctx, t.L(), c, c.Node(expectedLeaseholder))
+			packetsDropped, err := networkPartition.PacketsDropped(ctx, c.Node(expectedLeaseholder))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -337,7 +334,7 @@ func runClientNetworkConnectionTimeout(ctx context.Context, t test.Test, c clust
 		return nil
 	})
 
-	networkPartition, err := failureinjection.MakeNetworkPartitionNode(c, t.L())
+	networkPartition, err := failureinjection.MakeNetworkPartitioner(c, t.L())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,23 +396,4 @@ func registerNetwork(r registry.Registry) {
 		Leases:           registry.MetamorphicLeases,
 		Run:              runClientNetworkConnectionTimeout,
 	})
-}
-
-// iptablesPacketsDropped returns the number of packets dropped to a given node due to an iptables rule.
-func iptablesPacketsDropped(
-	ctx context.Context, l *logger.Logger, c cluster.Cluster, node option.NodeListOption,
-) (int, error) {
-	res, err := c.RunWithDetailsSingleNode(ctx, l, option.WithNodes(node), "sudo iptables -L -v -n")
-	if err != nil {
-		return 0, err
-	}
-	rows := strings.Split(res.Stdout, "\n")
-	// iptables -L outputs rows in the order of: chain, fields, and then values.
-	// We care about the values so only look at row 2.
-	values := strings.Fields(rows[2])
-	if len(values) == 0 {
-		return 0, errors.Errorf("no configured iptables rules found:\n%s", res.Stdout)
-	}
-	packetsDropped, err := strconv.Atoi(values[0])
-	return packetsDropped, errors.Wrapf(err, "could not find number of packets dropped, rules found:\n%s", res.Stdout)
 }

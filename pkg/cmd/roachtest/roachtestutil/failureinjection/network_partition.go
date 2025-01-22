@@ -11,10 +11,10 @@ import (
 type NetworkPartitioner struct {
 	c                  cluster.Cluster
 	l                  *logger.Logger
-	networkPartitioner failures.FailureMode
+	networkPartitioner *failures.IPTablesPartitionNode
 }
 
-func MakeNetworkPartitionNode(c cluster.Cluster, l *logger.Logger) (*NetworkPartitioner, error) {
+func MakeNetworkPartitioner(c cluster.Cluster, l *logger.Logger) (*NetworkPartitioner, error) {
 	networkPartitioner, err := failures.MakeIPTablesPartitionNode(c.MakeNodes(), l, c.IsSecure())
 	if err != nil {
 		return nil, err
@@ -38,4 +38,9 @@ func (f *NetworkPartitioner) RestoreNode(ctx context.Context, node option.NodeLi
 
 func (f *NetworkPartitioner) RestoreAll(ctx context.Context) error {
 	return f.networkPartitioner.Restore(ctx, failures.PartitionNodeArgs{})
+}
+
+// PacketsDropped returns the number of packets dropped by the network partitioner.
+func (f *NetworkPartitioner) PacketsDropped(ctx context.Context, node option.NodeListOption) (int, error) {
+	return f.networkPartitioner.PacketsDropped(ctx, node.InstallNodes())
 }
