@@ -7,6 +7,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/errors"
+	"strconv"
 	"strings"
 )
 
@@ -20,7 +21,7 @@ type IPTablesPartitionNode struct {
 	partitionedNodes []install.Nodes
 }
 
-func MakeIPTablesPartitionNode(clusterName string, l *logger.Logger, secure bool) (FailureMode, error) {
+func MakeIPTablesPartitionNode(clusterName string, l *logger.Logger, secure bool) (*IPTablesPartitionNode, error) {
 	c, err := roachprod.GetClusterFromCache(l, clusterName, install.SecureOption(secure))
 	if err != nil {
 		return nil, err
@@ -38,7 +39,22 @@ func (f *IPTablesPartitionNode) run(ctx context.Context, node install.Nodes, arg
 		f.l.Printf("Local cluster detected, skipping iptables command")
 		return nil
 	}
-	return f.c.Run(ctx, f.l, f.l.Stdout, f.l.Stderr, install.WithNodes(node), "dmsetup", strings.Join(args, " "))
+	cmd := strings.Join(args, " ")
+	return f.c.Run(ctx, f.l, f.l.Stdout, f.l.Stderr, install.WithNodes(node), "iptables", cmd)
+}
+
+func (f *IPTablesPartitionNode) runOnSingleNode(ctx context.Context, node install.Nodes, args ...string) (install.RunResultDetails, error) {
+	if f.c.IsLocal() {
+		f.l.Printf("Local cluster detected, skipping iptables command")
+		return install.RunResultDetails{}, nil
+	}
+
+	cmd := strings.Join(args, " ")
+	res, err := f.c.RunWithDetails(ctx, f.l, install.WithNodes(node), "iptables", cmd)
+	if err != nil {
+		return install.RunResultDetails{}, err
+	}
+	return res[0], nil
 }
 
 func (f *IPTablesPartitionNode) Setup(_ context.Context, _ FailureArgs) error {
@@ -92,6 +108,23 @@ sudo iptables-save
 	return nil
 }
 
-func (f *IPTablesPartitionNode) Cleanup(ctx context.Context) error {
+func (f *IPTablesPartitionNode) Cleanup(_ context.Context) error {
 	return nil
+}
+
+// PacketsDropped returns the number of packets dropped to a given node due to an iptables rule.
+func (f *IPTablesPartitionNode) PacketsDropped(ctx context.Context, node install.Nodes) (int, error) {
+	res, err := f.runOnSingleNode(ctx, node, "sudo iptables -L -v -n")
+	if err != nil {
+		return 0, err
+	}
+	rows := strings.Split(res.Stdout, "\n")
+	// iptables -L outputs rows in the order of: chain, fields, and then values.
+	// We care about the values so only look at row 2.
+	values := strings.Fields(rows[2])
+	if len(values) == 0 {
+		return 0, errors.Errorf("no configured iptables rules found:\n%s", res.Stdout)
+	}
+	packetsDropped, err := strconv.Atoi(values[0])
+	return packetsDropped, errors.Wrapf(err, "could not find number of packets dropped, rules found:\n%s", res.Stdout)
 }

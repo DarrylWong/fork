@@ -25,7 +25,7 @@ type CGroupDiskStaller struct {
 	readOrWrite []bandwidthReadWrite
 }
 
-func MakeCgroupDiskStaller(clusterName string, l *logger.Logger, secure bool) (FailureMode, error) {
+func MakeCgroupDiskStaller(clusterName string, l *logger.Logger, secure bool) (*CGroupDiskStaller, error) {
 	c, err := roachprod.GetClusterFromCache(l, clusterName, install.SecureOption(secure))
 	if err != nil {
 		return nil, err
@@ -211,7 +211,7 @@ type DMSetupDiskStaller struct {
 	dev string // set in Setup; s.device() doesn't work when volume is not set up
 }
 
-func MakeDmsetupDiskStaller(clusterName string, l *logger.Logger, secure bool) (FailureMode, error) {
+func MakeDmsetupDiskStaller(clusterName string, l *logger.Logger, secure bool) (*DMSetupDiskStaller, error) {
 	c, err := roachprod.GetClusterFromCache(l, clusterName, install.SecureOption(secure))
 	if err != nil {
 		return nil, err
