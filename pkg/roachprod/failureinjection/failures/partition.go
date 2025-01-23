@@ -15,19 +15,29 @@ type PartitionNodeArgs struct {
 	Node install.Nodes
 }
 
+func (a PartitionNodeArgs) Description() []string {
+	return []string{
+		"Node: node to partition",
+	}
+}
+
 type IPTablesPartitionNode struct {
 	c                *install.SyncedCluster
 	l                *logger.Logger
 	partitionedNodes []install.Nodes
 }
 
-func MakeIPTablesPartitionNode(clusterName string, l *logger.Logger, secure bool) (*IPTablesPartitionNode, error) {
+func MakeIPTablesPartitionNode(clusterName string, l *logger.Logger, secure bool) (FailureMode, error) {
 	c, err := roachprod.GetClusterFromCache(l, clusterName, install.SecureOption(secure))
 	if err != nil {
 		return nil, err
 	}
 
 	return &IPTablesPartitionNode{c: c, l: l, partitionedNodes: make([]install.Nodes, 0)}, nil
+}
+
+func registerIPTablesPartitionNode(r *FailureRegistry) {
+	r.add("iptables-partition-node", PartitionNodeArgs{}, MakeIPTablesPartitionNode)
 }
 
 func (f *IPTablesPartitionNode) Description() string {
@@ -64,6 +74,9 @@ func (f *IPTablesPartitionNode) Setup(_ context.Context, _ FailureArgs) error {
 
 func (f *IPTablesPartitionNode) Inject(ctx context.Context, args FailureArgs) error {
 	targetNode := args.(PartitionNodeArgs).Node
+	if targetNode == nil {
+		targetNode = f.c.Nodes
+	}
 	f.partitionedNodes = append(f.partitionedNodes, targetNode)
 
 	var partitionNodeCmd = fmt.Sprintf(`
@@ -90,6 +103,8 @@ func (f *IPTablesPartitionNode) Restore(ctx context.Context, args FailureArgs) e
 	if targetNode := args.(PartitionNodeArgs).Node; len(targetNode) != 0 {
 		nodesToUnpartition = []install.Nodes{targetNode}
 	}
+
+	fmt.Printf("nodesToUnpartition: %v\n", nodesToUnpartition)
 
 	for _, targetNode := range nodesToUnpartition {
 		var revertPartitionNodeCmd = fmt.Sprintf(`

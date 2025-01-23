@@ -25,13 +25,17 @@ type CGroupDiskStaller struct {
 	readOrWrite []bandwidthReadWrite
 }
 
-func MakeCgroupDiskStaller(clusterName string, l *logger.Logger, secure bool) (*CGroupDiskStaller, error) {
+func MakeCgroupDiskStaller(clusterName string, l *logger.Logger, secure bool) (FailureMode, error) {
 	c, err := roachprod.GetClusterFromCache(l, clusterName, install.SecureOption(secure))
 	if err != nil {
 		return nil, err
 	}
 
 	return &CGroupDiskStaller{c: c, l: l}, nil
+}
+
+func registerCgroupDiskStall(r *FailureRegistry) {
+	r.add("cgroup-disk-stall", DiskStallArgs{}, MakeCgroupDiskStaller)
 }
 
 func (s *CGroupDiskStaller) run(ctx context.Context, nodes install.Nodes, args ...string) error {
@@ -49,7 +53,7 @@ func (s *CGroupDiskStaller) runOnSingleNode(ctx context.Context, node install.No
 }
 
 func (s *CGroupDiskStaller) Description() string {
-	// TODO: add info about flags so it can be used in CLI later
+	// TODO: add info about failure so it can be used in CLI later
 	return "cgroup disk staller"
 }
 
@@ -58,6 +62,15 @@ type DiskStallArgs struct {
 	ReadsToo   bool
 	Throughput int
 	Nodes      install.Nodes
+}
+
+func (a DiskStallArgs) Description() []string {
+	return []string{
+		"LogsToo: limit throughput to logs directory",
+		"ReadsToo: limit read throughput",
+		"Throughput: throughput in bytes per second, default is 4 if unspecified",
+		"Nodes: nodes to stall",
+	}
 }
 
 func (s *CGroupDiskStaller) Setup(ctx context.Context, args FailureArgs) error {
@@ -211,7 +224,7 @@ type DMSetupDiskStaller struct {
 	dev string // set in Setup; s.device() doesn't work when volume is not set up
 }
 
-func MakeDmsetupDiskStaller(clusterName string, l *logger.Logger, secure bool) (*DMSetupDiskStaller, error) {
+func MakeDmsetupDiskStaller(clusterName string, l *logger.Logger, secure bool) (FailureMode, error) {
 	c, err := roachprod.GetClusterFromCache(l, clusterName, install.SecureOption(secure))
 	if err != nil {
 		return nil, err
@@ -291,4 +304,8 @@ func (s *DMSetupDiskStaller) Cleanup(ctx context.Context) error {
 	}
 	// Reinstall snapd in case subsequent tests need it.
 	return s.run(ctx, s.c.Nodes, `sudo apt-get install -y snapd`)
+}
+
+func registerDmsetupDiskStall(r *FailureRegistry) {
+	r.add("dmsetup-disk-stall", DiskStallArgs{}, MakeDmsetupDiskStaller)
 }

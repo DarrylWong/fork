@@ -19,6 +19,7 @@ import (
 // commandRegistry maintains the registry of the commands registered to teh root command
 type commandRegistry struct {
 	rootCmd                      *cobra.Command
+	failureInjectionCmd          *cobra.Command
 	excludeFromBashCompletion    []*cobra.Command
 	excludeFromClusterFlagsMulti []*cobra.Command
 }
@@ -26,6 +27,10 @@ type commandRegistry struct {
 // addCommand adds the list of commands to the root command
 func (cr *commandRegistry) addCommand(cmds []*cobra.Command) {
 	cr.rootCmd.AddCommand(cmds...)
+}
+
+func (cr *commandRegistry) addCommandToFailureInjection(cmds []*cobra.Command) {
+	cr.failureInjectionCmd.AddCommand(cmds...)
 }
 
 // addToExcludeFromBashCompletion adds the commands to be excluded from the bash completion script
@@ -55,6 +60,7 @@ func Initialize(rootCmd *cobra.Command) {
 	// order to separate the commands into logical groups.
 	cobra.EnableCommandSorting = false
 	cr := newCommandRegistry(rootCmd)
+	cr.failureInjectionCmd = cr.FailureInjectionCommand()
 	cr.register()
 	initRootCmdFlags(rootCmd)
 	initClusterFlagsForMultiProjects(rootCmd, cr.excludeFromClusterFlagsMulti)

@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "bash_completion.go",
         "commands.go",
+        "failureinjection.go",
         "flags.go",
         "handlers.go",
         "resgistry.go",
@@ -19,6 +20,7 @@ go_library(
         "//pkg/roachprod/cloud",
         "//pkg/roachprod/config",
         "//pkg/roachprod/errors",
+        "//pkg/roachprod/failureinjection/failures",
         "//pkg/roachprod/fluentbit",
         "//pkg/roachprod/install",
         "//pkg/roachprod/opentelemetry",

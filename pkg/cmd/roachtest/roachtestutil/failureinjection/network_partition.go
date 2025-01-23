@@ -19,7 +19,7 @@ func MakeNetworkPartitioner(c cluster.Cluster, l *logger.Logger) (*NetworkPartit
 	if err != nil {
 		return nil, err
 	}
-	return &NetworkPartitioner{c: c, l: l, networkPartitioner: networkPartitioner}, nil
+	return &NetworkPartitioner{c: c, l: l, networkPartitioner: networkPartitioner.(*failures.IPTablesPartitionNode)}, nil
 }
 
 func (f *NetworkPartitioner) PartitionNode(ctx context.Context, node option.NodeListOption) error {

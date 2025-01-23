@@ -70,5 +70,10 @@ func (cr *commandRegistry) register() {
 		cr.buildOpentelemetryStopCmd(),
 		cr.buildFetchLogsCmd(),
 		cr.buildGetLatestPProfCmd(),
+		cr.failureInjectionCmd,
+	})
+	cr.addCommandToFailureInjection([]*cobra.Command{
+		cr.buildFIListCmd(),
+		cr.buildFIIptablesPartitionNode(),
 	})
 }

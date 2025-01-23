@@ -10,6 +10,8 @@ import (
 // future failure injection work when we want a failure controller to be
 // able to inject multiple different types of failures.
 type FailureArgs interface {
+	// Description describes each of the failure arguments.
+	Description() []string
 }
 
 // FailureMode describes a failure that can be injected into a system.

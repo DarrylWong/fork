@@ -6,6 +6,7 @@ go_library(
         "disk_stall.go",
         "failure.go",
         "partition.go",
+        "registry.go",
     ],
     importpath = "github.com/cockroachdb/cockroach/pkg/roachprod/failureinjection/failures",
     visibility = ["//visibility:public"],
