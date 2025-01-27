@@ -23,18 +23,21 @@ func initFailureInjectionFlags(failureInjectionCmd *cobra.Command) {
 }
 
 func (cr *commandRegistry) FailureInjectionCommand() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "failure-injection [command] [flags...]",
 		Short: "TODO",
 		Long: `TODO
 		failure-injection list to see available failure injection modes.
 `,
 	}
+	fr := failures.NewFailureRegistry()
+	fr.Register()
+	cr.failureRegistry = fr
+	initFailureInjectionFlags(cmd)
+	return cmd
 }
 
 func (cr *commandRegistry) buildFIListCmd() *cobra.Command {
-	fr := failures.NewFailureRegistry()
-	fr.Register()
 	return &cobra.Command{
 		Use:   "list [regex]",
 		Short: "Lists all available failure injection modes matching the regex.",
@@ -45,7 +48,7 @@ func (cr *commandRegistry) buildFIListCmd() *cobra.Command {
 			if len(args) > 0 {
 				regex = args[0]
 			}
-			matches := fr.List(regex)
+			matches := cr.failureRegistry.List(regex)
 			for _, match := range matches {
 				fmt.Printf("%s\n", match)
 			}
@@ -55,8 +58,6 @@ func (cr *commandRegistry) buildFIListCmd() *cobra.Command {
 }
 
 func (cr *commandRegistry) buildFIIptablesPartitionNode() *cobra.Command {
-	fr := failures.NewFailureRegistry()
-	fr.Register()
 	return &cobra.Command{
 		Use:   "iptables-partition-node <cluster>",
 		Short: "TODO",
@@ -65,49 +66,48 @@ func (cr *commandRegistry) buildFIIptablesPartitionNode() *cobra.Command {
 		Args: cobra.MinimumNArgs(1),
 		Run: wrap(func(cmd *cobra.Command, args []string) (retErr error) {
 			ctx := context.Background()
-			// TODO: Extract to helper
-			partitioner, err := fr.GetFailure(args[0], "iptables-partition-node", config.Logger, isSecure)
+			partitioner, err := cr.failureRegistry.GetFailure(args[0], "iptables-partition-node", config.Logger, isSecure)
 			if err != nil {
 				return err
 			}
-			err = partitioner.Setup(ctx, failures.PartitionNodeArgs{})
-			if err != nil {
-				return err
-			}
-			err = partitioner.Inject(ctx, failures.PartitionNodeArgs{})
-			if err != nil {
-				return err
-			}
-
-			ctrlCHandler(ctx, partitioner, failures.PartitionNodeArgs{})
-
-			// If no duration was specified, wait indefinitely until the caller
-			// cancels the context.
-			if failureDuration == 0 {
-				<-ctx.Done()
-				return nil
-			}
-
-			// Wait for the caller to cancel the context or for the specified
-			// time to pass.
-			for {
-				select {
-				case <-ctx.Done():
-					fmt.Printf("Context cancelled\n")
-					return nil
-				case <-time.After(failureDuration):
-					fmt.Printf("time limit hit\n")
-					return nil
-				}
-			}
+			return runFailure(ctx, partitioner, failures.PartitionNodeArgs{})
 		}),
 	}
 }
 
+func runFailure(ctx context.Context, failure failures.FailureMode, args failures.FailureArgs) error {
+	err := failure.Setup(ctx, args)
+	if err != nil {
+		return err
+	}
+	err = failure.Inject(ctx, args)
+	if err != nil {
+		return err
+	}
+
+	ctrlCHandler(ctx, failure, args)
+
+	// If no duration was specified, wait indefinitely until the caller
+	// cancels the context.
+	if failureDuration == 0 {
+		config.Logger.Printf("waiting indefinitely before reverting failure on cancellation\n")
+		<-ctx.Done()
+		return nil
+	}
+
+	config.Logger.Printf("waiting for %s before reverting failure\n", failureDuration)
+	select {
+	case <-ctx.Done():
+		return nil
+	case <-time.After(failureDuration):
+		config.Logger.Printf("time limit hit\n")
+		revertFailure(ctx, failure, args)
+		return nil
+	}
+}
+
 func revertFailure(ctx context.Context, failure failures.FailureMode, args failures.FailureArgs) {
-	// If --inject-only is set, we're done
 	// Best effort cleanup
-	// TODO: make sure context has chance to cleanup
 	err := failure.Restore(ctx, args)
 	if err != nil {
 		config.Logger.Printf("failed to restore failure: %v", err)
@@ -127,7 +127,7 @@ func ctrlCHandler(ctx context.Context, failure failures.FailureMode, args failur
 		case <-ctx.Done():
 			return
 		}
-		fmt.Printf("Signal received. Reverting failure injection and waiting up to a minute.")
+		config.Logger.Printf("SIGINT received. Reverting failure injection and waiting up to a minute.")
 		// Make sure there are no leftover clusters.
 		cleanupCh := make(chan struct{})
 		go func() {
@@ -139,7 +139,7 @@ func ctrlCHandler(ctx context.Context, failure failures.FailureMode, args failur
 		// If we get a second CTRL-C, exit immediately.
 		select {
 		case <-signalCh:
-			fmt.Printf("Second SIGINT received. Quitting. Failure might be still injected.")
+			config.Logger.Printf("Second SIGINT received. Quitting. Failure might be still injected.")
 		case <-cleanupCh:
 		}
 		os.Exit(2)

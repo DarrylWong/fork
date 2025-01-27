@@ -6,6 +6,7 @@ package cli
 
 import (
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/failureinjection/failures"
 	"os"
 	"os/user"
 	"runtime"
@@ -20,6 +21,7 @@ import (
 type commandRegistry struct {
 	rootCmd                      *cobra.Command
 	failureInjectionCmd          *cobra.Command
+	failureRegistry              *failures.FailureRegistry
 	excludeFromBashCompletion    []*cobra.Command
 	excludeFromClusterFlagsMulti []*cobra.Command
 }
