@@ -14,12 +14,17 @@ import (
 var (
 	failureDuration time.Duration
 	restoreFailure  bool
+	diskStallArgs   failures.DiskStallArgs
 )
 
 func initFailureInjectionFlags(failureInjectionCmd *cobra.Command) {
 	failureInjectionCmd.PersistentFlags().BoolVar(&restoreFailure, "restore", false, "Restore the failure injection.")
 	failureInjectionCmd.PersistentFlags().DurationVar(&failureDuration, "duration", 0, "Duration to inject failure for before reverting. 0 to inject indefinitely until cancellation.")
 
+	// Disk Stall Args
+	failureInjectionCmd.PersistentFlags().BoolVar(&diskStallArgs.ReadsToo, "reads-too", false, "Stall reads.")
+	failureInjectionCmd.PersistentFlags().BoolVar(&diskStallArgs.LogsToo, "logs-too", false, "Stall logs.")
+	failureInjectionCmd.PersistentFlags().IntVar(&diskStallArgs.Throughput, "throughput", 4, "Bytes per second to slow disk I/O to.")
 }
 
 func (cr *commandRegistry) FailureInjectionCommand() *cobra.Command {
@@ -71,6 +76,50 @@ func (cr *commandRegistry) buildFIIptablesPartitionNode() *cobra.Command {
 				return err
 			}
 			return runFailure(ctx, partitioner, failures.PartitionNodeArgs{})
+		}),
+	}
+}
+
+func (cr *commandRegistry) buildDmsetupDiskStall() *cobra.Command {
+	return &cobra.Command{
+		Use:   "dmsetup-disk-stall <cluster> [--flags]",
+		Short: "TODO",
+		Long: `TODO
+		`,
+		Args: cobra.MinimumNArgs(1),
+		Run: wrap(func(cmd *cobra.Command, args []string) (retErr error) {
+			ctx := context.Background()
+			staller, err := cr.failureRegistry.GetFailure(args[0], "dmsetup-disk-stall", config.Logger, isSecure)
+			if err != nil {
+				return err
+			}
+			return runFailure(ctx, staller, failures.DiskStallArgs{
+				ReadsToo:   diskStallArgs.ReadsToo,
+				LogsToo:    diskStallArgs.LogsToo,
+				Throughput: diskStallArgs.Throughput,
+			})
+		}),
+	}
+}
+
+func (cr *commandRegistry) buildCgroupDiskStall() *cobra.Command {
+	return &cobra.Command{
+		Use:   "cgroup-disk-stall <cluster> [--flags]",
+		Short: "TODO",
+		Long: `TODO
+		`,
+		Args: cobra.MinimumNArgs(1),
+		Run: wrap(func(cmd *cobra.Command, args []string) (retErr error) {
+			ctx := context.Background()
+			staller, err := cr.failureRegistry.GetFailure(args[0], "cgroup-disk-stall", config.Logger, isSecure)
+			if err != nil {
+				return err
+			}
+			return runFailure(ctx, staller, failures.DiskStallArgs{
+				ReadsToo:   diskStallArgs.ReadsToo,
+				LogsToo:    diskStallArgs.LogsToo,
+				Throughput: diskStallArgs.Throughput,
+			})
 		}),
 	}
 }

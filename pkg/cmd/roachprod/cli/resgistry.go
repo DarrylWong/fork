@@ -75,5 +75,7 @@ func (cr *commandRegistry) register() {
 	cr.addCommandToFailureInjection([]*cobra.Command{
 		cr.buildFIListCmd(),
 		cr.buildFIIptablesPartitionNode(),
+		cr.buildDmsetupDiskStall(),
+		cr.buildCgroupDiskStall(),
 	})
 }

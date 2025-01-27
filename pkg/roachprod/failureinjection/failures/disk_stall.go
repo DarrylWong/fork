@@ -40,6 +40,7 @@ func registerCgroupDiskStall(r *FailureRegistry) {
 
 func (s *CGroupDiskStaller) run(ctx context.Context, nodes install.Nodes, args ...string) error {
 	cmd := strings.Join(args, " ")
+	fmt.Printf("darryl: %s", cmd)
 	return s.c.Run(ctx, s.l, s.l.Stdout, s.l.Stderr, install.WithNodes(nodes), fmt.Sprintf("cgroup: %s", cmd), cmd)
 }
 
@@ -101,7 +102,7 @@ func (s *CGroupDiskStaller) Inject(ctx context.Context, args FailureArgs) error 
 
 	var nodes install.Nodes
 	if nodes = args.(DiskStallArgs).Nodes; nodes == nil {
-		return errors.Errorf("no nodes specified")
+		nodes = s.c.Nodes
 	}
 
 	// Shuffle the order of read and write stall initiation.
@@ -109,32 +110,32 @@ func (s *CGroupDiskStaller) Inject(ctx context.Context, args FailureArgs) error 
 		s.readOrWrite[i], s.readOrWrite[j] = s.readOrWrite[j], s.readOrWrite[i]
 	})
 
-	fmt.Printf("s.readOrWrite: %v\n", s.readOrWrite)
-	for _, rw := range s.readOrWrite {
-		if err := s.setThroughput(ctx, rw, throughput{limited: true, bytesPerSecond: fmt.Sprintf("%d", bytesPerSecond)}, nodes); err != nil {
-			return err
-		}
+	if err := s.setThroughput(ctx, s.readOrWrite, throughput{limited: true, bytesPerSecond: fmt.Sprintf("%d", bytesPerSecond)}, nodes); err != nil {
+		return err
 	}
 
 	return nil
 }
 
+// Restore removes the cgroup disk stall. Caller must ensure to pass the same flags as called
+// in Inject.
+//
+// N.B. Although the cgroups v2 documentation suggests that any of the limits can be set
+// independently, it appears that trying to unthrottle them independently deletes the io
+// controller entirely, leaving the cluster in a bad state. For some reason, this doesn't
+// happen if we unlimit all changed values at the same time, i.e. echo rbps=max > io.max
+// && echo wbps=max > io.max deletes the controller, but echo rbps=max wbps=max > io.max does not.
 func (s *CGroupDiskStaller) Restore(ctx context.Context, args FailureArgs) error {
 	var nodes install.Nodes
 	if nodes = args.(DiskStallArgs).Nodes; nodes == nil {
-		return errors.Errorf("no nodes specified")
+		nodes = s.c.Nodes
 	}
 
-	// N.B. The first call to set the throughput to "max" appears to delete the
-	// io.max file, causing the second call to fail. This is harmless since we always
-	// want to unstall both but will throw a file not found error.
-	for _, rw := range s.readOrWrite {
-		err := s.setThroughput(ctx, rw, throughput{limited: false}, nodes)
-		if err != nil {
-			s.l.PrintfCtx(ctx, "error unstalling the disk; stumbling on: %v", err)
-		}
+	err := s.setThroughput(ctx, s.readOrWrite, throughput{limited: false}, nodes)
+	if err != nil {
 		// NB: We log the error and continue on because unstalling may not
 		// succeed if the process has successfully exited.
+		s.l.PrintfCtx(ctx, "error unstalling the disk; stumbling on: %v", err)
 	}
 	return nil
 }
@@ -187,7 +188,7 @@ func (rw bandwidthReadWrite) cgroupV2BandwidthProp() string {
 }
 
 func (s *CGroupDiskStaller) setThroughput(
-	ctx context.Context, rw bandwidthReadWrite, bw throughput, nodes install.Nodes,
+	ctx context.Context, readOrWrite []bandwidthReadWrite, bw throughput, nodes install.Nodes,
 ) error {
 	maj, min, err := s.device(ctx, nodes)
 	if err != nil {
@@ -195,16 +196,20 @@ func (s *CGroupDiskStaller) setThroughput(
 	}
 	cockroachIOController := filepath.Join("/sys/fs/cgroup/system.slice", install.VirtualClusterLabel(install.SystemInterfaceName, 0)+".service", "io.max")
 
-	bytesPerSecondStr := "max"
-	if bw.limited {
-		bytesPerSecondStr = bw.bytesPerSecond
+	var limits []string
+	for _, rw := range readOrWrite {
+		bytesPerSecondStr := "max"
+		if bw.limited {
+			bytesPerSecondStr = bw.bytesPerSecond
+		}
+		limits = append(limits, fmt.Sprintf("%s=%s", rw.cgroupV2BandwidthProp(), bytesPerSecondStr))
 	}
+
 	return s.run(ctx, nodes, "sudo", "/bin/bash", "-c", fmt.Sprintf(
-		`'echo %d:%d %s=%s > %s'`,
+		`'echo %d:%d %s > %s'`,
 		maj,
 		min,
-		rw.cgroupV2BandwidthProp(),
-		bytesPerSecondStr,
+		strings.Join(limits, " "),
 		cockroachIOController,
 	))
 }

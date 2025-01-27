@@ -1409,7 +1409,7 @@ func Pprof(ctx context.Context, l *logger.Logger, clusterName string, opts Pprof
 func cachedProvidersForClusters(clusterNames ...string) []string {
 	providers := []string{}
 	for _, clusterName := range clusterNames {
-		c, err := getClusterFromCache(nil, clusterName)
+		c, err := GetClusterFromCache(nil, clusterName)
 		if err != nil {
 			continue
 		}
