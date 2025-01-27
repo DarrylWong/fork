@@ -40,7 +40,7 @@ func registerCgroupDiskStall(r *FailureRegistry) {
 
 func (s *CGroupDiskStaller) run(ctx context.Context, nodes install.Nodes, args ...string) error {
 	cmd := strings.Join(args, " ")
-	fmt.Printf("darryl: %s", cmd)
+	s.l.Printf("cgroup: %s", cmd)
 	return s.c.Run(ctx, s.l, s.l.Stdout, s.l.Stderr, install.WithNodes(nodes), fmt.Sprintf("cgroup: %s", cmd), cmd)
 }
 
@@ -117,12 +117,12 @@ func (s *CGroupDiskStaller) Inject(ctx context.Context, args FailureArgs) error 
 	return nil
 }
 
-// Restore removes the cgroup disk stall. Caller must ensure to pass the same flags as called
-// in Inject.
+// Restore removes the cgroup disk stall.
 //
-// N.B. Although the cgroups v2 documentation suggests that any of the limits can be set
+// N.B. Caller must ensure to pass the same flags as called in Inject or the node may be left in a
+// bad state. Although the cgroups v2 documentation suggests that any of the limits can be set
 // independently, it appears that trying to unthrottle them independently deletes the io
-// controller entirely, leaving the cluster in a bad state. For some reason, this doesn't
+// controller entirely, leaving the node in a bad state. For some reason, this doesn't
 // happen if we unlimit all changed values at the same time, i.e. echo rbps=max > io.max
 // && echo wbps=max > io.max deletes the controller, but echo rbps=max wbps=max > io.max does not.
 func (s *CGroupDiskStaller) Restore(ctx context.Context, args FailureArgs) error {
