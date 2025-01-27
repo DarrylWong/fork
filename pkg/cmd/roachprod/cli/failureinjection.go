@@ -64,14 +64,14 @@ func (cr *commandRegistry) buildFIListCmd() *cobra.Command {
 
 func (cr *commandRegistry) buildFIIptablesPartitionNode() *cobra.Command {
 	return &cobra.Command{
-		Use:   "iptables-partition-node <cluster>",
+		Use:   fmt.Sprintf("%s <cluster>", failures.IPTablesPartitionNodeName),
 		Short: "TODO",
 		Long: `TODO
 		`,
 		Args: cobra.MinimumNArgs(1),
 		Run: wrap(func(cmd *cobra.Command, args []string) (retErr error) {
 			ctx := context.Background()
-			partitioner, err := cr.failureRegistry.GetFailure(args[0], "iptables-partition-node", config.Logger, isSecure)
+			partitioner, err := cr.failureRegistry.GetFailure(args[0], failures.IPTablesPartitionNodeName, config.Logger, isSecure)
 			if err != nil {
 				return err
 			}
@@ -82,14 +82,14 @@ func (cr *commandRegistry) buildFIIptablesPartitionNode() *cobra.Command {
 
 func (cr *commandRegistry) buildDmsetupDiskStall() *cobra.Command {
 	return &cobra.Command{
-		Use:   "dmsetup-disk-stall <cluster> [--flags]",
+		Use:   fmt.Sprintf("%s  <cluster> [--flags]", failures.DmsetupDiskStallName),
 		Short: "TODO",
 		Long: `TODO
 		`,
 		Args: cobra.MinimumNArgs(1),
 		Run: wrap(func(cmd *cobra.Command, args []string) (retErr error) {
 			ctx := context.Background()
-			staller, err := cr.failureRegistry.GetFailure(args[0], "dmsetup-disk-stall", config.Logger, isSecure)
+			staller, err := cr.failureRegistry.GetFailure(args[0], failures.DmsetupDiskStallName, config.Logger, isSecure)
 			if err != nil {
 				return err
 			}
@@ -104,14 +104,14 @@ func (cr *commandRegistry) buildDmsetupDiskStall() *cobra.Command {
 
 func (cr *commandRegistry) buildCgroupDiskStall() *cobra.Command {
 	return &cobra.Command{
-		Use:   "cgroup-disk-stall <cluster> [--flags]",
+		Use:   fmt.Sprintf("%s <cluster> [--flags]", failures.CgroupDiskStallName),
 		Short: "TODO",
 		Long: `TODO
 		`,
 		Args: cobra.MinimumNArgs(1),
 		Run: wrap(func(cmd *cobra.Command, args []string) (retErr error) {
 			ctx := context.Background()
-			staller, err := cr.failureRegistry.GetFailure(args[0], "cgroup-disk-stall", config.Logger, isSecure)
+			staller, err := cr.failureRegistry.GetFailure(args[0], failures.CgroupDiskStallName, config.Logger, isSecure)
 			if err != nil {
 				return err
 			}

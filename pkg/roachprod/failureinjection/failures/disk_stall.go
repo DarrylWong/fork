@@ -34,8 +34,10 @@ func MakeCgroupDiskStaller(clusterName string, l *logger.Logger, secure bool) (F
 	return &CGroupDiskStaller{c: c, l: l}, nil
 }
 
+const CgroupDiskStallName = "cgroup-disk-stall"
+
 func registerCgroupDiskStall(r *FailureRegistry) {
-	r.add("cgroup-disk-stall", DiskStallArgs{}, MakeCgroupDiskStaller)
+	r.add(CgroupDiskStallName, DiskStallArgs{}, MakeCgroupDiskStaller)
 }
 
 func (s *CGroupDiskStaller) run(ctx context.Context, nodes install.Nodes, args ...string) error {
@@ -222,7 +224,7 @@ func GetDiskDevice(ctx context.Context, c *install.SyncedCluster, l *logger.Logg
 	return "/dev/" + strings.TrimSpace(res[0].Stdout), nil
 }
 
-type DMSetupDiskStaller struct {
+type DmsetupDiskStaller struct {
 	c *install.SyncedCluster
 	l *logger.Logger
 
@@ -235,19 +237,19 @@ func MakeDmsetupDiskStaller(clusterName string, l *logger.Logger, secure bool) (
 		return nil, err
 	}
 
-	return &DMSetupDiskStaller{c: c, l: l}, nil
+	return &DmsetupDiskStaller{c: c, l: l}, nil
 }
 
-func (s *DMSetupDiskStaller) run(ctx context.Context, nodes install.Nodes, args ...string) error {
+func (s *DmsetupDiskStaller) run(ctx context.Context, nodes install.Nodes, args ...string) error {
 	cmd := strings.Join(args, " ")
 	return s.c.Run(ctx, s.l, s.l.Stdout, s.l.Stderr, install.WithNodes(nodes), fmt.Sprintf("dmsetup: %s", cmd), cmd)
 }
 
-func (s *DMSetupDiskStaller) Description() string {
+func (s *DmsetupDiskStaller) Description() string {
 	return "dmsetup disk staller"
 }
 
-func (s *DMSetupDiskStaller) Setup(ctx context.Context, _ FailureArgs) error {
+func (s *DmsetupDiskStaller) Setup(ctx context.Context, _ FailureArgs) error {
 	var err error
 	if s.dev, err = GetDiskDevice(ctx, s.c, s.l); err != nil {
 		return err
@@ -281,17 +283,17 @@ func (s *DMSetupDiskStaller) Setup(ctx context.Context, _ FailureArgs) error {
 	return s.run(ctx, s.c.Nodes, `sudo mount /dev/mapper/data1 /mnt/data1`)
 }
 
-func (s *DMSetupDiskStaller) Inject(ctx context.Context, args FailureArgs) error {
+func (s *DmsetupDiskStaller) Inject(ctx context.Context, args FailureArgs) error {
 	nodes := args.(DiskStallArgs).Nodes
 	return s.run(ctx, nodes, `sudo dmsetup suspend --noflush --nolockfs data1`)
 }
 
-func (s *DMSetupDiskStaller) Restore(ctx context.Context, args FailureArgs) error {
+func (s *DmsetupDiskStaller) Restore(ctx context.Context, args FailureArgs) error {
 	nodes := args.(DiskStallArgs).Nodes
 	return s.run(ctx, nodes, `sudo dmsetup resume data1`)
 }
 
-func (s *DMSetupDiskStaller) Cleanup(ctx context.Context) error {
+func (s *DmsetupDiskStaller) Cleanup(ctx context.Context) error {
 	if err := s.run(ctx, s.c.Nodes, `sudo dmsetup resume data1`); err != nil {
 		return err
 	}
@@ -311,6 +313,8 @@ func (s *DMSetupDiskStaller) Cleanup(ctx context.Context) error {
 	return s.run(ctx, s.c.Nodes, `sudo apt-get install -y snapd`)
 }
 
+const DmsetupDiskStallName = "dmsetup-disk-stall"
+
 func registerDmsetupDiskStall(r *FailureRegistry) {
-	r.add("dmsetup-disk-stall", DiskStallArgs{}, MakeDmsetupDiskStaller)
+	r.add(DmsetupDiskStallName, DiskStallArgs{}, MakeDmsetupDiskStaller)
 }

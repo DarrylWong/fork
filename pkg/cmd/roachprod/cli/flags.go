@@ -487,10 +487,3 @@ func initFlagDNSRequiredProvidersForCmd(cmd *cobra.Command) {
 		"the cloud providers that must be active to refresh DNS entries",
 	)
 }
-
-// Failure Injection Flags
-var ()
-
-func initFailureInjectionCmdFlags(cmd *cobra.Command) {
-
-}

@@ -30,10 +30,6 @@ func (r *FailureRegistry) add(failureName string, args FailureArgs, makeFailureF
 	if _, ok := r.failures[failureName]; ok {
 		panic(fmt.Sprintf("failure %s already exists", failureName))
 	}
-
-	// TODO: this needs to register the failure/flags with the CLI
-	// Idea: pass a map of arg -> *flag.FlagSet, and then use that to register the flags
-	// need to figure out the init order, this might not work
 	r.failures[failureName] = failureSpec{
 		makeFailureFunc: makeFailureFunc,
 		args:            args,

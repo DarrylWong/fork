@@ -36,8 +36,10 @@ func MakeIPTablesPartitionNode(clusterName string, l *logger.Logger, secure bool
 	return &IPTablesPartitionNode{c: c, l: l, partitionedNodes: make([]install.Nodes, 0)}, nil
 }
 
+const IPTablesPartitionNodeName = "iptables-partition-node"
+
 func registerIPTablesPartitionNode(r *FailureRegistry) {
-	r.add("iptables-partition-node", PartitionNodeArgs{}, MakeIPTablesPartitionNode)
+	r.add(IPTablesPartitionNodeName, PartitionNodeArgs{}, MakeIPTablesPartitionNode)
 }
 
 func (f *IPTablesPartitionNode) Description() string {
