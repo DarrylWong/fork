@@ -22,16 +22,16 @@ func MakeNetworkPartitioner(c cluster.Cluster, l *logger.Logger) (*NetworkPartit
 	return &NetworkPartitioner{c: c, l: l, networkPartitioner: networkPartitioner.(*failures.IPTablesPartitionNode)}, nil
 }
 
-func (f *NetworkPartitioner) PartitionNode(ctx context.Context, node option.NodeListOption) error {
+func (f *NetworkPartitioner) PartitionNode(ctx context.Context, nodes option.NodeListOption) error {
 	args := failures.PartitionNodeArgs{
-		Node: node.InstallNodes(),
+		Nodes: nodes.InstallNodes(),
 	}
 	return f.networkPartitioner.Inject(ctx, args)
 }
 
-func (f *NetworkPartitioner) RestoreNode(ctx context.Context, node option.NodeListOption) error {
+func (f *NetworkPartitioner) RestoreNode(ctx context.Context, nodes option.NodeListOption) error {
 	args := failures.PartitionNodeArgs{
-		Node: node.InstallNodes(),
+		Nodes: nodes.InstallNodes(),
 	}
 	return f.networkPartitioner.Restore(ctx, args)
 }

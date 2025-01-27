@@ -12,19 +12,18 @@ import (
 )
 
 type PartitionNodeArgs struct {
-	Node install.Nodes
+	Nodes install.Nodes
 }
 
 func (a PartitionNodeArgs) Description() []string {
 	return []string{
-		"Node: node to partition",
+		"Nodes: node to partition",
 	}
 }
 
 type IPTablesPartitionNode struct {
-	c                *install.SyncedCluster
-	l                *logger.Logger
-	partitionedNodes []install.Nodes
+	c *install.SyncedCluster
+	l *logger.Logger
 }
 
 func MakeIPTablesPartitionNode(clusterName string, l *logger.Logger, secure bool) (FailureMode, error) {
@@ -33,7 +32,7 @@ func MakeIPTablesPartitionNode(clusterName string, l *logger.Logger, secure bool
 		return nil, err
 	}
 
-	return &IPTablesPartitionNode{c: c, l: l, partitionedNodes: make([]install.Nodes, 0)}, nil
+	return &IPTablesPartitionNode{c: c, l: l}, nil
 }
 
 const IPTablesPartitionNodeName = "iptables-partition-node"
@@ -75,13 +74,13 @@ func (f *IPTablesPartitionNode) Setup(_ context.Context, _ FailureArgs) error {
 }
 
 func (f *IPTablesPartitionNode) Inject(ctx context.Context, args FailureArgs) error {
-	targetNode := args.(PartitionNodeArgs).Node
-	if targetNode == nil {
-		targetNode = f.c.Nodes
+	nodesToPartition := args.(PartitionNodeArgs).Nodes
+	if nodesToPartition == nil {
+		nodesToPartition = f.c.Nodes
 	}
-	f.partitionedNodes = append(f.partitionedNodes, targetNode)
 
-	var partitionNodeCmd = fmt.Sprintf(`
+	for _, targetNode := range nodesToPartition {
+		var partitionNodeCmd = fmt.Sprintf(`
 # ensure any failure fails the entire script.
 set -e;
 
@@ -94,19 +93,22 @@ sudo iptables -A INPUT -p tcp --dport {pgport:%[1]d} -j DROP;
 sudo iptables -A OUTPUT -p tcp --dport {pgport:%[1]d} -j DROP;
 
 sudo iptables-save
-`, targetNode[0])
+`, targetNode)
 
-	f.l.Printf("Partitioning node %d with cmd: %s", targetNode, partitionNodeCmd)
-	return f.run(ctx, targetNode, partitionNodeCmd)
+		f.l.Printf("Partitioning node %d with cmd: %s", targetNode, partitionNodeCmd)
+		if err := f.run(ctx, install.Nodes{targetNode}, partitionNodeCmd); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (f *IPTablesPartitionNode) Restore(ctx context.Context, args FailureArgs) error {
-	nodesToUnpartition := f.partitionedNodes
-	if targetNode := args.(PartitionNodeArgs).Node; len(targetNode) != 0 {
-		nodesToUnpartition = []install.Nodes{targetNode}
+	nodesToUnpartition := args.(PartitionNodeArgs).Nodes
+	if nodesToUnpartition == nil {
+		nodesToUnpartition = f.c.Nodes
 	}
-
-	fmt.Printf("nodesToUnpartition: %v\n", nodesToUnpartition)
 
 	for _, targetNode := range nodesToUnpartition {
 		var revertPartitionNodeCmd = fmt.Sprintf(`
@@ -114,11 +116,11 @@ set -e;
 sudo iptables -D INPUT -p tcp --dport {pgport:%[1]d} -j DROP;
 sudo iptables -D OUTPUT -p tcp --dport {pgport:%[1]d} -j DROP;
 sudo iptables-save
-`, targetNode[0])
+`, targetNode)
 
 		f.l.Printf("Reverting iptables partition on node %d with cmd: %s", targetNode, revertPartitionNodeCmd)
 
-		if err := f.run(ctx, targetNode, revertPartitionNodeCmd); err != nil {
+		if err := f.run(ctx, install.Nodes{targetNode}, revertPartitionNodeCmd); err != nil {
 			return errors.Wrapf(err, "failed to revert iptables partition on node %d", targetNode)
 		}
 	}
