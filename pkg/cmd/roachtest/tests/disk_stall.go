@@ -8,6 +8,7 @@ package tests
 import (
 	"context"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/failureinjection"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -60,7 +61,7 @@ func runDiskStalledWALFailover(ctx context.Context, t test.Test, c cluster.Clust
 		fmt.Sprintf("COCKROACH_ENGINE_MAX_SYNC_DURATION_DEFAULT=%s", maxSyncDur))
 
 	t.Status("setting up disk staller")
-	s := roachtestutil.MakeDmsetupDiskStaller(t, c)
+	s := failureinjection.MakeDmsetupDiskStaller(t, c)
 	s.Setup(ctx)
 	defer s.Cleanup(ctx)
 
@@ -183,15 +184,15 @@ func runDiskStalledWALFailover(ctx context.Context, t test.Test, c cluster.Clust
 // appropriately.
 func registerDiskStalledDetection(r registry.Registry) {
 	stallers := map[string]func(test.Test, cluster.Cluster) diskStaller{
-		"dmsetup": func(t test.Test, c cluster.Cluster) diskStaller { return roachtestutil.MakeDmsetupDiskStaller(t, c) },
+		"dmsetup": func(t test.Test, c cluster.Cluster) diskStaller { return failureinjection.MakeDmsetupDiskStaller(t, c) },
 		"cgroup/read-write/logs-too=false": func(t test.Test, c cluster.Cluster) diskStaller {
-			return roachtestutil.MakeCgroupDiskStaller(t, c, true, false)
+			return failureinjection.MakeCgroupDiskStaller(t, c, true, false)
 		},
 		"cgroup/read-write/logs-too=true": func(t test.Test, c cluster.Cluster) diskStaller {
-			return roachtestutil.MakeCgroupDiskStaller(t, c, true, true)
+			return failureinjection.MakeCgroupDiskStaller(t, c, true, true)
 		},
 		"cgroup/write-only/logs-too=true": func(t test.Test, c cluster.Cluster) diskStaller {
-			return roachtestutil.MakeCgroupDiskStaller(t, c, false, true)
+			return failureinjection.MakeCgroupDiskStaller(t, c, false, true)
 		},
 	}
 
@@ -429,4 +430,4 @@ func getProcessMonotonicTimestamp(
 	return time.Duration(u) * time.Microsecond, true
 }
 
-type diskStaller = roachtestutil.DiskStaller
+type diskStaller = failureinjection.DiskStaller

@@ -8,6 +8,7 @@ package tests
 import (
 	"context"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/failureinjection"
 	"math/rand"
 	"time"
 
@@ -65,7 +66,7 @@ func registerElasticWorkloadMixedVersion(r registry.Registry) {
 			const diskBand = 128 << 20 // 128 MiB
 			setDiskBandwidth := func() {
 				t.Status(fmt.Sprintf("limiting disk bandwidth to %d bytes/s", diskBand))
-				staller := roachtestutil.MakeCgroupDiskStaller(t, c,
+				staller := failureinjection.MakeCgroupDiskStaller(t, c,
 					false /* readsToo */, false /* logsToo */)
 				staller.Setup(ctx)
 				staller.Slow(ctx, c.CRDBNodes(), diskBand)

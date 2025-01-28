@@ -8,6 +8,7 @@ package tests
 import (
 	"context"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/failureinjection"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
@@ -69,7 +70,7 @@ func registerDiskBandwidthOverload(r registry.Registry) {
 
 			const provisionedBandwidth = 128 << 20 // 128 MiB
 			t.Status(fmt.Sprintf("limiting disk bandwidth to %d bytes/s", provisionedBandwidth))
-			staller := roachtestutil.MakeCgroupDiskStaller(t, c,
+			staller := failureinjection.MakeCgroupDiskStaller(t, c,
 				false /* readsToo */, false /* logsToo */)
 			staller.Setup(ctx)
 			staller.Slow(ctx, c.CRDBNodes(), provisionedBandwidth)

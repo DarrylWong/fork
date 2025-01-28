@@ -3,10 +3,11 @@
 // Use of this software is governed by the CockroachDB Software License
 // included in the /LICENSE file.
 
-package roachtestutil
+package failureinjection
 
 import (
 	"context"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/failureinjection/failures"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
@@ -66,6 +67,13 @@ func (s *cgroupDiskStaller) LogDir() string {
 	return "logs"
 }
 func (s *cgroupDiskStaller) Setup(ctx context.Context) {
+	l, logfile, err := roachtestutil.LoggerForCmd(s.f.L(), s.c.All(), "cgroup-setup")
+	if err != nil {
+		s.f.Fatalf("failed to create logger for cgroup disk staller: %v", err)
+	}
+	defer l.Close()
+	s.f.L().Printf("setting up cgroups disk staller; details in: %s.log", logfile)
+
 	if _, ok := s.c.Spec().ReusePolicy.(spec.ReusePolicyNone); !ok {
 		// Safety measure.
 		s.f.Fatalf("cluster needs ReusePolicyNone to support disk stalls")
@@ -74,21 +82,35 @@ func (s *cgroupDiskStaller) Setup(ctx context.Context) {
 		LogsToo:  s.logsToo,
 		ReadsToo: s.readsToo,
 	}
-	if err := s.diskStaller.Setup(ctx, args); err != nil {
+	if err := s.diskStaller.Setup(ctx, l, args); err != nil {
 		s.f.Fatalf("error setting up the disk staller: %v", err)
 	}
 }
 func (s *cgroupDiskStaller) Cleanup(ctx context.Context) {
-	if err := s.diskStaller.Cleanup(ctx); err != nil {
+	l, logfile, err := roachtestutil.LoggerForCmd(s.f.L(), s.c.All(), "cgroup-cleanup")
+	if err != nil {
+		s.f.Fatalf("failed to create logger for cgroup disk staller: %v", err)
+	}
+	defer l.Close()
+	s.f.L().Printf("cleaning up cgroups disk staller; details in: %s.log", logfile)
+
+	if err := s.diskStaller.Cleanup(ctx, l); err != nil {
 		s.f.Fatalf("error cleaning up the disk staller: %v", err)
 	}
 }
 
 func (s *cgroupDiskStaller) Stall(ctx context.Context, nodes option.NodeListOption) {
+	l, logfile, err := roachtestutil.LoggerForCmd(s.f.L(), s.c.All(), "cgroup-stall")
+	if err != nil {
+		s.f.Fatalf("failed to create logger for cgroup disk staller: %v", err)
+	}
+	defer l.Close()
+	s.f.L().Printf("stalling disks on nodes: %s; details in: %s.log", nodes, logfile)
+
 	args := failures.DiskStallArgs{
 		Nodes: nodes.InstallNodes(),
 	}
-	if err := s.diskStaller.Inject(ctx, args); err != nil {
+	if err := s.diskStaller.Inject(ctx, l, args); err != nil {
 		s.f.Fatalf("error stalling the disk: %v", err)
 	}
 }
@@ -96,20 +118,34 @@ func (s *cgroupDiskStaller) Stall(ctx context.Context, nodes option.NodeListOpti
 func (s *cgroupDiskStaller) Slow(
 	ctx context.Context, nodes option.NodeListOption, bytesPerSecond int,
 ) {
+	l, logfile, err := roachtestutil.LoggerForCmd(s.f.L(), s.c.All(), "cgroup-slow")
+	if err != nil {
+		s.f.Fatalf("failed to create logger for cgroup disk staller: %v", err)
+	}
+	defer l.Close()
+	s.f.L().Printf("slowing disks on nodes: %s; details in: %s.log", nodes, logfile)
+
 	args := failures.DiskStallArgs{
 		Throughput: bytesPerSecond,
 		Nodes:      nodes.InstallNodes(),
 	}
-	if err := s.diskStaller.Inject(ctx, args); err != nil {
+	if err := s.diskStaller.Inject(ctx, l, args); err != nil {
 		s.f.Fatalf("error slowing the disk: %v", err)
 	}
 }
 
 func (s *cgroupDiskStaller) Unstall(ctx context.Context, nodes option.NodeListOption) {
+	l, logfile, err := roachtestutil.LoggerForCmd(s.f.L(), s.c.All(), "cgroup-unstall")
+	if err != nil {
+		s.f.Fatalf("failed to create logger for cgroup disk staller: %v", err)
+	}
+	defer l.Close()
+	s.f.L().Printf("unstalling disks on nodes: %s; details in: %s.log", nodes, logfile)
+
 	args := failures.DiskStallArgs{
 		Nodes: nodes.InstallNodes(),
 	}
-	if err := s.diskStaller.Restore(ctx, args); err != nil {
+	if err := s.diskStaller.Restore(ctx, l, args); err != nil {
 		s.f.Fatalf("error slowing the disk: %v", err)
 	}
 }
@@ -125,23 +161,44 @@ type dmsetupDiskStaller struct {
 var _ DiskStaller = (*dmsetupDiskStaller)(nil)
 
 func (s *dmsetupDiskStaller) Setup(ctx context.Context) {
+	l, logfile, err := roachtestutil.LoggerForCmd(s.f.L(), s.c.All(), "dmsetup-setup")
+	if err != nil {
+		s.f.Fatalf("failed to create logger for dmsetup disk staller: %v", err)
+	}
+	defer l.Close()
+	s.f.L().Printf("setting up dmsetup; details in: %s.log", logfile)
+
 	if _, ok := s.c.Spec().ReusePolicy.(spec.ReusePolicyNone); !ok {
 		// We disable journaling and do all kinds of things below.
 		s.f.Fatalf("cluster needs ReusePolicyNone to support disk stalls")
 	}
-	if err := s.diskStaller.Setup(ctx, failures.DiskStallArgs{}); err != nil {
+	if err := s.diskStaller.Setup(ctx, l, failures.DiskStallArgs{}); err != nil {
 		s.f.Fatalf("error setting up the disk staller: %v", err)
 	}
 }
 
 func (s *dmsetupDiskStaller) Cleanup(ctx context.Context) {
-	if err := s.diskStaller.Cleanup(ctx); err != nil {
+	l, logfile, err := roachtestutil.LoggerForCmd(s.f.L(), s.c.All(), "dmsetup-cleanup")
+	if err != nil {
+		s.f.Fatalf("failed to create logger for dmsetup disk staller: %v", err)
+	}
+	defer l.Close()
+	s.f.L().Printf("cleaning up dmsetup; details in: %s.log", logfile)
+
+	if err := s.diskStaller.Cleanup(ctx, l); err != nil {
 		s.f.Fatalf("error cleaning up the disk staller: %v", err)
 	}
 }
 
 func (s *dmsetupDiskStaller) Stall(ctx context.Context, nodes option.NodeListOption) {
-	if err := s.diskStaller.Inject(ctx, failures.DiskStallArgs{Nodes: nodes.InstallNodes()}); err != nil {
+	l, logfile, err := roachtestutil.LoggerForCmd(s.f.L(), s.c.All(), "dmsetup-stall")
+	if err != nil {
+		s.f.Fatalf("failed to create logger for dmsetup disk staller: %v", err)
+	}
+	defer l.Close()
+	s.f.L().Printf("stalling disks on nodes: %s; details in: %s.log", nodes, logfile)
+
+	if err := s.diskStaller.Inject(ctx, l, failures.DiskStallArgs{Nodes: nodes.InstallNodes()}); err != nil {
 		s.f.Fatalf("error stalling the disk: %v", err)
 	}
 }
@@ -149,18 +206,32 @@ func (s *dmsetupDiskStaller) Stall(ctx context.Context, nodes option.NodeListOpt
 func (s *dmsetupDiskStaller) Slow(
 	ctx context.Context, nodes option.NodeListOption, bytesPerSecond int,
 ) {
+	l, logfile, err := roachtestutil.LoggerForCmd(s.f.L(), s.c.All(), "dmsetup-slow")
+	if err != nil {
+		s.f.Fatalf("failed to create logger for dmsetup disk staller: %v", err)
+	}
+	defer l.Close()
+	s.f.L().Printf("slowing disks on nodes: %s; details in: %s.log", nodes, logfile)
+
 	args := failures.DiskStallArgs{
 		Throughput: bytesPerSecond,
 		Nodes:      nodes.InstallNodes(),
 	}
 
-	if err := s.diskStaller.Inject(ctx, args); err != nil {
+	if err := s.diskStaller.Inject(ctx, l, args); err != nil {
 		s.f.Fatalf("error slowing the disk: %v", err)
 	}
 }
 
 func (s *dmsetupDiskStaller) Unstall(ctx context.Context, nodes option.NodeListOption) {
-	if err := s.diskStaller.Restore(ctx, failures.DiskStallArgs{Nodes: nodes.InstallNodes()}); err != nil {
+	l, logfile, err := roachtestutil.LoggerForCmd(s.f.L(), s.c.All(), "dmsetup-unstall")
+	if err != nil {
+		s.f.Fatalf("failed to create logger for dmsetup disk staller: %v", err)
+	}
+	defer l.Close()
+	s.f.L().Printf("unstalling disks on nodes: %s; details in: %s.log", nodes, logfile)
+
+	if err := s.diskStaller.Restore(ctx, l, failures.DiskStallArgs{Nodes: nodes.InstallNodes()}); err != nil {
 		s.f.Fatalf("error unstalling the disk: %v", err)
 	}
 }
@@ -169,7 +240,14 @@ func (s *dmsetupDiskStaller) DataDir() string { return "{store-dir}" }
 func (s *dmsetupDiskStaller) LogDir() string  { return "logs" }
 
 func MakeDmsetupDiskStaller(f Fataler, c cluster.Cluster) DiskStaller {
-	diskStaller, err := failures.MakeDmsetupDiskStaller(c.MakeNodes(), f.L(), c.IsSecure())
+	l, logfile, err := roachtestutil.LoggerForCmd(f.L(), c.All(), "dmsetup")
+	if err != nil {
+		f.Fatalf("failed to create logger for dmsetup disk staller: %v", err)
+	}
+	defer l.Close()
+	f.L().Printf("dmsetup disk staller logs: %s.log", logfile)
+
+	diskStaller, err := failures.MakeDmsetupDiskStaller(c.MakeNodes(), l, c.IsSecure())
 	if err != nil {
 		f.Fatalf("failed to create dmsetup disk staller: %v", err)
 	}

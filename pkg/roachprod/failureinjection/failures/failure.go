@@ -2,6 +2,7 @@ package failures
 
 import (
 	"context"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 )
 
 // FailureArgs describes the args passed to a failure mode.
@@ -23,14 +24,14 @@ type FailureMode interface {
 	Description() string
 
 	// Setup any dependencies required for the failure to be injected.
-	Setup(ctx context.Context, args FailureArgs) error
+	Setup(ctx context.Context, l *logger.Logger, args FailureArgs) error
 
 	// Inject a failure into the system.
-	Inject(ctx context.Context, args FailureArgs) error
+	Inject(ctx context.Context, l *logger.Logger, args FailureArgs) error
 
 	// Restore reverses the effects of Inject.
-	Restore(ctx context.Context, args FailureArgs) error
+	Restore(ctx context.Context, l *logger.Logger, args FailureArgs) error
 
 	// Cleanup uninstalls any dependencies that were installed by Setup.
-	Cleanup(ctx context.Context) error
+	Cleanup(ctx context.Context, l *logger.Logger) error
 }

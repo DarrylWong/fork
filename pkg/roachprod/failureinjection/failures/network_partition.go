@@ -11,11 +11,16 @@ import (
 	"strings"
 )
 
-type PartitionNodeArgs struct {
-	Nodes install.Nodes
+type NetworkPartitionArgs struct {
+	Nodes           install.Nodes
+	PartitionGroups []install.Nodes
+	// TODO: Add support for more complex network partitions, e.g.
+	// asymmetric partitions, more than 2 partition groups, "soft"
+	// where not all packets are dropped.
 }
 
-func (a PartitionNodeArgs) Description() []string {
+func (a NetworkPartitionArgs) Description() []string {
+	// TODO: remove this
 	return []string{
 		"Nodes: node to partition",
 	}
@@ -23,7 +28,6 @@ func (a PartitionNodeArgs) Description() []string {
 
 type IPTablesPartitionNode struct {
 	c *install.SyncedCluster
-	l *logger.Logger
 }
 
 func MakeIPTablesPartitionNode(clusterName string, l *logger.Logger, secure bool) (FailureMode, error) {
@@ -32,49 +36,49 @@ func MakeIPTablesPartitionNode(clusterName string, l *logger.Logger, secure bool
 		return nil, err
 	}
 
-	return &IPTablesPartitionNode{c: c, l: l}, nil
+	return &IPTablesPartitionNode{c: c}, nil
 }
 
 const IPTablesPartitionNodeName = "iptables-partition-node"
 
 func registerIPTablesPartitionNode(r *FailureRegistry) {
-	r.add(IPTablesPartitionNodeName, PartitionNodeArgs{}, MakeIPTablesPartitionNode)
+	r.add(IPTablesPartitionNodeName, NetworkPartitionArgs{}, MakeIPTablesPartitionNode)
 }
 
 func (f *IPTablesPartitionNode) Description() string {
 	return "iptables partition"
 }
 
-func (f *IPTablesPartitionNode) run(ctx context.Context, node install.Nodes, args ...string) error {
+func (f *IPTablesPartitionNode) run(ctx context.Context, l *logger.Logger, node install.Nodes, args ...string) error {
 	if f.c.IsLocal() {
-		f.l.Printf("Local cluster detected, skipping iptables command")
+		l.Printf("Local cluster detected, skipping iptables command")
 		return nil
 	}
 	cmd := strings.Join(args, " ")
-	return f.c.Run(ctx, f.l, f.l.Stdout, f.l.Stderr, install.WithNodes(node), "iptables", cmd)
+	return f.c.Run(ctx, l, l.Stdout, l.Stderr, install.WithNodes(node), "iptables", cmd)
 }
 
-func (f *IPTablesPartitionNode) runOnSingleNode(ctx context.Context, node install.Nodes, args ...string) (install.RunResultDetails, error) {
+func (f *IPTablesPartitionNode) runOnSingleNode(ctx context.Context, l *logger.Logger, node install.Nodes, args ...string) (install.RunResultDetails, error) {
 	if f.c.IsLocal() {
-		f.l.Printf("Local cluster detected, skipping iptables command")
+		l.Printf("Local cluster detected, skipping iptables command")
 		return install.RunResultDetails{}, nil
 	}
 
 	cmd := strings.Join(args, " ")
-	res, err := f.c.RunWithDetails(ctx, f.l, install.WithNodes(node), "iptables", cmd)
+	res, err := f.c.RunWithDetails(ctx, l, install.WithNodes(node), "iptables", cmd)
 	if err != nil {
 		return install.RunResultDetails{}, err
 	}
 	return res[0], nil
 }
 
-func (f *IPTablesPartitionNode) Setup(_ context.Context, _ FailureArgs) error {
+func (f *IPTablesPartitionNode) Setup(_ context.Context, _ *logger.Logger, _ FailureArgs) error {
 	// iptables is already installed by default on Ubuntu.
 	return nil
 }
 
-func (f *IPTablesPartitionNode) Inject(ctx context.Context, args FailureArgs) error {
-	nodesToPartition := args.(PartitionNodeArgs).Nodes
+func (f *IPTablesPartitionNode) Inject(ctx context.Context, l *logger.Logger, args FailureArgs) error {
+	nodesToPartition := args.(NetworkPartitionArgs).Nodes
 	if nodesToPartition == nil {
 		nodesToPartition = f.c.Nodes
 	}
@@ -95,8 +99,8 @@ sudo iptables -A OUTPUT -p tcp --dport {pgport:%[1]d} -j DROP;
 sudo iptables-save
 `, targetNode)
 
-		f.l.Printf("Partitioning node %d with cmd: %s", targetNode, partitionNodeCmd)
-		if err := f.run(ctx, install.Nodes{targetNode}, partitionNodeCmd); err != nil {
+		l.Printf("Partitioning node %d with cmd: %s", targetNode, partitionNodeCmd)
+		if err := f.run(ctx, l, install.Nodes{targetNode}, partitionNodeCmd); err != nil {
 			return err
 		}
 	}
@@ -104,8 +108,8 @@ sudo iptables-save
 	return nil
 }
 
-func (f *IPTablesPartitionNode) Restore(ctx context.Context, args FailureArgs) error {
-	nodesToUnpartition := args.(PartitionNodeArgs).Nodes
+func (f *IPTablesPartitionNode) Restore(ctx context.Context, l *logger.Logger, args FailureArgs) error {
+	nodesToUnpartition := args.(NetworkPartitionArgs).Nodes
 	if nodesToUnpartition == nil {
 		nodesToUnpartition = f.c.Nodes
 	}
@@ -118,22 +122,21 @@ sudo iptables -D OUTPUT -p tcp --dport {pgport:%[1]d} -j DROP;
 sudo iptables-save
 `, targetNode)
 
-		f.l.Printf("Reverting iptables partition on node %d with cmd: %s", targetNode, revertPartitionNodeCmd)
-
-		if err := f.run(ctx, install.Nodes{targetNode}, revertPartitionNodeCmd); err != nil {
+		l.Printf("Reverting iptables partition on node %d with cmd: %s", targetNode, revertPartitionNodeCmd)
+		if err := f.run(ctx, l, install.Nodes{targetNode}, revertPartitionNodeCmd); err != nil {
 			return errors.Wrapf(err, "failed to revert iptables partition on node %d", targetNode)
 		}
 	}
 	return nil
 }
 
-func (f *IPTablesPartitionNode) Cleanup(_ context.Context) error {
+func (f *IPTablesPartitionNode) Cleanup(_ context.Context, _ *logger.Logger) error {
 	return nil
 }
 
 // PacketsDropped returns the number of packets dropped to a given node due to an iptables rule.
-func (f *IPTablesPartitionNode) PacketsDropped(ctx context.Context, node install.Nodes) (int, error) {
-	res, err := f.runOnSingleNode(ctx, node, "sudo iptables -L -v -n")
+func (f *IPTablesPartitionNode) PacketsDropped(ctx context.Context, l *logger.Logger, node install.Nodes) (int, error) {
+	res, err := f.runOnSingleNode(ctx, l, node, "sudo iptables -L -v -n")
 	if err != nil {
 		return 0, err
 	}

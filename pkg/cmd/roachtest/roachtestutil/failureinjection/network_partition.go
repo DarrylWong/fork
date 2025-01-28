@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/failureinjection/failures"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 )
@@ -23,24 +24,52 @@ func MakeNetworkPartitioner(c cluster.Cluster, l *logger.Logger) (*NetworkPartit
 }
 
 func (f *NetworkPartitioner) PartitionNode(ctx context.Context, nodes option.NodeListOption) error {
-	args := failures.PartitionNodeArgs{
+	l, logfile, err := roachtestutil.LoggerForCmd(f.l, f.c.All(), "create-network-partition")
+	if err != nil {
+		f.l.Printf("failed to create logger: %v", err)
+	}
+	defer l.Close()
+	l.Printf("creating network partition on node %s; details in: %s.log", nodes, logfile)
+
+	args := failures.NetworkPartitionArgs{
 		Nodes: nodes.InstallNodes(),
 	}
-	return f.networkPartitioner.Inject(ctx, args)
+	return f.networkPartitioner.Inject(ctx, l, args)
 }
 
 func (f *NetworkPartitioner) RestoreNode(ctx context.Context, nodes option.NodeListOption) error {
-	args := failures.PartitionNodeArgs{
+	l, logfile, err := roachtestutil.LoggerForCmd(f.l, f.c.All(), "restore-network-partition")
+	if err != nil {
+		f.l.Printf("failed to create logger: %v", err)
+	}
+	defer l.Close()
+	l.Printf("restoring network partition on node %s; details in: %s.log", nodes, logfile)
+
+	args := failures.NetworkPartitionArgs{
 		Nodes: nodes.InstallNodes(),
 	}
-	return f.networkPartitioner.Restore(ctx, args)
+	return f.networkPartitioner.Restore(ctx, l, args)
 }
 
 func (f *NetworkPartitioner) RestoreAll(ctx context.Context) error {
-	return f.networkPartitioner.Restore(ctx, failures.PartitionNodeArgs{})
+	l, logfile, err := roachtestutil.LoggerForCmd(f.l, f.c.All(), "restore-all-network-partition")
+	if err != nil {
+		f.l.Printf("failed to create logger: %v", err)
+	}
+	defer l.Close()
+	l.Printf("restoring network partition on all nodes; details in: %s.log", logfile)
+
+	return f.networkPartitioner.Restore(ctx, l, failures.NetworkPartitionArgs{})
 }
 
 // PacketsDropped returns the number of packets dropped by the network partitioner.
 func (f *NetworkPartitioner) PacketsDropped(ctx context.Context, node option.NodeListOption) (int, error) {
-	return f.networkPartitioner.PacketsDropped(ctx, node.InstallNodes())
+	l, logfile, err := roachtestutil.LoggerForCmd(f.l, f.c.All(), "packets-dropped")
+	if err != nil {
+		f.l.Printf("failed to create logger: %v", err)
+	}
+	defer l.Close()
+	l.Printf("checking packets dropped; details in: %s.log", logfile)
+
+	return f.networkPartitioner.PacketsDropped(ctx, l, node.InstallNodes())
 }

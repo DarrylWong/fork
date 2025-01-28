@@ -21,7 +21,6 @@ import (
 
 type CGroupDiskStaller struct {
 	c           *install.SyncedCluster
-	l           *logger.Logger
 	readOrWrite []bandwidthReadWrite
 }
 
@@ -31,7 +30,7 @@ func MakeCgroupDiskStaller(clusterName string, l *logger.Logger, secure bool) (F
 		return nil, err
 	}
 
-	return &CGroupDiskStaller{c: c, l: l}, nil
+	return &CGroupDiskStaller{c: c}, nil
 }
 
 const CgroupDiskStallName = "cgroup-disk-stall"
@@ -40,15 +39,15 @@ func registerCgroupDiskStall(r *FailureRegistry) {
 	r.add(CgroupDiskStallName, DiskStallArgs{}, MakeCgroupDiskStaller)
 }
 
-func (s *CGroupDiskStaller) run(ctx context.Context, nodes install.Nodes, args ...string) error {
+func (s *CGroupDiskStaller) run(ctx context.Context, l *logger.Logger, nodes install.Nodes, args ...string) error {
 	cmd := strings.Join(args, " ")
-	s.l.Printf("cgroup: %s", cmd)
-	return s.c.Run(ctx, s.l, s.l.Stdout, s.l.Stderr, install.WithNodes(nodes), fmt.Sprintf("cgroup: %s", cmd), cmd)
+	l.Printf("cgroup: %s", cmd)
+	return s.c.Run(ctx, l, l.Stdout, l.Stderr, install.WithNodes(nodes), fmt.Sprintf("cgroup: %s", cmd), cmd)
 }
 
-func (s *CGroupDiskStaller) runOnSingleNode(ctx context.Context, node install.Nodes, args ...string) (install.RunResultDetails, error) {
+func (s *CGroupDiskStaller) runOnSingleNode(ctx context.Context, l *logger.Logger, node install.Nodes, args ...string) (install.RunResultDetails, error) {
 	cmd := strings.Join(args, " ")
-	res, err := s.c.RunWithDetails(ctx, s.l, install.WithNodes(node), fmt.Sprintf("cgroup: %s", cmd), cmd)
+	res, err := s.c.RunWithDetails(ctx, l, install.WithNodes(node), fmt.Sprintf("cgroup: %s", cmd), cmd)
 	if err != nil {
 		return install.RunResultDetails{}, err
 	}
@@ -76,12 +75,12 @@ func (a DiskStallArgs) Description() []string {
 	}
 }
 
-func (s *CGroupDiskStaller) Setup(ctx context.Context, args FailureArgs) error {
+func (s *CGroupDiskStaller) Setup(ctx context.Context, l *logger.Logger, args FailureArgs) error {
 	if args.(DiskStallArgs).LogsToo {
-		if err := s.run(ctx, s.c.Nodes, "mkdir -p {store-dir}/logs"); err != nil {
+		if err := s.run(ctx, l, s.c.Nodes, "mkdir -p {store-dir}/logs"); err != nil {
 			return err
 		}
-		if err := s.run(ctx, s.c.Nodes, "rm -f logs && ln -s {store-dir}/logs logs || true"); err != nil {
+		if err := s.run(ctx, l, s.c.Nodes, "rm -f logs && ln -s {store-dir}/logs logs || true"); err != nil {
 			return err
 		}
 	}
@@ -92,9 +91,9 @@ func (s *CGroupDiskStaller) Setup(ctx context.Context, args FailureArgs) error {
 	}
 	return nil
 }
-func (s *CGroupDiskStaller) Cleanup(_ context.Context) error { return nil }
+func (s *CGroupDiskStaller) Cleanup(_ context.Context, _ *logger.Logger) error { return nil }
 
-func (s *CGroupDiskStaller) Inject(ctx context.Context, args FailureArgs) error {
+func (s *CGroupDiskStaller) Inject(ctx context.Context, l *logger.Logger, args FailureArgs) error {
 	// NB: I don't understand why, but attempting to set a bytesPerSecond={0,1}
 	// results in Invalid argument from the io.max cgroupv2 API.
 	bytesPerSecond := 4
@@ -112,7 +111,7 @@ func (s *CGroupDiskStaller) Inject(ctx context.Context, args FailureArgs) error 
 		s.readOrWrite[i], s.readOrWrite[j] = s.readOrWrite[j], s.readOrWrite[i]
 	})
 
-	if err := s.setThroughput(ctx, s.readOrWrite, throughput{limited: true, bytesPerSecond: fmt.Sprintf("%d", bytesPerSecond)}, nodes); err != nil {
+	if err := s.setThroughput(ctx, l, s.readOrWrite, throughput{limited: true, bytesPerSecond: fmt.Sprintf("%d", bytesPerSecond)}, nodes); err != nil {
 		return err
 	}
 
@@ -127,27 +126,27 @@ func (s *CGroupDiskStaller) Inject(ctx context.Context, args FailureArgs) error 
 // controller entirely, leaving the node in a bad state. For some reason, this doesn't
 // happen if we unlimit all changed values at the same time, i.e. echo rbps=max > io.max
 // && echo wbps=max > io.max deletes the controller, but echo rbps=max wbps=max > io.max does not.
-func (s *CGroupDiskStaller) Restore(ctx context.Context, args FailureArgs) error {
+func (s *CGroupDiskStaller) Restore(ctx context.Context, l *logger.Logger, args FailureArgs) error {
 	var nodes install.Nodes
 	if nodes = args.(DiskStallArgs).Nodes; nodes == nil {
 		nodes = s.c.Nodes
 	}
 
-	err := s.setThroughput(ctx, s.readOrWrite, throughput{limited: false}, nodes)
+	err := s.setThroughput(ctx, l, s.readOrWrite, throughput{limited: false}, nodes)
 	if err != nil {
 		// NB: We log the error and continue on because unstalling may not
 		// succeed if the process has successfully exited.
-		s.l.PrintfCtx(ctx, "error unstalling the disk; stumbling on: %v", err)
+		l.PrintfCtx(ctx, "error unstalling the disk; stumbling on: %v", err)
 	}
 	return nil
 }
 
-func (s *CGroupDiskStaller) device(ctx context.Context, node install.Nodes) (major, minor int, err error) {
+func (s *CGroupDiskStaller) device(ctx context.Context, l *logger.Logger, node install.Nodes) (major, minor int, err error) {
 	// TODO(jackson): Programmatically determine the device major,minor numbers.
 	// eg,:
 	//    deviceName := getDevice(s.t, s.c)
 	//    `cat /proc/partitions` and find `deviceName`
-	res, err := s.runOnSingleNode(ctx, node, "lsblk | grep /mnt/data1 | awk '{print $2}'")
+	res, err := s.runOnSingleNode(ctx, l, node, "lsblk | grep /mnt/data1 | awk '{print $2}'")
 	if err != nil {
 		return 0, 0, err
 	}
@@ -190,9 +189,9 @@ func (rw bandwidthReadWrite) cgroupV2BandwidthProp() string {
 }
 
 func (s *CGroupDiskStaller) setThroughput(
-	ctx context.Context, readOrWrite []bandwidthReadWrite, bw throughput, nodes install.Nodes,
+	ctx context.Context, l *logger.Logger, readOrWrite []bandwidthReadWrite, bw throughput, nodes install.Nodes,
 ) error {
-	maj, min, err := s.device(ctx, nodes)
+	maj, min, err := s.device(ctx, l, nodes)
 	if err != nil {
 		return err
 	}
@@ -207,7 +206,7 @@ func (s *CGroupDiskStaller) setThroughput(
 		limits = append(limits, fmt.Sprintf("%s=%s", rw.cgroupV2BandwidthProp(), bytesPerSecondStr))
 	}
 
-	return s.run(ctx, nodes, "sudo", "/bin/bash", "-c", fmt.Sprintf(
+	return s.run(ctx, l, nodes, "sudo", "/bin/bash", "-c", fmt.Sprintf(
 		`'echo %d:%d %s > %s'`,
 		maj,
 		min,
@@ -226,7 +225,6 @@ func GetDiskDevice(ctx context.Context, c *install.SyncedCluster, l *logger.Logg
 
 type DmsetupDiskStaller struct {
 	c *install.SyncedCluster
-	l *logger.Logger
 
 	dev string // set in Setup; s.device() doesn't work when volume is not set up
 }
@@ -237,80 +235,80 @@ func MakeDmsetupDiskStaller(clusterName string, l *logger.Logger, secure bool) (
 		return nil, err
 	}
 
-	return &DmsetupDiskStaller{c: c, l: l}, nil
+	return &DmsetupDiskStaller{c: c}, nil
 }
 
-func (s *DmsetupDiskStaller) run(ctx context.Context, nodes install.Nodes, args ...string) error {
+func (s *DmsetupDiskStaller) run(ctx context.Context, l *logger.Logger, nodes install.Nodes, args ...string) error {
 	cmd := strings.Join(args, " ")
-	return s.c.Run(ctx, s.l, s.l.Stdout, s.l.Stderr, install.WithNodes(nodes), fmt.Sprintf("dmsetup: %s", cmd), cmd)
+	return s.c.Run(ctx, l, l.Stdout, l.Stderr, install.WithNodes(nodes), fmt.Sprintf("dmsetup: %s", cmd), cmd)
 }
 
 func (s *DmsetupDiskStaller) Description() string {
 	return "dmsetup disk staller"
 }
 
-func (s *DmsetupDiskStaller) Setup(ctx context.Context, _ FailureArgs) error {
+func (s *DmsetupDiskStaller) Setup(ctx context.Context, l *logger.Logger, _ FailureArgs) error {
 	var err error
-	if s.dev, err = GetDiskDevice(ctx, s.c, s.l); err != nil {
+	if s.dev, err = GetDiskDevice(ctx, s.c, l); err != nil {
 		return err
 	}
 	// snapd will run "snapd auto-import /dev/dm-0" via udev triggers when
 	// /dev/dm-0 is created. This possibly interferes with the dmsetup create
 	// reload, so uninstall snapd.
-	if err = s.run(ctx, s.c.Nodes, `sudo apt-get purge -y snapd`); err != nil {
+	if err = s.run(ctx, l, s.c.Nodes, `sudo apt-get purge -y snapd`); err != nil {
 		return err
 	}
-	if err = s.run(ctx, s.c.Nodes, `sudo umount -f /mnt/data1 || true`); err != nil {
+	if err = s.run(ctx, l, s.c.Nodes, `sudo umount -f /mnt/data1 || true`); err != nil {
 		return err
 	}
-	if err = s.run(ctx, s.c.Nodes, `sudo dmsetup remove_all`); err != nil {
+	if err = s.run(ctx, l, s.c.Nodes, `sudo dmsetup remove_all`); err != nil {
 		return err
 	}
 	// See https://github.com/cockroachdb/cockroach/issues/129619#issuecomment-2316147244.
-	if err = s.run(ctx, s.c.Nodes, `sudo tune2fs -O ^has_journal `+s.dev); err != nil {
+	if err = s.run(ctx, l, s.c.Nodes, `sudo tune2fs -O ^has_journal `+s.dev); err != nil {
 		return err
 	}
-	if err = s.run(ctx, s.c.Nodes, `echo "0 $(sudo blockdev --getsz `+s.dev+`) linear `+s.dev+` 0" | `+
+	if err = s.run(ctx, l, s.c.Nodes, `echo "0 $(sudo blockdev --getsz `+s.dev+`) linear `+s.dev+` 0" | `+
 		`sudo dmsetup create data1`); err != nil {
 
 	}
 	// This has occasionally been seen to fail with "Device or resource busy",
 	// with no clear explanation. Try to find out who it is.
-	if err = s.run(ctx, s.c.Nodes, "sudo bash -c 'ps aux; dmsetup status; mount; lsof'"); err != nil {
+	if err = s.run(ctx, l, s.c.Nodes, "sudo bash -c 'ps aux; dmsetup status; mount; lsof'"); err != nil {
 		return err
 	}
 
-	return s.run(ctx, s.c.Nodes, `sudo mount /dev/mapper/data1 /mnt/data1`)
+	return s.run(ctx, l, s.c.Nodes, `sudo mount /dev/mapper/data1 /mnt/data1`)
 }
 
-func (s *DmsetupDiskStaller) Inject(ctx context.Context, args FailureArgs) error {
+func (s *DmsetupDiskStaller) Inject(ctx context.Context, l *logger.Logger, args FailureArgs) error {
 	nodes := args.(DiskStallArgs).Nodes
-	return s.run(ctx, nodes, `sudo dmsetup suspend --noflush --nolockfs data1`)
+	return s.run(ctx, l, nodes, `sudo dmsetup suspend --noflush --nolockfs data1`)
 }
 
-func (s *DmsetupDiskStaller) Restore(ctx context.Context, args FailureArgs) error {
+func (s *DmsetupDiskStaller) Restore(ctx context.Context, l *logger.Logger, args FailureArgs) error {
 	nodes := args.(DiskStallArgs).Nodes
-	return s.run(ctx, nodes, `sudo dmsetup resume data1`)
+	return s.run(ctx, l, nodes, `sudo dmsetup resume data1`)
 }
 
-func (s *DmsetupDiskStaller) Cleanup(ctx context.Context) error {
-	if err := s.run(ctx, s.c.Nodes, `sudo dmsetup resume data1`); err != nil {
+func (s *DmsetupDiskStaller) Cleanup(ctx context.Context, l *logger.Logger) error {
+	if err := s.run(ctx, l, s.c.Nodes, `sudo dmsetup resume data1`); err != nil {
 		return err
 	}
-	if err := s.run(ctx, s.c.Nodes, `sudo umount /mnt/data1`); err != nil {
+	if err := s.run(ctx, l, s.c.Nodes, `sudo umount /mnt/data1`); err != nil {
 		return err
 	}
-	if err := s.run(ctx, s.c.Nodes, `sudo dmsetup remove_all`); err != nil {
+	if err := s.run(ctx, l, s.c.Nodes, `sudo dmsetup remove_all`); err != nil {
 		return err
 	}
-	if err := s.run(ctx, s.c.Nodes, `sudo tune2fs -O has_journal `+s.dev); err != nil {
+	if err := s.run(ctx, l, s.c.Nodes, `sudo tune2fs -O has_journal `+s.dev); err != nil {
 		return err
 	}
-	if err := s.run(ctx, s.c.Nodes, `sudo mount /mnt/data1`); err != nil {
+	if err := s.run(ctx, l, s.c.Nodes, `sudo mount /mnt/data1`); err != nil {
 		return err
 	}
 	// Reinstall snapd in case subsequent tests need it.
-	return s.run(ctx, s.c.Nodes, `sudo apt-get install -y snapd`)
+	return s.run(ctx, l, s.c.Nodes, `sudo apt-get install -y snapd`)
 }
 
 const DmsetupDiskStallName = "dmsetup-disk-stall"

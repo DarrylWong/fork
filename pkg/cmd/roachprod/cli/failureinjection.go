@@ -62,7 +62,7 @@ func (cr *commandRegistry) buildFIListCmd() *cobra.Command {
 	}
 }
 
-func (cr *commandRegistry) buildFIIptablesPartitionNode() *cobra.Command {
+func (cr *commandRegistry) buildIptablesPartitionNode() *cobra.Command {
 	return &cobra.Command{
 		Use:   fmt.Sprintf("%s <cluster>", failures.IPTablesPartitionNodeName),
 		Short: "TODO",
@@ -75,14 +75,14 @@ func (cr *commandRegistry) buildFIIptablesPartitionNode() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runFailure(ctx, partitioner, failures.PartitionNodeArgs{})
+			return runFailure(ctx, partitioner, failures.NetworkPartitionArgs{})
 		}),
 	}
 }
 
 func (cr *commandRegistry) buildDmsetupDiskStall() *cobra.Command {
 	return &cobra.Command{
-		Use:   fmt.Sprintf("%s  <cluster> [--flags]", failures.DmsetupDiskStallName),
+		Use:   fmt.Sprintf("%s <cluster> [--flags]", failures.DmsetupDiskStallName),
 		Short: "TODO",
 		Long: `TODO
 		`,
@@ -125,11 +125,11 @@ func (cr *commandRegistry) buildCgroupDiskStall() *cobra.Command {
 }
 
 func runFailure(ctx context.Context, failure failures.FailureMode, args failures.FailureArgs) error {
-	err := failure.Setup(ctx, args)
+	err := failure.Setup(ctx, config.Logger, args)
 	if err != nil {
 		return err
 	}
-	err = failure.Inject(ctx, args)
+	err = failure.Inject(ctx, config.Logger, args)
 	if err != nil {
 		return err
 	}
@@ -157,11 +157,11 @@ func runFailure(ctx context.Context, failure failures.FailureMode, args failures
 
 func revertFailure(ctx context.Context, failure failures.FailureMode, args failures.FailureArgs) {
 	// Best effort cleanup
-	err := failure.Restore(ctx, args)
+	err := failure.Restore(ctx, config.Logger, args)
 	if err != nil {
 		config.Logger.Printf("failed to restore failure: %v", err)
 	}
-	err = failure.Cleanup(ctx)
+	err = failure.Cleanup(ctx, config.Logger)
 	if err != nil {
 		config.Logger.Printf("failed to cleanup failure: %v", err)
 	}

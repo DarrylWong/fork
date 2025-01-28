@@ -8,11 +8,11 @@ package perturbation
 import (
 	"context"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/failureinjection"
 	"math"
 	"math/rand"
 	"time"
 
-	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
 	"github.com/stretchr/testify/require"
@@ -23,7 +23,7 @@ type slowDisk struct {
 	slowLiveness bool
 	// walFailover will add add WAL failover to the slow node.
 	walFailover bool
-	staller     roachtestutil.DiskStaller
+	staller     failureinjection.DiskStaller
 }
 
 // NB: slowData is an unusual perturbation since the staller is initialized
@@ -64,9 +64,9 @@ func (s *slowDisk) startTargetNode(ctx context.Context, t test.Test, v variation
 	}
 
 	if v.IsLocal() {
-		s.staller = roachtestutil.NoopDiskStaller{}
+		s.staller = failureinjection.NoopDiskStaller{}
 	} else {
-		s.staller = roachtestutil.MakeCgroupDiskStaller(t, v, false /* readsToo */, false /* logsToo */)
+		s.staller = failureinjection.MakeCgroupDiskStaller(t, v, false /* readsToo */, false /* logsToo */)
 	}
 }
 

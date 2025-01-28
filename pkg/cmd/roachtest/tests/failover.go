@@ -9,6 +9,7 @@ import (
 	"context"
 	gosql "database/sql"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/failureinjection"
 	"math/rand"
 	"sync"
 	"time"
@@ -1201,7 +1202,7 @@ func makeFailerWithoutLocalNoop(
 			c:             c,
 			m:             m,
 			startSettings: settings,
-			staller:       roachtestutil.MakeDmsetupDiskStaller(t, c),
+			staller:       failureinjection.MakeDmsetupDiskStaller(t, c),
 		}
 	case failureModePause:
 		return &pauseFailer{

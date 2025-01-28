@@ -8,19 +8,19 @@ package operations
 import (
 	"context"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/failureinjection"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/operation"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
-	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil"
 	"github.com/cockroachdb/cockroach/pkg/util/randutil"
 )
 
 type cleanupDiskStall struct {
 	nodes   option.NodeListOption
-	staller roachtestutil.DiskStaller
+	staller failureinjection.DiskStaller
 }
 
 func (cl *cleanupDiskStall) Cleanup(ctx context.Context, o operation.Operation, c cluster.Cluster) {
@@ -47,7 +47,7 @@ func runDiskStall(
 
 	nodes := c.All()
 	nid := nodes[rng.Intn(len(nodes))]
-	ds := roachtestutil.MakeDmsetupDiskStaller(o, c)
+	ds := failureinjection.MakeDmsetupDiskStaller(o, c)
 
 	o.Status(fmt.Sprintf("stalling disk on node %d", nid))
 	ds.Stall(ctx, c.Node(nid))
