@@ -5,7 +5,7 @@ go_library(
     srcs = [
         "disk_stall.go",
         "failure.go",
-        "partition.go",
+        "network_partition.go",
         "registry.go",
     ],
     importpath = "github.com/cockroachdb/cockroach/pkg/roachprod/failureinjection/failures",
