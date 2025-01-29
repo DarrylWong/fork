@@ -3,11 +3,14 @@ package cli
 import (
 	"context"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/roachprod"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/config"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/failureinjection/failures"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/spf13/cobra"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 )
 
@@ -15,11 +18,15 @@ var (
 	failureDuration time.Duration
 	restoreFailure  bool
 	diskStallArgs   failures.DiskStallArgs
+	nodesToRestore  []int
 )
 
 func initFailureInjectionFlags(failureInjectionCmd *cobra.Command) {
 	failureInjectionCmd.PersistentFlags().BoolVar(&restoreFailure, "restore", false, "Restore the failure injection.")
 	failureInjectionCmd.PersistentFlags().DurationVar(&failureDuration, "duration", 0, "Duration to inject failure for before reverting. 0 to inject indefinitely until cancellation.")
+
+	// Network Partition Args
+	failureInjectionCmd.PersistentFlags().IntSliceVar(&nodesToRestore, "nodes-to-restore", nil, "List of nodes to revert network partitions for.")
 
 	// Disk Stall Args
 	failureInjectionCmd.PersistentFlags().BoolVar(&diskStallArgs.ReadsToo, "reads-too", false, "Stall reads.")
@@ -64,18 +71,40 @@ func (cr *commandRegistry) buildFIListCmd() *cobra.Command {
 
 func (cr *commandRegistry) buildIptablesPartitionNode() *cobra.Command {
 	return &cobra.Command{
-		Use:   fmt.Sprintf("%s <cluster>", failures.IPTablesPartitionNodeName),
+		Use:   fmt.Sprintf("%s <cluster> <partition-groups>", failures.IPTablesPartitionNodeName),
 		Short: "TODO",
 		Long: `TODO
 		`,
-		Args: cobra.MinimumNArgs(1),
+		Args: cobra.RangeArgs(2, 3),
 		Run: wrap(func(cmd *cobra.Command, args []string) (retErr error) {
 			ctx := context.Background()
-			partitioner, err := cr.failureRegistry.GetFailure(args[0], failures.IPTablesPartitionNodeName, config.Logger, isSecure)
+			cluster := args[0]
+			c, err := roachprod.GetClusterFromCache(config.Logger, cluster, install.SecureOption(isSecure))
+			partitioner, err := cr.failureRegistry.GetFailure(cluster, failures.IPTablesPartitionNodeName, config.Logger, isSecure)
 			if err != nil {
 				return err
 			}
-			return runFailure(ctx, partitioner, failures.NetworkPartitionArgs{})
+			failureArgs := failures.NetworkPartitionArgs{}
+
+			groups := strings.Split(args[1], ":")
+			for _, group := range groups {
+				nodes, err := install.ListNodes(group, len(c.Nodes))
+				if err != nil {
+					return err
+				}
+				failureArgs.PartitionGroups = append(failureArgs.PartitionGroups, nodes)
+			}
+
+			if len(args) == 3 {
+				failureArgs.NodesToRestore, err = install.ListNodes(args[2], len(c.Nodes))
+				if err != nil {
+					return err
+				}
+			} else {
+				failureArgs.NodesToRestore = failureArgs.PartitionGroups[0]
+			}
+
+			return runFailure(ctx, partitioner, failureArgs)
 		}),
 	}
 }

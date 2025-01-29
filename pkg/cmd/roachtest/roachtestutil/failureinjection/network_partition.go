@@ -6,6 +6,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/failureinjection/failures"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 )
 
@@ -29,10 +30,10 @@ func (f *NetworkPartitioner) PartitionNode(ctx context.Context, nodes option.Nod
 		f.l.Printf("failed to create logger: %v", err)
 	}
 	defer l.Close()
-	l.Printf("creating network partition on node %s; details in: %s.log", nodes, logfile)
+	f.l.Printf("creating network partition on node %s; details in: %s.log", nodes, logfile)
 
 	args := failures.NetworkPartitionArgs{
-		Nodes: nodes.InstallNodes(),
+		PartitionGroups: []install.Nodes{nodes.InstallNodes()},
 	}
 	return f.networkPartitioner.Inject(ctx, l, args)
 }
@@ -43,10 +44,10 @@ func (f *NetworkPartitioner) RestoreNode(ctx context.Context, nodes option.NodeL
 		f.l.Printf("failed to create logger: %v", err)
 	}
 	defer l.Close()
-	l.Printf("restoring network partition on node %s; details in: %s.log", nodes, logfile)
+	f.l.Printf("restoring network partition on node %s; details in: %s.log", nodes, logfile)
 
 	args := failures.NetworkPartitionArgs{
-		Nodes: nodes.InstallNodes(),
+		NodesToRestore: nodes.InstallNodes(),
 	}
 	return f.networkPartitioner.Restore(ctx, l, args)
 }
@@ -57,7 +58,7 @@ func (f *NetworkPartitioner) RestoreAll(ctx context.Context) error {
 		f.l.Printf("failed to create logger: %v", err)
 	}
 	defer l.Close()
-	l.Printf("restoring network partition on all nodes; details in: %s.log", logfile)
+	f.l.Printf("restoring network partition on all nodes; details in: %s.log", logfile)
 
 	return f.networkPartitioner.Restore(ctx, l, failures.NetworkPartitionArgs{})
 }
@@ -69,7 +70,7 @@ func (f *NetworkPartitioner) PacketsDropped(ctx context.Context, node option.Nod
 		f.l.Printf("failed to create logger: %v", err)
 	}
 	defer l.Close()
-	l.Printf("checking packets dropped; details in: %s.log", logfile)
+	f.l.Printf("checking packets dropped; details in: %s.log", logfile)
 
 	return f.networkPartitioner.PacketsDropped(ctx, l, node.InstallNodes())
 }
