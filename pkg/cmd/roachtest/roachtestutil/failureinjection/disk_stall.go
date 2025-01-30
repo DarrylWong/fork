@@ -79,8 +79,11 @@ func (s *cgroupDiskStaller) Setup(ctx context.Context) {
 		s.f.Fatalf("cluster needs ReusePolicyNone to support disk stalls")
 	}
 	args := failures.DiskStallArgs{
-		LogsToo:  s.logsToo,
-		ReadsToo: s.readsToo,
+		// For now, all roachtests want to always stall writes. In the future
+		// we might want to make this configurable.
+		StallWrites: true,
+		StallLogs:   s.logsToo,
+		StallReads:  s.readsToo,
 	}
 	if err := s.diskStaller.Setup(ctx, l, args); err != nil {
 		s.f.Fatalf("error setting up the disk staller: %v", err)
@@ -240,14 +243,7 @@ func (s *dmsetupDiskStaller) DataDir() string { return "{store-dir}" }
 func (s *dmsetupDiskStaller) LogDir() string  { return "logs" }
 
 func MakeDmsetupDiskStaller(f Fataler, c cluster.Cluster) DiskStaller {
-	l, logfile, err := roachtestutil.LoggerForCmd(f.L(), c.All(), "dmsetup")
-	if err != nil {
-		f.Fatalf("failed to create logger for dmsetup disk staller: %v", err)
-	}
-	defer l.Close()
-	f.L().Printf("dmsetup disk staller logs: %s.log", logfile)
-
-	diskStaller, err := failures.MakeDmsetupDiskStaller(c.MakeNodes(), l, c.IsSecure())
+	diskStaller, err := failures.MakeDmsetupDiskStaller(c.MakeNodes(), f.L(), c.IsSecure())
 	if err != nil {
 		f.Fatalf("failed to create dmsetup disk staller: %v", err)
 	}

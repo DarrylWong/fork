@@ -24,13 +24,6 @@ type NetworkPartitionArgs struct {
 	NodesToRestore install.Nodes
 }
 
-func (a NetworkPartitionArgs) Description() []string {
-	// TODO: remove this
-	return []string{
-		"Nodes: node to partition",
-	}
-}
-
 type IPTablesPartitionNode struct {
 	c *install.SyncedCluster
 }
@@ -44,10 +37,10 @@ func MakeIPTablesPartitionNode(clusterName string, l *logger.Logger, secure bool
 	return &IPTablesPartitionNode{c: c}, nil
 }
 
-const IPTablesPartitionNodeName = "iptables-partition-node"
+const IPTablesNetworkPartitionName = "iptables-network-partition"
 
 func registerIPTablesPartitionNode(r *FailureRegistry) {
-	r.add(IPTablesPartitionNodeName, NetworkPartitionArgs{}, MakeIPTablesPartitionNode)
+	r.add(IPTablesNetworkPartitionName, NetworkPartitionArgs{}, MakeIPTablesPartitionNode)
 }
 
 func (f *IPTablesPartitionNode) Description() string {

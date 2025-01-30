@@ -18,29 +18,23 @@ var (
 	failureDuration time.Duration
 	restoreFailure  bool
 	diskStallArgs   failures.DiskStallArgs
-	nodesToRestore  []int
 )
 
 func initFailureInjectionFlags(failureInjectionCmd *cobra.Command) {
 	failureInjectionCmd.PersistentFlags().BoolVar(&restoreFailure, "restore", false, "Restore the failure injection.")
 	failureInjectionCmd.PersistentFlags().DurationVar(&failureDuration, "duration", 0, "Duration to inject failure for before reverting. 0 to inject indefinitely until cancellation.")
 
-	// Network Partition Args
-	failureInjectionCmd.PersistentFlags().IntSliceVar(&nodesToRestore, "nodes-to-restore", nil, "List of nodes to revert network partitions for.")
-
 	// Disk Stall Args
-	failureInjectionCmd.PersistentFlags().BoolVar(&diskStallArgs.ReadsToo, "reads-too", false, "Stall reads.")
-	failureInjectionCmd.PersistentFlags().BoolVar(&diskStallArgs.LogsToo, "logs-too", false, "Stall logs.")
-	failureInjectionCmd.PersistentFlags().IntVar(&diskStallArgs.Throughput, "throughput", 4, "Bytes per second to slow disk I/O to.")
+	failureInjectionCmd.PersistentFlags().BoolVar(&diskStallArgs.StallWrites, "stall-writes", true, "Stall writes")
+	failureInjectionCmd.PersistentFlags().BoolVar(&diskStallArgs.StallReads, "stall-reads", false, "Stall reads")
+	failureInjectionCmd.PersistentFlags().BoolVar(&diskStallArgs.StallLogs, "stall-logs", false, "Stall logs")
+	failureInjectionCmd.PersistentFlags().IntVar(&diskStallArgs.Throughput, "throughput", 4, "Bytes per second to slow disk I/O to")
 }
 
 func (cr *commandRegistry) FailureInjectionCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "failure-injection [command] [flags...]",
-		Short: "TODO",
-		Long: `TODO
-		failure-injection list to see available failure injection modes.
-`,
+		Short: "injects failures into a cluster",
 	}
 	fr := failures.NewFailureRegistry()
 	fr.Register()
@@ -71,16 +65,23 @@ func (cr *commandRegistry) buildFIListCmd() *cobra.Command {
 
 func (cr *commandRegistry) buildIptablesPartitionNode() *cobra.Command {
 	return &cobra.Command{
-		Use:   fmt.Sprintf("%s <cluster> <partition-groups>", failures.IPTablesPartitionNodeName),
-		Short: "TODO",
-		Long: `TODO
+		Use:   fmt.Sprintf("%s <cluster> <partition-groups>", failures.IPTablesNetworkPartitionName),
+		Short: "use iptables to create network partitions",
+		Long: `Use iptables to create network partitions. 
+
+Traffic is blocked between groups of nodes as specified by the partition-groups argument. 
+The partition-groups argument is a colon-separated list of nodes, e.g. "1,3:2,4" will
+partition nodes 1 and 3 from nodes 2 and 4.
+
+If only one partition-group is specified, e.g. "1,3" the nodes in that group will be partitioned
+from all other nodes in the cluster. Currently only two partition groups are supported.
 		`,
 		Args: cobra.RangeArgs(2, 3),
 		Run: wrap(func(cmd *cobra.Command, args []string) (retErr error) {
 			ctx := context.Background()
 			cluster := args[0]
 			c, err := roachprod.GetClusterFromCache(config.Logger, cluster, install.SecureOption(isSecure))
-			partitioner, err := cr.failureRegistry.GetFailure(cluster, failures.IPTablesPartitionNodeName, config.Logger, isSecure)
+			partitioner, err := cr.failureRegistry.GetFailure(cluster, failures.IPTablesNetworkPartitionName, config.Logger, isSecure)
 			if err != nil {
 				return err
 			}
@@ -109,13 +110,23 @@ func (cr *commandRegistry) buildIptablesPartitionNode() *cobra.Command {
 	}
 }
 
+// TODO: dmsetup is brittle and resists reuse, consider removing it if
+// further attempts to stabilize it fail.
 func (cr *commandRegistry) buildDmsetupDiskStall() *cobra.Command {
 	return &cobra.Command{
 		Use:   fmt.Sprintf("%s <cluster> [--flags]", failures.DmsetupDiskStallName),
-		Short: "TODO",
-		Long: `TODO
+		Short: "use dmsetup to create disk stalls",
+		Long: `Use dmsetup to create disk stalls. By default, only writes are stalled.
+
+--stall-writes: stall writes, defaults to true
+
+--stall-reads: stall reads
+
+--stall-logs: stall logs
+
+--throughput: currently not supported for dmsetup
 		`,
-		Args: cobra.MinimumNArgs(1),
+		Args: cobra.ExactArgs(1),
 		Run: wrap(func(cmd *cobra.Command, args []string) (retErr error) {
 			ctx := context.Background()
 			staller, err := cr.failureRegistry.GetFailure(args[0], failures.DmsetupDiskStallName, config.Logger, isSecure)
@@ -123,9 +134,10 @@ func (cr *commandRegistry) buildDmsetupDiskStall() *cobra.Command {
 				return err
 			}
 			return runFailure(ctx, staller, failures.DiskStallArgs{
-				ReadsToo:   diskStallArgs.ReadsToo,
-				LogsToo:    diskStallArgs.LogsToo,
-				Throughput: diskStallArgs.Throughput,
+				StallWrites: diskStallArgs.StallWrites,
+				StallReads:  diskStallArgs.StallReads,
+				StallLogs:   diskStallArgs.StallLogs,
+				Throughput:  diskStallArgs.Throughput,
 			})
 		}),
 	}
@@ -134,10 +146,18 @@ func (cr *commandRegistry) buildDmsetupDiskStall() *cobra.Command {
 func (cr *commandRegistry) buildCgroupDiskStall() *cobra.Command {
 	return &cobra.Command{
 		Use:   fmt.Sprintf("%s <cluster> [--flags]", failures.CgroupDiskStallName),
-		Short: "TODO",
-		Long: `TODO
-		`,
-		Args: cobra.MinimumNArgs(1),
+		Short: "use cgroups v2 to create disk stalls",
+		Long: `Use cgroups v2 to create disk stalls. By default, only writes are stalled.
+
+--stall-writes: stall writes, defaults to true
+
+--stall-reads: stall reads
+
+--stall-logs: stall logs
+
+--throughput: bytes per second to stall disk to
+`,
+		Args: cobra.ExactArgs(1),
 		Run: wrap(func(cmd *cobra.Command, args []string) (retErr error) {
 			ctx := context.Background()
 			staller, err := cr.failureRegistry.GetFailure(args[0], failures.CgroupDiskStallName, config.Logger, isSecure)
@@ -145,9 +165,10 @@ func (cr *commandRegistry) buildCgroupDiskStall() *cobra.Command {
 				return err
 			}
 			return runFailure(ctx, staller, failures.DiskStallArgs{
-				ReadsToo:   diskStallArgs.ReadsToo,
-				LogsToo:    diskStallArgs.LogsToo,
-				Throughput: diskStallArgs.Throughput,
+				StallWrites: diskStallArgs.StallWrites,
+				StallReads:  diskStallArgs.StallReads,
+				StallLogs:   diskStallArgs.StallLogs,
+				Throughput:  diskStallArgs.Throughput,
 			})
 		}),
 	}

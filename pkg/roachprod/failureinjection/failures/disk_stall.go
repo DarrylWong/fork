@@ -60,23 +60,17 @@ func (s *CGroupDiskStaller) Description() string {
 }
 
 type DiskStallArgs struct {
-	LogsToo    bool
-	ReadsToo   bool
-	Throughput int
-	Nodes      install.Nodes
-}
-
-func (a DiskStallArgs) Description() []string {
-	return []string{
-		"LogsToo: limit throughput to logs directory",
-		"ReadsToo: limit read throughput",
-		"Throughput: throughput in bytes per second, default is 4 if unspecified",
-		"Nodes: nodes to stall",
-	}
+	StallLogs   bool
+	StallReads  bool
+	StallWrites bool
+	Throughput  int
+	Nodes       install.Nodes
 }
 
 func (s *CGroupDiskStaller) Setup(ctx context.Context, l *logger.Logger, args FailureArgs) error {
-	if args.(DiskStallArgs).LogsToo {
+	diskStallArgs := args.(DiskStallArgs)
+
+	if diskStallArgs.StallLogs {
 		if err := s.run(ctx, l, s.c.Nodes, "mkdir -p {store-dir}/logs"); err != nil {
 			return err
 		}
@@ -85,9 +79,14 @@ func (s *CGroupDiskStaller) Setup(ctx context.Context, l *logger.Logger, args Fa
 		}
 	}
 
-	s.readOrWrite = []bandwidthReadWrite{writeBandwidth}
-	if args.(DiskStallArgs).ReadsToo {
+	if diskStallArgs.StallWrites {
+		s.readOrWrite = []bandwidthReadWrite{writeBandwidth}
+	}
+	if diskStallArgs.StallReads {
 		s.readOrWrite = append(s.readOrWrite, readBandwidth)
+	}
+	if len(s.readOrWrite) == 0 {
+		return errors.New("at least one of reads or writes must be stalled")
 	}
 	return nil
 }
@@ -266,7 +265,7 @@ func (s *DmsetupDiskStaller) Setup(ctx context.Context, l *logger.Logger, _ Fail
 	}
 	// See https://github.com/cockroachdb/cockroach/issues/129619#issuecomment-2316147244.
 	if err = s.run(ctx, l, s.c.Nodes, `sudo tune2fs -O ^has_journal `+s.dev); err != nil {
-		return err
+		return errors.WithHintf(err, "disabling journaling fails if the cluster has been started")
 	}
 	if err = s.run(ctx, l, s.c.Nodes, `echo "0 $(sudo blockdev --getsz `+s.dev+`) linear `+s.dev+` 0" | `+
 		`sudo dmsetup create data1`); err != nil {
