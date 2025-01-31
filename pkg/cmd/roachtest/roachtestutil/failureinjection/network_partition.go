@@ -6,7 +6,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/failureinjection/failures"
-	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 )
 
@@ -32,8 +31,15 @@ func (f *NetworkPartitioner) PartitionNode(ctx context.Context, nodes option.Nod
 	defer l.Close()
 	f.l.Printf("creating network partition on node %s; details in: %s.log", nodes, logfile)
 
+	srcNodes := nodes.InstallNodes()
+	dstNodes := f.c.All().InstallNodes().Disjoint(srcNodes)
+
 	args := failures.NetworkPartitionArgs{
-		PartitionGroups: []install.Nodes{nodes.InstallNodes()},
+		Partitions: []failures.NetworkPartition{{
+			Source:      srcNodes,
+			Destination: dstNodes,
+			Type:        failures.Bidirectional,
+		}},
 	}
 	return f.networkPartitioner.Inject(ctx, l, args)
 }

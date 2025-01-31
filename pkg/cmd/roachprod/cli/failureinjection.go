@@ -34,7 +34,7 @@ func initFailureInjectionFlags(failureInjectionCmd *cobra.Command) {
 func (cr *commandRegistry) FailureInjectionCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "failure-injection [command] [flags...]",
-		Short: "injects failures into a cluster",
+		Short: "*experimental* injects failures into a cluster",
 	}
 	fr := failures.NewFailureRegistry()
 	fr.Register()
@@ -65,18 +65,15 @@ func (cr *commandRegistry) buildFIListCmd() *cobra.Command {
 
 func (cr *commandRegistry) buildIptablesPartitionNode() *cobra.Command {
 	return &cobra.Command{
-		Use:   fmt.Sprintf("%s <cluster> <partition-groups>", failures.IPTablesNetworkPartitionName),
+		Use:   fmt.Sprintf("%s <cluster> <partition...>", failures.IPTablesNetworkPartitionName),
 		Short: "use iptables to create network partitions",
 		Long: `Use iptables to create network partitions. 
 
-Traffic is blocked between groups of nodes as specified by the partition-groups argument. 
-The partition-groups argument is a colon-separated list of nodes, e.g. "1,3:2,4" will
+Traffic is blocked between groups of nodes as specified by the partition argument(s). 
+The partition argument is a colon-separated list of nodes, e.g. "1,3:2,4" will
 partition nodes 1 and 3 from nodes 2 and 4.
-
-If only one partition-group is specified, e.g. "1,3" the nodes in that group will be partitioned
-from all other nodes in the cluster. Currently only two partition groups are supported.
 		`,
-		Args: cobra.RangeArgs(2, 3),
+		Args: cobra.MinimumNArgs(2),
 		Run: wrap(func(cmd *cobra.Command, args []string) (retErr error) {
 			ctx := context.Background()
 			cluster := args[0]
@@ -87,24 +84,39 @@ from all other nodes in the cluster. Currently only two partition groups are sup
 			}
 			failureArgs := failures.NetworkPartitionArgs{}
 
-			groups := strings.Split(args[1], ":")
-			for _, group := range groups {
-				nodes, err := install.ListNodes(group, len(c.Nodes))
+			// TODO(darryl): This string parsing is mostly just placeholder. Once we have the ability
+			// to generate failure plans and failure steps, we can allow the user to pass in a
+			// yaml file instead similar to chaos mesh.
+			for _, arg := range args[1:] {
+				var groups []string
+				partition := failures.NetworkPartition{}
+				for _, r := range arg {
+					switch r {
+					case ':':
+						partition.Type = failures.Bidirectional
+						groups = strings.Split(arg, ":")
+					case '<':
+						partition.Type = failures.Incoming
+						groups = strings.Split(arg, "<")
+					case '>':
+						partition.Type = failures.Outgoing
+						groups = strings.Split(arg, ">")
+					}
+				}
+				if len(groups) != 2 {
+					return fmt.Errorf("invalid partition %s", arg)
+				}
+				partition.Source, err = install.ListNodes(groups[0], len(c.Nodes))
 				if err != nil {
 					return err
 				}
-				failureArgs.PartitionGroups = append(failureArgs.PartitionGroups, nodes)
-			}
 
-			if len(args) == 3 {
-				failureArgs.NodesToRestore, err = install.ListNodes(args[2], len(c.Nodes))
+				partition.Destination, err = install.ListNodes(groups[1], len(c.Nodes))
 				if err != nil {
 					return err
 				}
-			} else {
-				failureArgs.NodesToRestore = failureArgs.PartitionGroups[0]
+				failureArgs.Partitions = append(failureArgs.Partitions, partition)
 			}
-
 			return runFailure(ctx, partitioner, failureArgs)
 		}),
 	}

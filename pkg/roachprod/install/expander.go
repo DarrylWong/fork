@@ -345,7 +345,17 @@ func (e *expander) maybeExpandIPAddress(
 
 	var err error
 	switch m[2] {
-	case ":private":
+	case ":public":
+		if e.publicIPs == nil {
+			e.publicIPs = make(map[Node]string, len(c.VMs))
+			for _, node := range allNodes(len(c.VMs)) {
+				e.publicIPs[node] = c.Host(node)
+			}
+		}
+
+		s, err = e.maybeExpandMap(c, e.publicIPs, m[1])
+	default:
+
 		if e.privateIPs == nil {
 			e.privateIPs = make(map[Node]string, len(c.VMs))
 			for _, node := range allNodes(len(c.VMs)) {
@@ -358,15 +368,6 @@ func (e *expander) maybeExpandIPAddress(
 		}
 
 		s, err = e.maybeExpandMap(c, e.privateIPs, m[1])
-	default:
-		if e.publicIPs == nil {
-			e.publicIPs = make(map[Node]string, len(c.VMs))
-			for _, node := range allNodes(len(c.VMs)) {
-				e.publicIPs[node] = c.Host(node)
-			}
-		}
-
-		s, err = e.maybeExpandMap(c, e.publicIPs, m[1])
 	}
 	return s, err == nil, err
 }

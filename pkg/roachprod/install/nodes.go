@@ -103,3 +103,14 @@ func (n Nodes) Contains(node Node) bool {
 	}
 	return false
 }
+
+// Disjoint returns all other nodes in the cluster.
+func (n Nodes) Disjoint(otherNodes Nodes) Nodes {
+	var disjoint Nodes
+	for _, node := range n {
+		if !otherNodes.Contains(node) {
+			disjoint = append(disjoint, node)
+		}
+	}
+	return disjoint
+}
