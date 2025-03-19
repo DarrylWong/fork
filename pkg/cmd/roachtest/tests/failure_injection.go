@@ -60,7 +60,11 @@ func (t *failureSmokeTest) run(
 	// TODO(darryl): In the future, roachtests should interact with the failure injection library
 	// through helper functions in roachtestutil so they don't have to interface with roachprod
 	// directly.
-	failureMode, err := fr.GetFailureMode(c.MakeNodes(c.CRDBNodes()), t.failureName, l, c.IsSecure())
+	connectionInfo := failures.ConnectionInfo{
+		Secure:         c.IsSecure(),
+		LocalCertsPath: c.LocalCertsDir(),
+	}
+	failureMode, err := fr.GetFailureMode(c.MakeNodes(c.CRDBNodes()), t.failureName, l, connectionInfo)
 	if err != nil {
 		return err
 	}
@@ -145,7 +149,11 @@ func (t *failureSmokeTest) run(
 func (t *failureSmokeTest) noopRun(
 	ctx context.Context, l *logger.Logger, c cluster.Cluster, fr *failures.FailureRegistry,
 ) error {
-	failureMode, err := fr.GetFailureMode(c.MakeNodes(c.CRDBNodes()), t.failureName, l, c.IsSecure())
+	connectionInfo := failures.ConnectionInfo{
+		Secure:         c.IsSecure(),
+		LocalCertsPath: c.LocalCertsDir(),
+	}
+	failureMode, err := fr.GetFailureMode(c.MakeNodes(c.CRDBNodes()), t.failureName, l, connectionInfo)
 	if err != nil {
 		return err
 	}
@@ -509,15 +517,6 @@ var cgroupsDiskStallTests = func(c cluster.Cluster) []failureSmokeTest {
 					return assertRWBytes(ctx, l, res, stallReads, stallWrites)
 				},
 				validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f failures.FailureMode) error {
-					// Wait for replication since the stalled node may have just restarted.
-					// TODO(darryl): The failure mode itself should do this in WaitForFailureToRecover.
-					// It should also wait for replicas to rebalance, although this test is not large
-					// enough for that to matter.
-					db := c.Conn(ctx, l, stalledNode[0])
-					defer db.Close()
-					if err := roachtestutil.WaitForReplication(ctx, l, db, 3 /* replicationFactor */, roachtestutil.AtLeastReplicationFactor); err != nil {
-						return err
-					}
 					res, err := getRWBytesOverTime(ctx, l, c, f.(*failures.CGroupDiskStaller), stalledNode, unaffectedNode)
 					if err != nil {
 						return err

@@ -7,7 +7,9 @@ package failures
 
 import (
 	"context"
+	gosql "database/sql"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -72,6 +74,17 @@ type GenericFailure struct {
 	runTitle          string
 	networkInterfaces []string
 	diskDevice        diskDevice
+	connCache         []*gosql.DB
+}
+
+func makeGenericFailure(clusterName string, l *logger.Logger, connectionInfo ConnectionInfo, failureModeName string) (*GenericFailure, error) {
+	c, err := roachprod.GetClusterFromCache(l, clusterName, install.SecureOption(connectionInfo.Secure), install.PGUrlCertsDirOption(connectionInfo.LocalCertsPath))
+	if err != nil {
+		return nil, err
+	}
+
+	genericFailure := GenericFailure{c: c, runTitle: failureModeName, connCache: make([]*gosql.DB, len(c.Nodes))}
+	return &genericFailure, nil
 }
 
 func (f *GenericFailure) Run(
@@ -101,6 +114,48 @@ func (f *GenericFailure) RunWithDetails(
 		return install.RunResultDetails{}, err
 	}
 	return res[0], nil
+}
+
+func (f *GenericFailure) Conn(ctx context.Context, l *logger.Logger, node install.Nodes) (*gosql.DB, error) {
+	nodeIdx := node[0] - 1
+	if f.connCache[nodeIdx] == nil {
+		desc, err := f.c.DiscoverService(ctx, node[0], "" /* virtualClusterName */, install.ServiceTypeSQL, 0 /* sqlInstance */)
+		if err != nil {
+			return nil, err
+		}
+		ip := f.c.Host(node[0])
+		if ip == "" {
+			return nil, errors.Errorf("empty ip for node %d", node)
+		}
+		authMode := install.DefaultAuthMode()
+		if !f.c.Secure {
+			authMode = install.AuthRootCert
+		}
+		nodeURL := f.c.NodeURL(ip, desc.Port, "" /* virtualClusterName */, desc.ServiceMode, authMode, "" /* database */)
+		nodeURL = strings.Trim(nodeURL, "'")
+		pgurl, err := url.Parse(nodeURL)
+		if err != nil {
+			return nil, err
+		}
+		vals := make(url.Values)
+		vals.Add("connect_timeout", "30")
+		nodeURL = pgurl.String() + "&" + vals.Encode()
+		l.Printf("Creating connection to node %d at %s", node[0], nodeURL)
+		f.connCache[nodeIdx], err = gosql.Open("postgres", nodeURL)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return f.connCache[nodeIdx], nil
+}
+
+func (f *GenericFailure) CloseConnections() {
+	for _, db := range f.connCache {
+		if db != nil {
+			_ = db.Close()
+		}
+	}
 }
 
 // NetworkInterfaces returns the network interfaces used by the VMs in the cluster.
@@ -164,17 +219,13 @@ func (f *GenericFailure) DiskDeviceMajorMinor(
 }
 
 func (f *GenericFailure) PingNode(
-	ctx context.Context, l *logger.Logger, nodes install.Nodes,
+	ctx context.Context, l *logger.Logger, node install.Nodes,
 ) error {
-	// TODO(darryl): Consider having failure modes accept a db connection pool
-	// in makeFailureFunc() or having each failureMode manage it's own pool.
-	res, err := f.c.ExecSQL(
-		ctx, l, nodes, install.SystemInterfaceName,
-		0, install.AuthUserCert, "", /* database */
-		[]string{"-e", "SELECT 1"},
-	)
-
-	return errors.CombineErrors(err, res[0].Err)
+	db, err := f.Conn(ctx, l, node)
+	if err != nil {
+		return err
+	}
+	return db.PingContext(ctx)
 }
 
 func (f *GenericFailure) WaitForSQLReady(
@@ -252,4 +303,88 @@ func forEachNode(nodes install.Nodes, fn func(install.Nodes) error) error {
 		}
 	}
 	return nil
+}
+func (f *GenericFailure) WaitForReplication(
+	ctx context.Context, l *logger.Logger, node install.Nodes,
+) error {
+	db, err := f.Conn(ctx, l, node)
+	if err != nil {
+		return err
+	}
+
+	numReplicasQuery := `SELECT substring(raw_config_sql FROM 'num_replicas\s*=\s*([0-9]+)') AS num_replicas
+	FROM [SHOW ZONE CONFIGURATION FOR RANGE default];`
+
+	rows, err := db.QueryContext(ctx, numReplicasQuery)
+	if err != nil {
+		return err
+	}
+	var replicationFactor int
+	if rows.Next() {
+		if err = rows.Scan(&replicationFactor); err != nil {
+			return err
+		}
+	}
+
+	var oldN int
+	start := timeutil.Now()
+	for {
+		var n int
+		if err := db.QueryRowContext(
+			ctx,
+			fmt.Sprintf(
+				"SELECT count(1) FROM crdb_internal.ranges WHERE array_length(replicas, 1) < %d",
+				replicationFactor,
+			),
+		).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			l.Printf("up-replication complete")
+			return nil
+		}
+		if timeutil.Since(start) > 30*time.Second || oldN != n {
+			l.Printf("still waiting for full replication (%d ranges left)", n)
+		}
+		oldN = n
+		time.Sleep(time.Second)
+	}
+}
+
+func (f *GenericFailure) WaitForReplicaRebalance(
+	ctx context.Context, l *logger.Logger, node install.Nodes,
+) error {
+	db, err := f.Conn(ctx, l, node)
+	if err != nil {
+		return err
+	}
+
+	start := timeutil.Now()
+	for {
+		query := `SELECT
+		node_id,
+		(metrics->>'range.snapshots.rebalancing.rcvd-bytes')::INT AS rebalancing_rcvd_bytes
+		FROM crdb_internal.kv_store_status
+		WHERE node_id = %d
+		ORDER BY node_id
+`
+		rows, err := db.QueryContext(ctx, fmt.Sprintf(query, node[0]))
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var nodeID, rebalancingRcvdBytes int
+			if err = rows.Scan(&nodeID, &rebalancingRcvdBytes); err != nil {
+				return err
+			}
+			if rebalancingRcvdBytes == 0 {
+				l.Printf("rebalancing complete")
+				return nil
+			}
+			if timeutil.Since(start) > 30*time.Second {
+				l.Printf("rebalance status: n%d bytes recieved=%d", nodeID, rebalancingRcvdBytes)
+			}
+		}
+		time.Sleep(time.Second)
+	}
 }

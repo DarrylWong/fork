@@ -2353,6 +2353,10 @@ func (c *clusterImpl) RefetchCertsFromNode(ctx context.Context, node int) error 
 	})
 }
 
+func (c *clusterImpl) LocalCertsDir() string {
+	return c.localCertsDir
+}
+
 func (c *clusterImpl) SetDefaultVirtualCluster(name string) {
 	c.defaultVirtualCluster = name
 }

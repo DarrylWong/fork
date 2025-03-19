@@ -28,13 +28,12 @@ type CGroupDiskStaller struct {
 	GenericFailure
 }
 
-func MakeCgroupDiskStaller(clusterName string, l *logger.Logger, secure bool) (FailureMode, error) {
-	c, err := roachprod.GetClusterFromCache(l, clusterName, install.SecureOption(secure))
+func MakeCgroupDiskStaller(clusterName string, l *logger.Logger, connectionInfo ConnectionInfo) (FailureMode, error) {
+	genericFailure, err := makeGenericFailure(clusterName, l, connectionInfo, CgroupsDiskStallName)
 	if err != nil {
 		return nil, err
 	}
-	genericFailure := GenericFailure{c: c, runTitle: CgroupsDiskStallName}
-	return &CGroupDiskStaller{GenericFailure: genericFailure}, nil
+	return &CGroupDiskStaller{GenericFailure: *genericFailure}, nil
 }
 
 func registerCgroupDiskStall(r *FailureRegistry) {
@@ -82,6 +81,8 @@ fi
 	return nil
 }
 func (s *CGroupDiskStaller) Cleanup(ctx context.Context, l *logger.Logger, args FailureArgs) error {
+	defer s.CloseConnections()
+
 	stallType := []bandwidthType{readBandwidth, writeBandwidth}
 	nodes := args.(DiskStallArgs).Nodes
 
@@ -199,6 +200,14 @@ func (s *CGroupDiskStaller) WaitForFailureToPropagate(
 	ctx context.Context, l *logger.Logger, args FailureArgs,
 ) error {
 	diskStallArgs := args.(DiskStallArgs)
+	for _, node := range s.c.Nodes {
+		if err := s.PingNode(ctx, l, install.Nodes{node}); err != nil {
+			l.Printf("failed to ping node %d: %v", node, err)
+		} else {
+			l.Printf("node %d is still alive", node)
+		}
+	}
+
 	if diskStallArgs.StallWrites {
 		// If writes are stalled, we expect the disk stall detection to kick in
 		// and kill the node.
@@ -214,7 +223,13 @@ func (s *CGroupDiskStaller) WaitForFailureToRecover(
 ) error {
 	nodes := args.(DiskStallArgs).Nodes
 	return forEachNode(nodes, func(n install.Nodes) error {
-		return s.WaitForSQLReady(ctx, l, n, time.Minute)
+		if err := s.WaitForSQLReady(ctx, l, nodes, time.Minute); err != nil {
+			return err
+		}
+		if err := s.WaitForReplication(ctx, l, nodes); err != nil {
+			return err
+		}
+		return s.WaitForReplicaRebalance(ctx, l, nodes)
 	})
 }
 
@@ -316,15 +331,13 @@ type DmsetupDiskStaller struct {
 }
 
 func MakeDmsetupDiskStaller(
-	clusterName string, l *logger.Logger, secure bool,
+	clusterName string, l *logger.Logger, connectionInfo ConnectionInfo,
 ) (FailureMode, error) {
-	c, err := roachprod.GetClusterFromCache(l, clusterName, install.SecureOption(secure))
+	genericFailure, err := makeGenericFailure(clusterName, l, connectionInfo, DmsetupDiskStallName)
 	if err != nil {
 		return nil, err
 	}
-
-	genericFailure := GenericFailure{c: c, runTitle: DmsetupDiskStallName}
-	return &DmsetupDiskStaller{GenericFailure: genericFailure}, nil
+	return &DmsetupDiskStaller{GenericFailure: *genericFailure}, nil
 }
 
 func registerDmsetupDiskStall(r *FailureRegistry) {
@@ -421,6 +434,8 @@ func (s *DmsetupDiskStaller) Recover(
 func (s *DmsetupDiskStaller) Cleanup(
 	ctx context.Context, l *logger.Logger, args FailureArgs,
 ) error {
+	defer s.CloseConnections()
+
 	diskStallArgs := args.(DiskStallArgs)
 	if diskStallArgs.RestartNodes {
 		stopOpts := roachprod.DefaultStopOpts()
@@ -490,6 +505,12 @@ func (s *DmsetupDiskStaller) WaitForFailureToRecover(
 ) error {
 	nodes := args.(DiskStallArgs).Nodes
 	return forEachNode(nodes, func(n install.Nodes) error {
-		return s.WaitForSQLReady(ctx, l, n, time.Minute)
+		if err := s.WaitForSQLReady(ctx, l, n, time.Minute); err != nil {
+			return err
+		}
+		if err := s.WaitForReplication(ctx, l, nodes); err != nil {
+			return err
+		}
+		return s.WaitForReplicaRebalance(ctx, l, nodes)
 	})
 }
