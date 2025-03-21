@@ -28,7 +28,9 @@ type CGroupDiskStaller struct {
 	GenericFailure
 }
 
-func MakeCgroupDiskStaller(clusterName string, l *logger.Logger, connectionInfo ConnectionInfo) (FailureMode, error) {
+func MakeCgroupDiskStaller(
+	clusterName string, l *logger.Logger, connectionInfo ConnectionInfo,
+) (FailureMode, error) {
 	genericFailure, err := makeGenericFailure(clusterName, l, connectionInfo, CgroupsDiskStallName)
 	if err != nil {
 		return nil, err

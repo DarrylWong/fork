@@ -514,7 +514,18 @@ var cgroupsDiskStallTests = func(c cluster.Cluster) []failureSmokeTest {
 					}
 					l.Printf("ReadBytes and WriteBytes over last 30 seconds:%+v", res)
 
-					return assertRWBytes(ctx, l, res, stallReads, stallWrites)
+					if err := assertRWBytes(ctx, l, res, stallReads, stallWrites); err != nil {
+						return err
+					}
+
+					// Wait for a minute with the failure injected so the cluster starts rebalancing
+					// ranges, and we can properly test WaitForFailureToRestore.
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-time.After(time.Minute):
+					}
+					return nil
 				},
 				validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f failures.FailureMode) error {
 					res, err := getRWBytesOverTime(ctx, l, c, f.(*failures.CGroupDiskStaller), stalledNode, unaffectedNode)
@@ -583,6 +594,14 @@ var dmsetupDiskStallTest = func(c cluster.Cluster) failureSmokeTest {
 			if !touchFile(ctx, l, c, unaffectedNode) {
 				return errors.Errorf("expected creating a file to work on unaffected node %d", stalledNode)
 			}
+			// Wait for a minute with the failure injected so the cluster starts rebalancing
+			// ranges, and we can properly test WaitForFailureToRestore.
+			// TODO: make this part of the framework
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Minute):
+			}
 			return nil
 		},
 		validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f failures.FailureMode) error {
@@ -624,6 +643,9 @@ func setupFailureSmokeTests(
 		// Don't disable outright as we still want to test that the node eventually dies.
 		fmt.Sprintf("COCKROACH_LOG_MAX_SYNC_DURATION=%s", 2*time.Minute),
 		fmt.Sprintf("COCKROACH_ENGINE_MAX_SYNC_DURATION_DEFAULT=%s", 2*time.Minute))
+	// Some failure modes may take down a node. To speed up the exercise of waiting
+	// for a failure to propagate/restore, set `server.time_until_store_dead` to 30s.
+	startSettings.ClusterSettings["server.time_until_store_dead"] = "30s"
 	c.Start(ctx, t.L(), option.DefaultStartOpts(), startSettings, c.CRDBNodes())
 
 	// Initialize the workloads we will use.
@@ -683,7 +705,7 @@ func registerFISmokeTest(r registry.Registry) {
 	r.Add(registry.TestSpec{
 		Name:             "failure-injection/smoke-test",
 		Owner:            registry.OwnerTestEng,
-		Cluster:          r.MakeClusterSpec(4, spec.WorkloadNode(), spec.CPU(2), spec.WorkloadNodeCPU(2), spec.ReuseNone()),
+		Cluster:          r.MakeClusterSpec(5, spec.WorkloadNode(), spec.ReuseNone()),
 		CompatibleClouds: registry.OnlyGCE,
 		// TODO(darryl): When the FI library starts seeing more use through roachtests, CLI, etc. switch this to Nightly.
 		Suites: registry.ManualOnly,

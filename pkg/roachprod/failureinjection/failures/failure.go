@@ -9,6 +9,7 @@ import (
 	"context"
 	gosql "database/sql"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/util/retry"
 	"net/url"
 	"strconv"
 	"strings"
@@ -17,7 +18,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachprod"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
-	"github.com/cockroachdb/cockroach/pkg/util/retry"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
 )
@@ -77,7 +77,9 @@ type GenericFailure struct {
 	connCache         []*gosql.DB
 }
 
-func makeGenericFailure(clusterName string, l *logger.Logger, connectionInfo ConnectionInfo, failureModeName string) (*GenericFailure, error) {
+func makeGenericFailure(
+	clusterName string, l *logger.Logger, connectionInfo ConnectionInfo, failureModeName string,
+) (*GenericFailure, error) {
 	c, err := roachprod.GetClusterFromCache(l, clusterName, install.SecureOption(connectionInfo.Secure), install.PGUrlCertsDirOption(connectionInfo.LocalCertsPath))
 	if err != nil {
 		return nil, err
@@ -116,7 +118,9 @@ func (f *GenericFailure) RunWithDetails(
 	return res[0], nil
 }
 
-func (f *GenericFailure) Conn(ctx context.Context, l *logger.Logger, node install.Nodes) (*gosql.DB, error) {
+func (f *GenericFailure) Conn(
+	ctx context.Context, l *logger.Logger, node install.Nodes,
+) (*gosql.DB, error) {
 	nodeIdx := node[0] - 1
 	if f.connCache[nodeIdx] == nil {
 		desc, err := f.c.DiscoverService(ctx, node[0], "" /* virtualClusterName */, install.ServiceTypeSQL, 0 /* sqlInstance */)
@@ -235,7 +239,6 @@ func (f *GenericFailure) WaitForSQLReady(
 	err := retryForDuration(ctx, timeout, func() error {
 		if err := f.PingNode(ctx, l, node); err == nil {
 			l.Printf("Connected to node %d after %s", node, timeutil.Since(start))
-			return nil
 		}
 		return errors.Newf("unable to connect to node %d", node)
 	})
@@ -327,8 +330,7 @@ func (f *GenericFailure) WaitForReplication(
 	}
 
 	var oldN int
-	start := timeutil.Now()
-	for {
+	return runEveryN(ctx, 3*time.Second, func(done chan struct{}) error {
 		var n int
 		if err := db.QueryRowContext(
 			ctx,
@@ -341,16 +343,35 @@ func (f *GenericFailure) WaitForReplication(
 		}
 		if n == 0 {
 			l.Printf("up-replication complete")
+			close(done)
 			return nil
 		}
-		if timeutil.Since(start) > 30*time.Second || oldN != n {
+		if oldN != n {
 			l.Printf("still waiting for full replication (%d ranges left)", n)
 		}
 		oldN = n
-		time.Sleep(time.Second)
-	}
+		return nil
+	})
 }
 
+// replicaStdDev returns the standard deviation of replica counts
+// in the cluster.
+func replicaStdDev(ctx context.Context, db *gosql.DB) (float64, error) {
+	var replicaCountStdDev float64
+	if err := db.QueryRowContext(
+		ctx, `SELECT stddev(range_count) FROM crdb_internal.kv_store_status`,
+	).Scan(&replicaCountStdDev); err != nil {
+		return 0, err
+	}
+
+	return replicaCountStdDev, nil
+}
+
+// WaitForReplicaRebalance blocks until the standard deviation of replica counts
+// across each store is less than 1. Note that this doesn't wait for rebalancing to _fully_
+// finish; there can still be range events that happen after this. However, even for small
+// clusters with < 100 ranges, waiting for rebalancing to fully complete can take 10+ minutes
+// so lets just get close enough.
 func (f *GenericFailure) WaitForReplicaRebalance(
 	ctx context.Context, l *logger.Logger, node install.Nodes,
 ) error {
@@ -359,32 +380,44 @@ func (f *GenericFailure) WaitForReplicaRebalance(
 		return err
 	}
 
-	start := timeutil.Now()
-	for {
-		query := `SELECT
-		node_id,
-		(metrics->>'range.snapshots.rebalancing.rcvd-bytes')::INT AS rebalancing_rcvd_bytes
-		FROM crdb_internal.kv_store_status
-		WHERE node_id = %d
-		ORDER BY node_id
-`
-		rows, err := db.QueryContext(ctx, fmt.Sprintf(query, node[0]))
+	return runEveryN(ctx, 3*time.Second, func(done chan struct{}) error {
+		stdDev, err := replicaStdDev(ctx, db)
 		if err != nil {
 			return err
 		}
-		for rows.Next() {
-			var nodeID, rebalancingRcvdBytes int
-			if err = rows.Scan(&nodeID, &rebalancingRcvdBytes); err != nil {
+
+		l.Printf("replica standard deviation: %f\n", stdDev)
+		if stdDev < 1 {
+			l.Printf("replica standard deviation is less than 1, rebalancing complete")
+			close(done)
+			return nil
+		}
+		return nil
+	})
+}
+
+// runEveryN is a helper that runs a func every `queryInterval` until
+// the done channel is closed or the context is cancelled.
+func runEveryN(
+	ctx context.Context, queryInterval time.Duration, f func(done chan struct{}) error,
+) error {
+	var statsTimer timeutil.Timer
+	defer statsTimer.Stop()
+	statsTimer.Reset(queryInterval)
+	done := make(chan struct{})
+	defer close(done)
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-done:
+			return nil
+		case <-statsTimer.C:
+			statsTimer.Read = true
+			if err := f(done); err != nil {
 				return err
 			}
-			if rebalancingRcvdBytes == 0 {
-				l.Printf("rebalancing complete")
-				return nil
-			}
-			if timeutil.Since(start) > 30*time.Second {
-				l.Printf("rebalance status: n%d bytes recieved=%d", nodeID, rebalancingRcvdBytes)
-			}
+			statsTimer.Reset(queryInterval)
 		}
-		time.Sleep(time.Second)
 	}
 }
