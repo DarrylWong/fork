@@ -31,6 +31,7 @@ func (r *FailureRegistry) Register() {
 	registerDmsetupDiskStall(r)
 	registerIPTablesPartitionFailure(r)
 	registerNetworkLatencyFailure(r)
+	registerVMRestart(r)
 }
 
 func (r *FailureRegistry) add(

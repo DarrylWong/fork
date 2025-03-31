@@ -63,6 +63,31 @@ func (n NodeListOption) Merge(o NodeListOption) NodeListOption {
 	return r
 }
 
+// Contains returns if the given NodeListOption contains the node.
+func (n NodeListOption) Contains(nodeID int) bool {
+	for _, node := range n {
+		if node == nodeID {
+			return true
+		}
+	}
+	return false
+}
+
+// Remove returns the NodeListOption with any nodes
+func (n NodeListOption) Remove(o NodeListOption) NodeListOption {
+	t := make(NodeListOption, 0, len(n)-len(o))
+	for _, node := range n {
+		// Since NodeListOptions are sorted, we could use a double iterator approach
+		// and be more efficient. For simplicity, just use a naive quadratic loop since
+		// we expect len(n) * len(o) to be relatively small.
+		if !o.Contains(node) {
+			t = append(t, node)
+		}
+	}
+
+	return t
+}
+
 // RandNode returns a random node from the NodeListOption.
 func (n NodeListOption) RandNode() NodeListOption {
 	return NodeListOption{n[rand.Intn(len(n))]}

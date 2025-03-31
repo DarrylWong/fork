@@ -8,6 +8,7 @@ package failures
 import (
 	"context"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/vm"
 	"strconv"
 	"strings"
 	"time"
@@ -72,6 +73,18 @@ type GenericFailure struct {
 	runTitle          string
 	networkInterfaces []string
 	diskDevice        diskDevice
+}
+
+func (f *GenericFailure) InstallNodesToVMs(nodes install.Nodes) ([]vm.VM, error) {
+	var vms []vm.VM
+	for _, node := range nodes {
+		if int(node) > len(f.c.VMs) {
+			return nil, errors.Newf("node %d out of range", node)
+		}
+		vms = append(vms, f.c.VMs[node-1])
+	}
+
+	return vms, nil
 }
 
 func (f *GenericFailure) Run(

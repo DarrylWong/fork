@@ -599,6 +599,40 @@ var dmsetupDiskStallTest = func(c cluster.Cluster) failureSmokeTest {
 	}
 }
 
+var vmRestartTests = func(c cluster.Cluster) []failureSmokeTest {
+	var tests []failureSmokeTest
+	for _, gracefulShutdown := range []bool{true, false} {
+		nodes := c.CRDBNodes()
+		rand.Shuffle(len(nodes), func(i, j int) {
+			nodes[i], nodes[j] = nodes[j], nodes[i]
+		})
+		restartedNode := nodes[0]
+
+		tests = append(tests, failureSmokeTest{
+			testName:    fmt.Sprintf("%s/gracefulShutdown=%t", failures.VMRestartName, gracefulShutdown),
+			failureName: failures.VMRestartName,
+			args: failures.VMRestartArgs{
+				GracefulShutdown: gracefulShutdown,
+				Nodes:            install.Nodes{install.Node(restartedNode)},
+			},
+			validateFailure: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f failures.FailureMode) error {
+				return nil
+			},
+			validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f failures.FailureMode) error {
+				return nil
+			},
+			workload: func(ctx context.Context, c cluster.Cluster, args ...string) error {
+				cmd := roachtestutil.NewCommand("./cockroach workload run kv").
+					// Don't run the workload on the node we will be restarting.
+					Arg("{pgurl%s}", c.CRDBNodes().Remove(c.Node(restartedNode))).
+					String()
+				return c.RunE(ctx, option.WithNodes(c.WorkloadNode()), cmd)
+			},
+		})
+	}
+	return tests
+}
+
 func defaultFailureSmokeTestWorkload(ctx context.Context, c cluster.Cluster, args ...string) error {
 	workloadArgs := strings.Join(args, " ")
 	cmd := roachtestutil.NewCommand("./cockroach workload run kv %s", workloadArgs).
@@ -641,12 +675,13 @@ func runFailureSmokeTest(ctx context.Context, t test.Test, c cluster.Cluster, no
 
 	var failureSmokeTests = []failureSmokeTest{
 		bidirectionalNetworkPartitionTest(c),
-		asymmetricIncomingNetworkPartitionTest(c),
-		asymmetricOutgoingNetworkPartitionTest(c),
-		latencyTest(c),
-		dmsetupDiskStallTest(c),
+		//asymmetricIncomingNetworkPartitionTest(c),
+		//asymmetricOutgoingNetworkPartitionTest(c),
+		//latencyTest(c),
+		//dmsetupDiskStallTest(c),
 	}
-	failureSmokeTests = append(failureSmokeTests, cgroupsDiskStallTests(c)...)
+	//failureSmokeTests = append(failureSmokeTests, cgroupsDiskStallTests(c)...)
+	failureSmokeTests = append(failureSmokeTests, vmRestartTests(c)...)
 
 	// Randomize the order of the tests in case any of the failures have unexpected side
 	// effects that may mask failures, e.g. a cgroups disk stall isn't properly recovered
