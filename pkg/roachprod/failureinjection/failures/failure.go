@@ -239,6 +239,7 @@ func (f *GenericFailure) WaitForSQLReady(
 	err := retryForDuration(ctx, timeout, func() error {
 		if err := f.PingNode(ctx, l, node); err == nil {
 			l.Printf("Connected to node %d after %s", node, timeutil.Since(start))
+			return nil
 		}
 		return errors.Newf("unable to connect to node %d", node)
 	})
@@ -427,7 +428,6 @@ func runEveryN(
 	defer statsTimer.Stop()
 	statsTimer.Reset(queryInterval)
 	done := make(chan struct{})
-	defer close(done)
 	for {
 		select {
 		case <-ctx.Done():

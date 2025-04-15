@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cockroachdb/cockroach/pkg/roachprod"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"golang.org/x/sys/unix"
@@ -28,18 +27,13 @@ func registerNodeKillFailure(r *FailureRegistry) {
 	r.add(NodeKillFailureName, NodeKillArgs{}, MakeNodeKillFailure)
 }
 
-func MakeNodeKillFailure(clusterName string, l *logger.Logger, secure bool) (FailureMode, error) {
-	c, err := roachprod.GetClusterFromCache(l, clusterName, install.SecureOption(secure))
+func MakeNodeKillFailure(clusterName string, l *logger.Logger, connectionInfo ConnectionInfo) (FailureMode, error) {
+	genericFailure, err := makeGenericFailure(clusterName, l, connectionInfo, NodeKillFailureName)
 	if err != nil {
 		return nil, err
 	}
 
-	return &NodeKillFailure{
-		GenericFailure: GenericFailure{
-			c:        c,
-			runTitle: NodeKillFailureName,
-		},
-	}, nil
+	return &NodeKillFailure{GenericFailure: *genericFailure}, nil
 }
 
 type NodeKillFailure struct {
