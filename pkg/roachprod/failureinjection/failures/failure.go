@@ -377,24 +377,24 @@ func (f *GenericFailure) WaitForReplication(
 	})
 }
 
-// replicaStdDev returns the standard deviation of replica counts
+// replicaCV returns the coefficient of variation of replica counts
 // in the cluster.
-func replicaStdDev(ctx context.Context, db *gosql.DB) (float64, error) {
-	var replicaCountStdDev float64
+func replicaCV(ctx context.Context, db *gosql.DB) (float64, error) {
+	var replicaCountCV float64
 	if err := db.QueryRowContext(
-		ctx, `SELECT stddev(range_count) FROM crdb_internal.kv_store_status`,
-	).Scan(&replicaCountStdDev); err != nil {
+		ctx, `SELECT stddev(range_count) / avg(range_count) FROM crdb_internal.kv_store_status`,
+	).Scan(&replicaCountCV); err != nil {
 		return 0, err
 	}
 
-	return replicaCountStdDev, nil
+	return replicaCountCV, nil
 }
 
-// WaitForReplicaRebalance blocks until the standard deviation of replica counts
-// across each store is less than 1. Note that this doesn't wait for rebalancing to _fully_
-// finish; there can still be range events that happen after this. However, even for small
-// clusters with < 100 ranges, waiting for rebalancing to fully complete can take 10+ minutes
-// so lets just get close enough.
+// WaitForReplicaRebalance blocks until the coefficient of variation in replica counts
+// across each store is less than `range_rebalance_threshold`. Note that this doesn't wait for
+// rebalancing to _fully_ finish; there can still be range events that happen after this.
+// However, even for small clusters with < 100 ranges, waiting for rebalancing to fully complete
+// can take 10+ minutes so lets just get close enough.
 func (f *GenericFailure) WaitForReplicaRebalance(
 	ctx context.Context, l *logger.Logger, node install.Nodes,
 ) error {
@@ -403,17 +403,34 @@ func (f *GenericFailure) WaitForReplicaRebalance(
 		return err
 	}
 
+	// This is the threshold the db uses to determine that a store is under or overfull
+	// and needs to be rebalanced.
+	var threshold float64
+	if err = db.QueryRowContext(
+		ctx, "SHOW CLUSTER SETTING kv.allocator.range_rebalance_threshold",
+	).Scan(&threshold); err != nil {
+		return err
+	}
+
+	// If we query too soon after a node is added to the cluster, our calculation may
+	// not include those stores. Make sure we observe a few consecutive intervals that confirm
+	// our ranges are stable.
+	consecutiveStableIntervals := 0
 	return runEveryN(ctx, 3*time.Second, func(done chan struct{}) error {
-		stdDev, err := replicaStdDev(ctx, db)
+		cv, err := replicaCV(ctx, db)
 		if err != nil {
 			return err
 		}
 
-		l.Printf("replica standard deviation: %f\n", stdDev)
-		if stdDev < 1 {
-			l.Printf("replica standard deviation is less than 1, rebalancing complete")
-			close(done)
-			return nil
+		l.Printf("replica coefficient of variation: %f\n", cv)
+		if cv < threshold {
+			consecutiveStableIntervals++
+			l.Printf("replica coefficient of variation is less than %f", threshold)
+			if consecutiveStableIntervals > 2 {
+				close(done)
+			}
+		} else {
+			consecutiveStableIntervals = 0
 		}
 		return nil
 	})
