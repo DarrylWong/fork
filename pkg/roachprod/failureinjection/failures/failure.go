@@ -377,24 +377,57 @@ func (f *GenericFailure) WaitForReplication(
 	})
 }
 
-// replicaCV returns the coefficient of variation of replica counts
-// in the cluster.
-func replicaCV(ctx context.Context, db *gosql.DB) (float64, error) {
-	var replicaCountCV float64
-	if err := db.QueryRowContext(
-		ctx, `SELECT stddev(range_count) / avg(range_count) FROM crdb_internal.kv_store_status`,
-	).Scan(&replicaCountCV); err != nil {
-		return 0, err
-	}
-
-	return replicaCountCV, nil
+type unbalancedRanges struct {
+	// The store id of the unbalanced stores.
+	storeIDs []int
+	// Range counts for each store in storeIDs.
+	rangeCounts []int
+	// Average range count across all stores, not just the unbalanced ones.
+	avgRangeCount float64
 }
 
-// WaitForReplicaRebalance blocks until the coefficient of variation in replica counts
-// across each store is less than `range_rebalance_threshold`. Note that this doesn't wait for
+func findUnbalancedStores(ctx context.Context, db *gosql.DB, threshold float64) (unbalancedRanges, error) {
+	lowerBound := 1 - threshold
+	upperBound := 1 + threshold
+
+	query := fmt.Sprintf(`WITH stats AS (
+    SELECT AVG(range_count) AS mean_val
+    FROM crdb_internal.kv_store_status
+)
+SELECT store_id, range_count, stats.mean_val
+FROM crdb_internal.kv_store_status, stats
+WHERE range_count < mean_val * %f
+   OR range_count > mean_val * %f;
+`, lowerBound, upperBound)
+
+	var unablancedStores []int
+	var rangeCounts []int
+	var avgRanges float64
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return unbalancedRanges{}, err
+	}
+	for rows.Next() {
+		var storeID, ranges int
+		if err = rows.Scan(&storeID, &ranges, &avgRanges); err != nil {
+			return unbalancedRanges{}, err
+		}
+		unablancedStores = append(unablancedStores, storeID)
+		rangeCounts = append(rangeCounts, ranges)
+	}
+	return unbalancedRanges{
+		storeIDs:      unablancedStores,
+		rangeCounts:   rangeCounts,
+		avgRangeCount: avgRanges,
+	}, nil
+}
+
+// WaitForReplicaRebalance blocks until the replica count across each store is less than
+// `range_rebalance_threshold` percent from the mean. Note that this doesn't wait for
 // rebalancing to _fully_ finish; there can still be range events that happen after this.
-// However, even for small clusters with < 100 ranges, waiting for rebalancing to fully complete
-// can take 10+ minutes so lets just get close enough.
+// We don't know what kind of background workloads may be running concurrently and creating
+// range events, so lets just get to a state "close enough", i.e. a state that the allocator
+// would consider balanced.
 func (f *GenericFailure) WaitForReplicaRebalance(
 	ctx context.Context, l *logger.Logger, node install.Nodes,
 ) error {
@@ -416,20 +449,20 @@ func (f *GenericFailure) WaitForReplicaRebalance(
 	// not include those stores. Make sure we observe a few consecutive intervals that confirm
 	// our ranges are stable.
 	consecutiveStableIntervals := 0
-	return runEveryN(ctx, 3*time.Second, func(done chan struct{}) error {
-		cv, err := replicaCV(ctx, db)
+	return runEveryN(ctx, 5*time.Second, func(done chan struct{}) error {
+		unbalanced, err := findUnbalancedStores(ctx, db, threshold)
 		if err != nil {
 			return err
 		}
 
-		l.Printf("replica coefficient of variation: %f\n", cv)
-		if cv < threshold {
+		if len(unbalanced.storeIDs) == 0 {
 			consecutiveStableIntervals++
-			l.Printf("replica coefficient of variation is less than %f", threshold)
+			l.Printf("all stores have range count within %.2f%% of the mean", threshold*100)
 			if consecutiveStableIntervals > 2 {
 				close(done)
 			}
 		} else {
+			l.Printf("unbalanced stores: %v, ranges: %v, avg: %f", unbalanced.storeIDs, unbalanced.rangeCounts, unbalanced.avgRangeCount)
 			consecutiveStableIntervals = 0
 		}
 		return nil
@@ -459,4 +492,28 @@ func runEveryN(
 			statsTimer.Reset(queryInterval)
 		}
 	}
+}
+
+// WaitForRestartedNodesToStabilize is a helper that waits for nodes
+// to stabilize after a restart.
+func (f *GenericFailure) WaitForRestartedNodesToStabilize(ctx context.Context, l *logger.Logger, nodes install.Nodes) error {
+	// First, we block until we are able to connect to each of the nodes
+	// as we will use SQL connections to check the status of the cluster.
+	if err := forEachNode(nodes, func(n install.Nodes) error {
+		return f.WaitForSQLReady(ctx, l, n, time.Minute)
+	}); err != nil {
+		return err
+	}
+
+	// Then, we wait for ranges to be fully replicated. If the restarted nodes were only
+	// briefly offline, this will block until the restarted nodes catch up. If the restarted
+	// nodes were down long enough for the cluster to consider them dead, the ranges will
+	// have been rebalanced to other nodes and this will be a noop.
+	if err := f.WaitForReplication(ctx, l, nodes); err != nil {
+		return err
+	}
+
+	// Finally, we also have to block until the cluster is done rebalancing replicas.
+	// If replicas were not moved around during the downtime, this will likely be a noop.
+	return f.WaitForReplicaRebalance(ctx, l, nodes)
 }

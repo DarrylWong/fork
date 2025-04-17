@@ -57,6 +57,9 @@ type failureSmokeTest struct {
 	workload func(ctx context.Context, c cluster.Cluster, args ...string) error
 	// The duration to run the workload for before injecting the failure.
 	workloadRamp time.Duration
+	// The additional duration to let the failure mode stay injected before attempting
+	// to recover.
+	failureModeRamp time.Duration
 }
 
 func (t *failureSmokeTest) run(
@@ -136,6 +139,16 @@ func (t *failureSmokeTest) run(
 	if err != nil {
 		return err
 	}
+
+	if t.failureModeRamp > 0 {
+		l.Printf("sleeping for %s before recovering failure", t.failureModeRamp)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(t.failureModeRamp):
+		}
+	}
+
 	l.Printf("%s: Running Recover(); details in %s.log", t.failureName, file)
 	if err = c.AddGrafanaAnnotation(ctx, l, grafana.AddAnnotationRequest{
 		Text: fmt.Sprintf("%s recovered", t.testName),
@@ -483,7 +496,15 @@ var cgroupsDiskStallTests = func(c cluster.Cluster) []failureSmokeTest {
 			}
 		} else {
 			if bytes.stalledRead < readLowerThreshold {
-				return errors.Errorf("reads were not stalled on the stalled node, but only %d bytes were read", bytes.stalledRead)
+				err := errors.Errorf("reads were not stalled on the stalled node, but only %d bytes were read", bytes.stalledRead)
+				// If writes are stalled, it may greatly impact read throughput even if reads are
+				// not explicitly stalled. We generally still see reads, but it can sometimes be lower
+				// than our threshold causing the test to flake In this case, just log a warning.
+				if writesStalled {
+					l.Printf("WARN: %s", err)
+				} else {
+					return err
+				}
 			}
 		}
 		if bytes.unaffectedRead < readLowerThreshold {
@@ -563,6 +584,9 @@ var cgroupsDiskStallTests = func(c cluster.Cluster) []failureSmokeTest {
 						// since any given io request will be much larger.
 						"--min-block-bytes=65536", "--max-block-bytes=65536")
 				},
+				// Wait for a minute with the failure injected so the cluster starts rebalancing
+				// ranges, and we can properly test WaitForFailureToRestore.
+				failureModeRamp: time.Minute,
 			})
 		}
 	}
@@ -608,14 +632,6 @@ var dmsetupDiskStallTest = func(c cluster.Cluster) failureSmokeTest {
 			if !touchFile(ctx, l, c, unaffectedNode) {
 				return errors.Errorf("expected creating a file to work on unaffected node %d", stalledNode)
 			}
-			// Wait for a minute with the failure injected so the cluster starts rebalancing
-			// ranges, and we can properly test WaitForFailureToRestore.
-			// TODO: make this part of the framework
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(time.Minute):
-			}
 			return nil
 		},
 		validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f failures.FailureMode) error {
@@ -628,6 +644,9 @@ var dmsetupDiskStallTest = func(c cluster.Cluster) failureSmokeTest {
 			// Tolerate errors as we expect nodes to fatal.
 			return defaultFailureSmokeTestWorkload(ctx, c, "--tolerate-errors")
 		},
+		// Wait for a minute with the failure injected so the cluster starts rebalancing
+		// ranges, and we can properly test WaitForFailureToRestore.
+		failureModeRamp: time.Minute,
 	}
 }
 
@@ -703,6 +722,9 @@ var nodeKillTests = func(c cluster.Cluster) []failureSmokeTest {
 			},
 			// Shutting down the server right after it's started can cause draining to be skipped.
 			workloadRamp: 30 * time.Second,
+			// Wait for a minute with the failure injected so the cluster starts rebalancing
+			// ranges, and we can properly test WaitForFailureToRestore.
+			failureModeRamp: time.Minute,
 		})
 	}
 	return tests

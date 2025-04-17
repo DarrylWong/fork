@@ -65,6 +65,7 @@ func (f *NodeKillFailure) Recover(ctx context.Context, l *logger.Logger, args Fa
 }
 
 func (f *NodeKillFailure) Cleanup(ctx context.Context, l *logger.Logger, args FailureArgs) error {
+	f.CloseConnections()
 	return nil
 }
 
@@ -84,8 +85,5 @@ func (f *NodeKillFailure) WaitForFailureToRecover(
 ) error {
 	nodes := args.(NodeKillArgs).Nodes
 	l.Printf("Waiting for cockroach process to recover on nodes: %v", nodes)
-
-	return forEachNode(nodes, func(n install.Nodes) error {
-		return f.WaitForSQLReady(ctx, l, n, time.Minute)
-	})
+	return f.WaitForRestartedNodesToStabilize(ctx, l, nodes)
 }

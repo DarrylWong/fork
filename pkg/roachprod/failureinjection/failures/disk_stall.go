@@ -224,15 +224,7 @@ func (s *CGroupDiskStaller) WaitForFailureToRecover(
 	ctx context.Context, l *logger.Logger, args FailureArgs,
 ) error {
 	nodes := args.(DiskStallArgs).Nodes
-	if err := forEachNode(nodes, func(n install.Nodes) error {
-		return s.WaitForSQLReady(ctx, l, n, time.Minute)
-	}); err != nil {
-		return err
-	}
-	if err := s.WaitForReplication(ctx, l, nodes); err != nil {
-		return err
-	}
-	return s.WaitForReplicaRebalance(ctx, l, nodes)
+	return s.WaitForRestartedNodesToStabilize(ctx, l, nodes)
 }
 
 type throughput struct {
@@ -506,13 +498,5 @@ func (s *DmsetupDiskStaller) WaitForFailureToRecover(
 	ctx context.Context, l *logger.Logger, args FailureArgs,
 ) error {
 	nodes := args.(DiskStallArgs).Nodes
-	return forEachNode(nodes, func(n install.Nodes) error {
-		if err := s.WaitForSQLReady(ctx, l, n, time.Minute); err != nil {
-			return err
-		}
-		if err := s.WaitForReplication(ctx, l, nodes); err != nil {
-			return err
-		}
-		return s.WaitForReplicaRebalance(ctx, l, nodes)
-	})
+	return s.WaitForRestartedNodesToStabilize(ctx, l, nodes)
 }
