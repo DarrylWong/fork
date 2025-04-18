@@ -9,7 +9,6 @@ import (
 	"context"
 	gosql "database/sql"
 	"fmt"
-	"github.com/cockroachdb/cockroach/pkg/util/retry"
 	"net/url"
 	"strconv"
 	"strings"
@@ -18,7 +17,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachprod"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
-	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
 )
 
@@ -222,9 +220,7 @@ func (f *GenericFailure) DiskDeviceMajorMinor(
 	return f.diskDevice.major, f.diskDevice.minor, nil
 }
 
-func (f *GenericFailure) PingNode(
-	ctx context.Context, l *logger.Logger, node install.Nodes,
-) error {
+func (f *GenericFailure) PingNode(ctx context.Context, l *logger.Logger, node install.Nodes) error {
 	db, err := f.Conn(ctx, l, node)
 	if err != nil {
 		return err
@@ -232,36 +228,36 @@ func (f *GenericFailure) PingNode(
 	return db.PingContext(ctx)
 }
 
+// WaitForSQLReady waits until the corresponding node's SQL subsystem is fully initialized and ready
+// to serve SQL clients.
 func (f *GenericFailure) WaitForSQLReady(
-	ctx context.Context, l *logger.Logger, node install.Nodes, timeout time.Duration,
+	ctx context.Context, l *logger.Logger, node install.Nodes,
 ) error {
-	start := timeutil.Now()
-	err := retryForDuration(ctx, timeout, func() error {
-		if err := f.PingNode(ctx, l, node); err == nil {
-			l.Printf("Connected to node %d after %s", node, timeutil.Since(start))
-			return nil
-		}
-		return errors.Newf("unable to connect to node %d", node)
-	})
-
-	return errors.Wrapf(err, "never connected to node %d after %s", node, timeout)
+	db, err := f.Conn(ctx, l, node)
+	if err != nil {
+		return err
+	}
+	err = roachprod.WaitForSQLReady(ctx, db,
+		roachprod.WithMaxRetries(5),
+		roachprod.WithVerboseLogger(l),
+	)
+	return errors.Wrapf(err, "never connected to node %d", node)
 }
 
 // WaitForSQLUnavailable pings a node until the SQL connection is unavailable.
 func (f *GenericFailure) WaitForSQLUnavailable(
 	ctx context.Context, l *logger.Logger, node install.Nodes, timeout time.Duration,
 ) error {
-	start := timeutil.Now()
-	err := retryForDuration(ctx, timeout, func() error {
-		if err := f.PingNode(ctx, l, node); err != nil {
-			l.Printf("Connections to node %d unavailable after %s", node, timeutil.Since(start))
-			//nolint:returnerrcheck
-			return nil
-		}
-		return errors.Newf("unable to connect to node %d", node)
-	})
-
-	return errors.Wrapf(err, "connections to node %d never unavailable after %s", node, timeout)
+	db, err := f.Conn(ctx, l, node)
+	if err != nil {
+		return err
+	}
+	err = roachprod.WaitForSQLUnavailable(ctx, db,
+		roachprod.WithMaxRetries(0),
+		roachprod.WithTimeout(timeout),
+		roachprod.WithVerboseLogger(l),
+	)
+	return errors.Wrapf(err, "connections to node %d still available after %s", node, timeout)
 }
 
 // WaitForProcessDeath checks systemd until the cockroach process is no longer running
@@ -269,19 +265,7 @@ func (f *GenericFailure) WaitForSQLUnavailable(
 func (f *GenericFailure) WaitForProcessDeath(
 	ctx context.Context, l *logger.Logger, node install.Nodes, timeout time.Duration,
 ) error {
-	start := timeutil.Now()
-	err := retryForDuration(ctx, timeout, func() error {
-		res, err := f.RunWithDetails(ctx, l, node, "systemctl is-active cockroach-system.service")
-		if err != nil {
-			return err
-		}
-		status := strings.TrimSpace(res.Stdout)
-		if status != "active" {
-			l.Printf("n%d cockroach process exited after %s: %s", node, timeutil.Since(start), status)
-			return nil
-		}
-		return errors.Newf("systemd reported n%d cockroach process as %s", node, status)
-	})
+	err := roachprod.WaitForProcessDeath(ctx, *f.c, l, node, roachprod.WithMaxRetries(0), roachprod.WithTimeout(timeout))
 
 	return errors.Wrapf(err, "n%d process never exited after %s", node, timeout)
 }
@@ -304,21 +288,6 @@ func (f *GenericFailure) StartNodes(
 	return f.Run(ctx, l, nodes, "./cockroach.sh")
 }
 
-// retryForDuration retries the given function until it returns nil or
-// the context timeout is exceeded.
-func retryForDuration(ctx context.Context, timeout time.Duration, fn func() error) error {
-	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	retryOpts := retry.Options{MaxRetries: 0}
-	r := retry.StartWithCtx(timeoutCtx, retryOpts)
-	for r.Next() {
-		if err := fn(); err == nil {
-			return nil
-		}
-	}
-	return errors.Newf("failed after %s", timeout)
-}
-
 // forEachNode is a helper function that calls fn for each node in nodes.
 func forEachNode(nodes install.Nodes, fn func(install.Nodes) error) error {
 	// TODO (darryl): Consider parallelizing this, for now all usages
@@ -330,105 +299,35 @@ func forEachNode(nodes install.Nodes, fn func(install.Nodes) error) error {
 	}
 	return nil
 }
+
 func (f *GenericFailure) WaitForReplication(
-	ctx context.Context, l *logger.Logger, node install.Nodes,
+	ctx context.Context, l *logger.Logger, node install.Nodes, replicationFactor int,
 ) error {
 	db, err := f.Conn(ctx, l, node)
 	if err != nil {
 		return err
 	}
-
-	numReplicasQuery := `SELECT substring(raw_config_sql FROM 'num_replicas\s*=\s*([0-9]+)') AS num_replicas
-	FROM [SHOW ZONE CONFIGURATION FOR RANGE default];`
-
-	rows, err := db.QueryContext(ctx, numReplicasQuery)
-	if err != nil {
-		return err
-	}
-	var replicationFactor int
-	if rows.Next() {
-		if err = rows.Scan(&replicationFactor); err != nil {
-			return err
-		}
+	// Default to a replication factor of 3 if not specified. We could query and
+	// extract out the lowest replication factor among all zone configs, but it seems
+	// easier to just let the caller specify it if they want a stronger guarantee.
+	if replicationFactor == 0 {
+		replicationFactor = 3
 	}
 
-	var oldN int
-	return runEveryN(ctx, 3*time.Second, func(done chan struct{}) error {
-		var n int
-		if err := db.QueryRowContext(
-			ctx,
-			fmt.Sprintf(
-				"SELECT count(1) FROM crdb_internal.ranges WHERE array_length(replicas, 1) < %d",
-				replicationFactor,
-			),
-		).Scan(&n); err != nil {
-			return err
-		}
-		if n == 0 {
-			l.Printf("up-replication complete")
-			close(done)
-			return nil
-		}
-		if oldN != n {
-			l.Printf("still waiting for full replication (%d ranges left)", n)
-		}
-		oldN = n
-		return nil
-	})
+	return roachprod.WaitForReplication(ctx, db,
+		replicationFactor, roachprod.AtLeastReplicationFactor,
+		roachprod.RetryEveryDuration(time.Second),
+		roachprod.WithVerboseLogger(l),
+	)
 }
 
-type unbalancedRanges struct {
-	// The store id of the unbalanced stores.
-	storeIDs []int
-	// Range counts for each store in storeIDs.
-	rangeCounts []int
-	// Average range count across all stores, not just the unbalanced ones.
-	avgRangeCount float64
-}
-
-func findUnbalancedStores(ctx context.Context, db *gosql.DB, threshold float64) (unbalancedRanges, error) {
-	lowerBound := 1 - threshold
-	upperBound := 1 + threshold
-
-	query := fmt.Sprintf(`WITH stats AS (
-    SELECT AVG(range_count) AS mean_val
-    FROM crdb_internal.kv_store_status
-)
-SELECT store_id, range_count, stats.mean_val
-FROM crdb_internal.kv_store_status, stats
-WHERE range_count < mean_val * %f
-   OR range_count > mean_val * %f;
-`, lowerBound, upperBound)
-
-	var unablancedStores []int
-	var rangeCounts []int
-	var avgRanges float64
-	rows, err := db.QueryContext(ctx, query)
-	if err != nil {
-		return unbalancedRanges{}, err
-	}
-	for rows.Next() {
-		var storeID, ranges int
-		if err = rows.Scan(&storeID, &ranges, &avgRanges); err != nil {
-			return unbalancedRanges{}, err
-		}
-		unablancedStores = append(unablancedStores, storeID)
-		rangeCounts = append(rangeCounts, ranges)
-	}
-	return unbalancedRanges{
-		storeIDs:      unablancedStores,
-		rangeCounts:   rangeCounts,
-		avgRangeCount: avgRanges,
-	}, nil
-}
-
-// WaitForReplicaRebalance blocks until the replica count across each store is less than
+// WaitForBalancedReplicas blocks until the replica count across each store is less than
 // `range_rebalance_threshold` percent from the mean. Note that this doesn't wait for
 // rebalancing to _fully_ finish; there can still be range events that happen after this.
 // We don't know what kind of background workloads may be running concurrently and creating
 // range events, so lets just get to a state "close enough", i.e. a state that the allocator
 // would consider balanced.
-func (f *GenericFailure) WaitForReplicaRebalance(
+func (f *GenericFailure) WaitForBalancedReplicas(
 	ctx context.Context, l *logger.Logger, node install.Nodes,
 ) error {
 	db, err := f.Conn(ctx, l, node)
@@ -436,71 +335,21 @@ func (f *GenericFailure) WaitForReplicaRebalance(
 		return err
 	}
 
-	// This is the threshold the db uses to determine that a store is under or overfull
-	// and needs to be rebalanced.
-	var threshold float64
-	if err = db.QueryRowContext(
-		ctx, "SHOW CLUSTER SETTING kv.allocator.range_rebalance_threshold",
-	).Scan(&threshold); err != nil {
-		return err
-	}
-
-	// If we query too soon after a node is added to the cluster, our calculation may
-	// not include those stores. Make sure we observe a few consecutive intervals that confirm
-	// our ranges are stable.
-	consecutiveStableIntervals := 0
-	return runEveryN(ctx, 5*time.Second, func(done chan struct{}) error {
-		unbalanced, err := findUnbalancedStores(ctx, db, threshold)
-		if err != nil {
-			return err
-		}
-
-		if len(unbalanced.storeIDs) == 0 {
-			consecutiveStableIntervals++
-			l.Printf("all stores have range count within %.2f%% of the mean", threshold*100)
-			if consecutiveStableIntervals > 2 {
-				close(done)
-			}
-		} else {
-			l.Printf("unbalanced stores: %v, ranges: %v, avg: %f", unbalanced.storeIDs, unbalanced.rangeCounts, unbalanced.avgRangeCount)
-			consecutiveStableIntervals = 0
-		}
-		return nil
-	})
-}
-
-// runEveryN is a helper that runs a func every `queryInterval` until
-// the done channel is closed or the context is cancelled.
-func runEveryN(
-	ctx context.Context, queryInterval time.Duration, f func(done chan struct{}) error,
-) error {
-	var statsTimer timeutil.Timer
-	defer statsTimer.Stop()
-	statsTimer.Reset(queryInterval)
-	done := make(chan struct{})
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-done:
-			return nil
-		case <-statsTimer.C:
-			statsTimer.Read = true
-			if err := f(done); err != nil {
-				return err
-			}
-			statsTimer.Reset(queryInterval)
-		}
-	}
+	return roachprod.WaitForBalancedReplicas(ctx, db,
+		roachprod.RetryEveryDuration(3*time.Second),
+		roachprod.WithVerboseLogger(l),
+	)
 }
 
 // WaitForRestartedNodesToStabilize is a helper that waits for nodes
 // to stabilize after a restart.
-func (f *GenericFailure) WaitForRestartedNodesToStabilize(ctx context.Context, l *logger.Logger, nodes install.Nodes) error {
+func (f *GenericFailure) WaitForRestartedNodesToStabilize(
+	ctx context.Context, l *logger.Logger, nodes install.Nodes, replicationFactor int,
+) error {
 	// First, we block until we are able to connect to each of the nodes
 	// as we will use SQL connections to check the status of the cluster.
 	if err := forEachNode(nodes, func(n install.Nodes) error {
-		return f.WaitForSQLReady(ctx, l, n, time.Minute)
+		return f.WaitForSQLReady(ctx, l, n)
 	}); err != nil {
 		return err
 	}
@@ -509,11 +358,11 @@ func (f *GenericFailure) WaitForRestartedNodesToStabilize(ctx context.Context, l
 	// briefly offline, this will block until the restarted nodes catch up. If the restarted
 	// nodes were down long enough for the cluster to consider them dead, the ranges will
 	// have been rebalanced to other nodes and this will be a noop.
-	if err := f.WaitForReplication(ctx, l, nodes); err != nil {
+	if err := f.WaitForReplication(ctx, l, nodes, replicationFactor); err != nil {
 		return err
 	}
 
 	// Finally, we also have to block until the cluster is done rebalancing replicas.
 	// If replicas were not moved around during the downtime, this will likely be a noop.
-	return f.WaitForReplicaRebalance(ctx, l, nodes)
+	return f.WaitForBalancedReplicas(ctx, l, nodes)
 }

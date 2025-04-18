@@ -55,6 +55,8 @@ type DiskStallArgs struct {
 	// only supports fully stalling reads/writes.
 	Throughput int
 	Nodes      install.Nodes
+	// The replication factor to wait for in WaitForFailureToRecover. Defaults to 3 if empty.
+	ReplicationFactor int
 }
 
 func (s *CGroupDiskStaller) Description() string {
@@ -224,7 +226,7 @@ func (s *CGroupDiskStaller) WaitForFailureToRecover(
 	ctx context.Context, l *logger.Logger, args FailureArgs,
 ) error {
 	nodes := args.(DiskStallArgs).Nodes
-	return s.WaitForRestartedNodesToStabilize(ctx, l, nodes)
+	return s.WaitForRestartedNodesToStabilize(ctx, l, nodes, args.(DiskStallArgs).ReplicationFactor)
 }
 
 type throughput struct {
@@ -498,5 +500,5 @@ func (s *DmsetupDiskStaller) WaitForFailureToRecover(
 	ctx context.Context, l *logger.Logger, args FailureArgs,
 ) error {
 	nodes := args.(DiskStallArgs).Nodes
-	return s.WaitForRestartedNodesToStabilize(ctx, l, nodes)
+	return s.WaitForRestartedNodesToStabilize(ctx, l, nodes, args.(DiskStallArgs).ReplicationFactor)
 }

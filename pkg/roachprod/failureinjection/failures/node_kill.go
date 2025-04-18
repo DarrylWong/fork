@@ -27,7 +27,9 @@ func registerNodeKillFailure(r *FailureRegistry) {
 	r.add(NodeKillFailureName, NodeKillArgs{}, MakeNodeKillFailure)
 }
 
-func MakeNodeKillFailure(clusterName string, l *logger.Logger, connectionInfo ConnectionInfo) (FailureMode, error) {
+func MakeNodeKillFailure(
+	clusterName string, l *logger.Logger, connectionInfo ConnectionInfo,
+) (FailureMode, error) {
 	genericFailure, err := makeGenericFailure(clusterName, l, connectionInfo, NodeKillFailureName)
 	if err != nil {
 		return nil, err
@@ -85,5 +87,5 @@ func (f *NodeKillFailure) WaitForFailureToRecover(
 ) error {
 	nodes := args.(NodeKillArgs).Nodes
 	l.Printf("Waiting for cockroach process to recover on nodes: %v", nodes)
-	return f.WaitForRestartedNodesToStabilize(ctx, l, nodes)
+	return f.WaitForRestartedNodesToStabilize(ctx, l, nodes, args.(DiskStallArgs).ReplicationFactor)
 }
