@@ -16,8 +16,6 @@ go_library(
         "//pkg/roachprod",
         "//pkg/roachprod/install",
         "//pkg/roachprod/logger",
-        "//pkg/util/retry",
-        "//pkg/util/timeutil",
         "@com_github_cockroachdb_errors//:errors",
         "@org_golang_x_sys//unix",
     ],

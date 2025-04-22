@@ -66,7 +66,11 @@ func (t *failureSmokeTest) run(
 	// TODO(darryl): In the future, roachtests should interact with the failure injection library
 	// through helper functions in roachtestutil so they don't have to interface with roachprod
 	// directly.
-	failureMode, err := fr.GetFailureMode(c.MakeNodes(c.CRDBNodes()), t.failureName, l, c.IsSecure())
+	connectionInfo := failures.ConnectionInfo{
+		Secure:         c.IsSecure(),
+		LocalCertsPath: c.LocalCertsDir(),
+	}
+	failureMode, err := fr.GetFailureMode(c.MakeNodes(c.CRDBNodes()), t.failureName, l, connectionInfo)
 	if err != nil {
 		return err
 	}
@@ -160,7 +164,11 @@ func (t *failureSmokeTest) run(
 func (t *failureSmokeTest) noopRun(
 	ctx context.Context, l *logger.Logger, c cluster.Cluster, fr *failures.FailureRegistry,
 ) error {
-	failureMode, err := fr.GetFailureMode(c.MakeNodes(c.CRDBNodes()), t.failureName, l, c.IsSecure())
+	connectionInfo := failures.ConnectionInfo{
+		Secure:         c.IsSecure(),
+		LocalCertsPath: c.LocalCertsDir(),
+	}
+	failureMode, err := fr.GetFailureMode(c.MakeNodes(c.CRDBNodes()), t.failureName, l, connectionInfo)
 	if err != nil {
 		return err
 	}
