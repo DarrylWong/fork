@@ -8,6 +8,7 @@ package failures
 import (
 	"fmt"
 	"regexp"
+	"sync"
 
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 )
@@ -22,6 +23,7 @@ type failureSpec struct {
 	args            FailureArgs
 }
 type FailureRegistry struct {
+	sync.Mutex
 	failures map[string]failureSpec
 }
 
@@ -37,6 +39,7 @@ func (r *FailureRegistry) Register() {
 	registerIPTablesPartitionFailure(r)
 	registerNetworkLatencyFailure(r)
 	registerNodeKillFailure(r)
+	registerNoopFailure(r)
 }
 
 func (r *FailureRegistry) add(
@@ -70,12 +73,23 @@ func (r *FailureRegistry) List(regex string) []string {
 	return matches
 }
 
-func (r *FailureRegistry) GetFailureMode(
+func (r *FailureRegistry) GetFailer(
 	clusterName, failureName string, l *logger.Logger, connectionInfo ConnectionInfo,
-) (FailureMode, error) {
+) (*Failer, error) {
+	r.Lock()
 	spec, ok := r.failures[failureName]
+	r.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("unknown failure %s", failureName)
 	}
-	return spec.makeFailureFunc(clusterName, l, connectionInfo)
+	failureMode, err := spec.makeFailureFunc(clusterName, l, connectionInfo)
+	if err != nil {
+		return nil, err
+	}
+
+	failer := &Failer{
+		FailureMode: failureMode,
+		state:       uninitialized,
+	}
+	return failer, nil
 }

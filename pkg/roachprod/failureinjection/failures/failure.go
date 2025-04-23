@@ -36,23 +36,28 @@ type FailureArgs interface {
 type FailureMode interface {
 	Description() string
 
-	// Setup any dependencies required for the failure to be injected.
+	// Setup any dependencies required for the failure to be injected. The
+	// same args passed to Setup, must be passed to Cleanup. Setup is a
+	// pre-requisite to calling all other methods.
 	Setup(ctx context.Context, l *logger.Logger, args FailureArgs) error
 
-	// Inject a failure into the system.
+	// Inject a failure into the system. The same args passed to Inject
+	// must be passed to Recover, WaitForFailureToPropagate, and WaitForFailureToRecover.
 	Inject(ctx context.Context, l *logger.Logger, args FailureArgs) error
 
-	// Recover reverses the effects of Inject. The same args passed to Inject
-	// must be passed to Recover.
+	// Recover reverses the effects of Inject. Must be called after a failure
+	// mode has been injected.
 	Recover(ctx context.Context, l *logger.Logger, args FailureArgs) error
 
 	// Cleanup uninstalls any dependencies that were installed by Setup.
 	Cleanup(ctx context.Context, l *logger.Logger, args FailureArgs) error
 
-	// WaitForFailureToPropagate waits until the failure is at full effect.
+	// WaitForFailureToPropagate waits until the failure is at full effect. Must
+	// be called after a failure mode has been injected.
 	WaitForFailureToPropagate(ctx context.Context, l *logger.Logger, args FailureArgs) error
 
 	// WaitForFailureToRecover waits until the failure was recovered completely along with any side effects.
+	// Must be called with no active failure mode, i.e. after Recover has been called.
 	WaitForFailureToRecover(ctx context.Context, l *logger.Logger, args FailureArgs) error
 }
 

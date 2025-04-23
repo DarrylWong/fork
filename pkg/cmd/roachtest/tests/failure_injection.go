@@ -50,9 +50,9 @@ type failureSmokeTest struct {
 	failureName string
 	args        failures.FailureArgs
 	// Validate that the failure was injected correctly.
-	validateFailure func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f failures.FailureMode) error
+	validateFailure func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error
 	// Validate that the failure was recovered correctly.
-	validateRecover func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f failures.FailureMode) error
+	validateRecover func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error
 	// The workload to be run during the failureSmokeTest, if nil, defaultSmokeTestWorkload is used.
 	workload func(ctx context.Context, c cluster.Cluster, args ...string) error
 	// The duration to run the workload for before injecting the failure.
@@ -63,16 +63,9 @@ type failureSmokeTest struct {
 }
 
 func (t *failureSmokeTest) run(
-	ctx context.Context, l *logger.Logger, c cluster.Cluster, fr *failures.FailureRegistry,
+	ctx context.Context, l *logger.Logger, c cluster.Cluster,
 ) (err error) {
-	// TODO(darryl): In the future, roachtests should interact with the failure injection library
-	// through helper functions in roachtestutil so they don't have to interface with roachprod
-	// directly.
-	connectionInfo := failures.ConnectionInfo{
-		Secure:         c.IsSecure(),
-		LocalCertsPath: c.LocalCertsDir(),
-	}
-	failureMode, err := fr.GetFailureMode(c.MakeNodes(c.CRDBNodes()), t.failureName, l, connectionInfo)
+	failer, err := roachtestutil.GetFailer(c, t.failureName, l)
 	if err != nil {
 		return err
 	}
@@ -85,7 +78,7 @@ func (t *failureSmokeTest) run(
 		}
 		l.Printf("%s: Running Cleanup(); details in %s.log", t.failureName, file)
 		// Best effort try to clean up the test even if the test context gets cancelled.
-		err = errors.CombineErrors(err, failureMode.Cleanup(context.Background(), quietLogger, t.args))
+		err = errors.CombineErrors(err, failer.Cleanup(context.Background(), quietLogger))
 	}()
 
 	quietLogger, file, err := roachtestutil.LoggerForCmd(l, c.CRDBNodes(), t.testName, "setup")
@@ -93,7 +86,7 @@ func (t *failureSmokeTest) run(
 		return err
 	}
 	l.Printf("%s: Running Setup(); details in %s.log", t.failureName, file)
-	if err = failureMode.Setup(ctx, quietLogger, t.args); err != nil {
+	if err = failer.Setup(ctx, quietLogger, t.args); err != nil {
 		return err
 	}
 
@@ -116,12 +109,12 @@ func (t *failureSmokeTest) run(
 	}); err != nil {
 		return err
 	}
-	if err = failureMode.Inject(ctx, quietLogger, t.args); err != nil {
+	if err = failer.Inject(ctx, quietLogger, t.args); err != nil {
 		return err
 	}
 
 	l.Printf("validating failure was properly injected")
-	if err = t.validateFailure(ctx, l, c, failureMode); err != nil {
+	if err = t.validateFailure(ctx, l, c, failer); err != nil {
 		return err
 	}
 
@@ -131,7 +124,7 @@ func (t *failureSmokeTest) run(
 		return err
 	}
 	l.Printf("%s: Running WaitForFailureToPropagate(); details in %s.log", t.failureName, file)
-	if err = failureMode.WaitForFailureToPropagate(ctx, quietLogger, t.args); err != nil {
+	if err = failer.WaitForFailureToPropagate(ctx, quietLogger); err != nil {
 		return err
 	}
 
@@ -154,7 +147,7 @@ func (t *failureSmokeTest) run(
 	}); err != nil {
 		return err
 	}
-	if err = failureMode.Recover(ctx, quietLogger, t.args); err != nil {
+	if err = failer.Recover(ctx, quietLogger); err != nil {
 		return err
 	}
 
@@ -164,29 +157,25 @@ func (t *failureSmokeTest) run(
 		return err
 	}
 	l.Printf("%s: Running WaitForFailureToRecover(); details in %s.log", t.failureName, file)
-	if err = failureMode.WaitForFailureToRecover(ctx, quietLogger, t.args); err != nil {
+	if err = failer.WaitForFailureToRecover(ctx, quietLogger); err != nil {
 		return err
 	}
 
 	l.Printf("validating failure was properly recovered")
-	return t.validateRecover(ctx, l, c, failureMode)
+	return t.validateRecover(ctx, l, c, failer)
 }
 
 func (t *failureSmokeTest) noopRun(
-	ctx context.Context, l *logger.Logger, c cluster.Cluster, fr *failures.FailureRegistry,
+	ctx context.Context, l *logger.Logger, c cluster.Cluster,
 ) error {
-	connectionInfo := failures.ConnectionInfo{
-		Secure:         c.IsSecure(),
-		LocalCertsPath: c.LocalCertsDir(),
-	}
-	failureMode, err := fr.GetFailureMode(c.MakeNodes(c.CRDBNodes()), t.failureName, l, connectionInfo)
+	failer, err := roachtestutil.GetFailer(c, t.failureName, l)
 	if err != nil {
 		return err
 	}
-	if err := t.validateFailure(ctx, l, c, failureMode); err == nil {
+	if err := t.validateFailure(ctx, l, c, failer); err == nil {
 		return errors.New("no failure was injected but validation still passed")
 	}
-	if err := t.validateRecover(ctx, l, c, failureMode); err != nil {
+	if err := t.validateRecover(ctx, l, c, failer); err != nil {
 		return errors.Wrapf(err, "no failure was injected but post recover validation still failed")
 	}
 	return nil
@@ -210,7 +199,7 @@ var bidirectionalNetworkPartitionTest = func(c cluster.Cluster) failureSmokeTest
 				Type:        failures.Bidirectional,
 			}},
 		},
-		validateFailure: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f failures.FailureMode) error {
+		validateFailure: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
 			blocked, err := roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(srcNode), c.Nodes(destNode), fmt.Sprintf("{pgport:%d}", destNode))
 			if err != nil {
 				return err
@@ -228,7 +217,7 @@ var bidirectionalNetworkPartitionTest = func(c cluster.Cluster) failureSmokeTest
 			}
 			return nil
 		},
-		validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f failures.FailureMode) error {
+		validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
 			blocked, err := roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(srcNode), c.Nodes(destNode), fmt.Sprintf("{pgport:%d}", destNode))
 			if err != nil {
 				return err
@@ -258,7 +247,7 @@ var asymmetricIncomingNetworkPartitionTest = func(c cluster.Cluster) failureSmok
 				Type:        failures.Incoming,
 			}},
 		},
-		validateFailure: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f failures.FailureMode) error {
+		validateFailure: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
 			blocked, err := roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(srcNode), c.Nodes(destNode), fmt.Sprintf("{pgport:%d}", destNode))
 			if err != nil {
 				return err
@@ -276,7 +265,7 @@ var asymmetricIncomingNetworkPartitionTest = func(c cluster.Cluster) failureSmok
 			}
 			return nil
 		},
-		validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f failures.FailureMode) error {
+		validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
 			blocked, err := roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(srcNode), c.Nodes(destNode), fmt.Sprintf("{pgport:%d}", destNode))
 			if err != nil {
 				return err
@@ -306,7 +295,7 @@ var asymmetricOutgoingNetworkPartitionTest = func(c cluster.Cluster) failureSmok
 				Type:        failures.Outgoing,
 			}},
 		},
-		validateFailure: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f failures.FailureMode) error {
+		validateFailure: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
 			blocked, err := roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(srcNode), c.Nodes(destNode), fmt.Sprintf("{pgport:%d}", destNode))
 			if err != nil {
 				return err
@@ -324,7 +313,7 @@ var asymmetricOutgoingNetworkPartitionTest = func(c cluster.Cluster) failureSmok
 			}
 			return nil
 		},
-		validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f failures.FailureMode) error {
+		validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
 			blocked, err := roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(srcNode), c.Nodes(destNode), fmt.Sprintf("{pgport:%d}", destNode))
 			if err != nil {
 				return err
@@ -362,7 +351,7 @@ var latencyTest = func(c cluster.Cluster) failureSmokeTest {
 				},
 			},
 		},
-		validateFailure: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f failures.FailureMode) error {
+		validateFailure: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
 			// Note that this is one way latency, since the sender doesn't have the matching port.
 			delayedLatency, err := roachtestutil.PortLatency(ctx, l, c, c.Nodes(srcNode), c.Nodes(destNode))
 			if err != nil {
@@ -380,7 +369,7 @@ var latencyTest = func(c cluster.Cluster) failureSmokeTest {
 			}
 			return nil
 		},
-		validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f failures.FailureMode) error {
+		validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
 			delayedLatency, err := roachtestutil.PortLatency(ctx, l, c, c.Nodes(srcNode), c.Nodes(destNode))
 			if err != nil {
 				return err
@@ -540,9 +529,9 @@ var cgroupsDiskStallTests = func(c cluster.Cluster) []failureSmokeTest {
 					RestartNodes: true,
 					Nodes:        stalledNodeGroup.InstallNodes(),
 				},
-				validateFailure: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f failures.FailureMode) error {
+				validateFailure: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
 					l.Printf("Stalled nodes: %d, Unaffected nodes: %d, Stalled validation node: %d, Unaffected validation node: %d", stalledNodeGroup, unaffectedNodeGroup, stalledNode, unaffectedNode)
-					res, err := getRWBytesOverTime(ctx, l, c, f.(*failures.CGroupDiskStaller), stalledNode, unaffectedNode)
+					res, err := getRWBytesOverTime(ctx, l, c, f.FailureMode.(*failures.CGroupDiskStaller), stalledNode, unaffectedNode)
 					if err != nil {
 						return err
 					}
@@ -550,8 +539,8 @@ var cgroupsDiskStallTests = func(c cluster.Cluster) []failureSmokeTest {
 
 					return assertRWBytes(ctx, l, res, stallReads, stallWrites)
 				},
-				validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f failures.FailureMode) error {
-					res, err := getRWBytesOverTime(ctx, l, c, f.(*failures.CGroupDiskStaller), stalledNode, unaffectedNode)
+				validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
+					res, err := getRWBytesOverTime(ctx, l, c, f.FailureMode.(*failures.CGroupDiskStaller), stalledNode, unaffectedNode)
 					if err != nil {
 						return err
 					}
@@ -612,7 +601,7 @@ var dmsetupDiskStallTest = func(c cluster.Cluster) failureSmokeTest {
 			Nodes:        stalledNodeGroup.InstallNodes(),
 			RestartNodes: true,
 		},
-		validateFailure: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f failures.FailureMode) error {
+		validateFailure: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
 			l.Printf("Stalled nodes: %d, Unaffected nodes: %d, Stalled validation node: %d, Unaffected validation node: %d", stalledNodeGroup, unaffectedNodeGroup, stalledNode, unaffectedNode)
 			if touchFile(ctx, l, c, stalledNode) {
 				return errors.Errorf("expected node %d to be stalled and creating a file to hang", stalledNode)
@@ -622,7 +611,7 @@ var dmsetupDiskStallTest = func(c cluster.Cluster) failureSmokeTest {
 			}
 			return nil
 		},
-		validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f failures.FailureMode) error {
+		validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
 			if !touchFile(ctx, l, c, stalledNode) {
 				return errors.Errorf("expected creating a file to work on stalled node %d", stalledNode)
 			}
@@ -670,7 +659,7 @@ var nodeKillTests = func(c cluster.Cluster) []failureSmokeTest {
 				Nodes:            killedNodeGroup.InstallNodes(),
 				GracefulShutdown: gracefulShutdown,
 			},
-			validateFailure: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f failures.FailureMode) error {
+			validateFailure: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
 				// If we initiate a graceful shutdown, the cockroach process should
 				// intercept it and start draining the node.
 				if gracefulShutdown {
@@ -716,7 +705,7 @@ var nodeKillTests = func(c cluster.Cluster) []failureSmokeTest {
 			},
 			// Similar to validateFailure, there is not much to validate here that isn't
 			// covered by WaitForFailureToRecover, so just skip it.
-			validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f failures.FailureMode) error {
+			validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
 				return nil
 			},
 			workload: func(ctx context.Context, c cluster.Cluster, args ...string) error {
@@ -812,7 +801,7 @@ func runFailureSmokeTest(ctx context.Context, t test.Test, c cluster.Cluster, no
 	for _, test := range failureSmokeTests {
 		t.L().Printf("\n=====running %s test=====", test.testName)
 		if noopFailer {
-			if err := test.noopRun(ctx, t.L(), c, fr); err != nil {
+			if err := test.noopRun(ctx, t.L(), c); err != nil {
 				t.Fatal(err)
 			}
 		} else {
@@ -823,7 +812,7 @@ func runFailureSmokeTest(ctx context.Context, t test.Test, c cluster.Cluster, no
 			cancel := t.GoWithCancel(func(goCtx context.Context, l *logger.Logger) error {
 				return backgroundWorkload(goCtx, c)
 			}, task.Name(fmt.Sprintf("%s-workload", test.testName)))
-			err := test.run(ctx, t.L(), c, fr)
+			err := test.run(ctx, t.L(), c)
 			cancel()
 			if err != nil {
 				t.Fatal(errors.Wrapf(err, "%s failed", test.testName))
