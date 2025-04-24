@@ -338,7 +338,7 @@ func (s *testState) Insert(d *datadriven.TestData) string {
 	vectors := vector.MakeSet(s.Quantizer.GetDims())
 	childKeys := make([]cspann.ChildKey, 0, count)
 	if count != 0 {
-		// Load features.
+		// LoadPerWorker features.
 		s.Features = testutils.LoadFeatures(s.T, 10000)
 		vectors = s.Features
 		vectors.SplitAt(count)
@@ -948,7 +948,7 @@ func TestIndexConcurrency(t *testing.T) {
 	stopper := stop.NewStopper()
 	defer stopper.Stop(ctx)
 
-	// Load features.
+	// LoadPerWorker features.
 	const featureCount = 128
 	features := testutils.LoadFeatures(t, featureCount)
 

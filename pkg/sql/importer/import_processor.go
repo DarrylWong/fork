@@ -157,7 +157,7 @@ func newReadImportDataProcessor(
 		return nil, err
 	}
 
-	// Load the import job running the import in case any of the columns have a
+	// LoadPerWorker the import job running the import in case any of the columns have a
 	// default expression which uses sequences. In this case we need to update the
 	// job progress within the import processor.
 	if idp.FlowCtx.Cfg.JobRegistry != nil {

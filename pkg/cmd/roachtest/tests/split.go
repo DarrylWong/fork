@@ -775,7 +775,7 @@ func disableLoadBasedSplitting(ctx context.Context, db *gosql.DB) error {
 	_, err := db.ExecContext(ctx, `SET CLUSTER SETTING kv.range_split.by_load_enabled = false`)
 	if err != nil {
 		// If the cluster setting doesn't exist, the cluster version is < 2.2.0 and
-		// so Load based Splitting doesn't apply anyway and the error should be ignored.
+		// so LoadPerWorker based Splitting doesn't apply anyway and the error should be ignored.
 		if !strings.Contains(err.Error(), "unknown cluster setting") {
 			return err
 		}

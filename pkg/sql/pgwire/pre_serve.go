@@ -405,7 +405,7 @@ func (s *PreServeConnHandler) PreServe(
 			baseSQLMemoryBudget)
 	}
 
-	// Load the client-provided session parameters.
+	// LoadPerWorker the client-provided session parameters.
 	st.clientParameters, err = parseClientProvidedSessionParameters(
 		ctx, &buf, conn.RemoteAddr(), s.trustClientProvidedRemoteAddr.Load(), s.acceptTenantName, s.acceptSystemIdentityOption.Load())
 	if err != nil {

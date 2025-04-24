@@ -185,7 +185,7 @@ func (sm *SupportManager) Start(ctx context.Context) error {
 
 // onRestart initializes the SupportManager with state persisted on disk.
 func (sm *SupportManager) onRestart(ctx context.Context) error {
-	// Load the supporter and requester state from disk.
+	// LoadPerWorker the supporter and requester state from disk.
 	if err := sm.supporterStateHandler.read(ctx, sm.engine); err != nil {
 		return err
 	}

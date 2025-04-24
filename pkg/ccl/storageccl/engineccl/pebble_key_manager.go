@@ -281,7 +281,7 @@ func (m *DataKeyManager) Load(ctx context.Context) error {
 		return nil
 	}
 
-	// Load the existing state from the file named by `filename`.
+	// LoadPerWorker the existing state from the file named by `filename`.
 	m.writeMu.filename = filename
 	if filename != "" {
 		f, err := m.fs.Open(m.fs.PathJoin(m.dbDir, filename))

@@ -219,7 +219,7 @@ func registerHibernate(r registry.Registry, opt hibernateOptions) {
 			t.Fatal(err)
 		}
 
-		// Load the list of all test results files and parse them individually.
+		// LoadPerWorker the list of all test results files and parse them individually.
 		// Files are here: /mnt/data1/hibernate/hibernate-core/target/test-results/test
 		result, err := repeatRunWithDetailsSingleNode(
 			ctx,

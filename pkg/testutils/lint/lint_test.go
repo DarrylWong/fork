@@ -203,7 +203,7 @@ func TestLint(t *testing.T) {
 		pkgScope = "./pkg/..."
 	}
 
-	// Load packages for top-level forbidden import tests.
+	// LoadPerWorker packages for top-level forbidden import tests.
 	pkgPath := filepath.Join(cockroachDB, pkgScope)
 	pkgs, err := packages.Load(
 		&packages.Config{

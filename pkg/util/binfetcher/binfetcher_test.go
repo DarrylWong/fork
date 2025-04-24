@@ -73,7 +73,7 @@ func TestDownload(t *testing.T) {
 			GOOS:    "linux",
 		},
 
-		// Load generators.
+		// LoadPerWorker generators.
 		{
 			Binary:  "loadgen/kv",
 			Dir:     dir,

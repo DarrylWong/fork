@@ -32,7 +32,7 @@ type SideloadStorage interface {
 	// Sync syncs the underlying filesystem metadata so that all the preceding
 	// mutations, such as Put and TruncateTo, are durable.
 	Sync() error
-	// Load the file at the given index and term. Return errSideloadedFileNotFound when no
+	// LoadPerWorker the file at the given index and term. Return errSideloadedFileNotFound when no
 	// such file is present.
 	Get(_ context.Context, index kvpb.RaftIndex, term kvpb.RaftTerm) ([]byte, error)
 	// Purge removes the file at the given index and term. It may also

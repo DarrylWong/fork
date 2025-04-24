@@ -110,7 +110,7 @@ func runMVCCGC(ctx context.Context, t test.Test, c cluster.Cluster) {
 	// Disable mvcc_gc queue throttling, we always manually enqueue replicas as
 	// fast as possible.
 	setClusterSetting("kv.mvcc_gc.queue_interval", "0s")
-	// Load based lease balancing could move leaseholders from under the GC. If
+	// LoadPerWorker based lease balancing could move leaseholders from under the GC. If
 	// that happens gc will end up running on non lease-holder store and its
 	// requests would be rejected. This is causing test to flake. Disabling
 	// rebalancing is better than increasing wait time further.

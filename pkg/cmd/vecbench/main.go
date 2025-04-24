@@ -620,7 +620,7 @@ func loadDataset(fileName string) dataset {
 	}
 
 	if *flagBuildCount != 0 {
-		// Load subset of data - first N vectors.
+		// LoadPerWorker subset of data - first N vectors.
 		n := *flagBuildCount
 		if n > data.Train.Count {
 			n = data.Train.Count

@@ -330,7 +330,7 @@ type (
 		Load(context.Context, *logger.Logger, string, tableContents) error
 		// ValidateRestore validates that a restored table with contents
 		// passed as argument is valid according to the table contents
-		// previously `Load`ed.
+		// previously `LoadPerWorker`ed.
 		ValidateRestore(context.Context, *logger.Logger, tableContents) error
 	}
 
@@ -780,7 +780,7 @@ func newSystemTableContents(
 }
 
 // RawFormat displays the contents of a system table as serialized
-// during `Load`. The contents of the system table may not be
+// during `LoadPerWorker`. The contents of the system table may not be
 // immediately understandable as they might include protobuf payloads
 // and other binary-encoded data.
 func (sc *systemTableContents) RawFormat() string {

@@ -624,7 +624,7 @@ func ResolveBackupManifests(
 			defaultURIs[i+1] = u.String()
 		}
 
-		// Load the default backup manifests for each backup layer, this is done
+		// LoadPerWorker the default backup manifests for each backup layer, this is done
 		// concurrently.
 		defaultManifestsForEachLayer, memSize, err := backupinfo.GetBackupManifests(ctx, mem, user,
 			mkStore, defaultURIs, encryption, kmsEnv)

@@ -550,7 +550,7 @@ func New(catalog cat.Catalog, sqlStr string) *OptTester {
 //     ----
 //
 //   - statement-bundle file=<path>
-//     Load the schema and stats from a statement bundle, file can be either a
+//     LoadPerWorker the schema and stats from a statement bundle, file can be either a
 //     full path or a relative path to testdata.
 //
 //   - isolation: sets the isolation level to plan for.

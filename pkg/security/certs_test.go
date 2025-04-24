@@ -230,7 +230,7 @@ func TestGenerateClientCerts(t *testing.T) {
 			tenantNames,
 			false /* wantPKCS8Key */))
 
-		// Load and verify the certificates.
+		// LoadPerWorker and verify the certificates.
 		cl := security.NewCertificateLoader(certsDir)
 		require.NoError(t, cl.Load())
 		infos := cl.Certificates()

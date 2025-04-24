@@ -306,7 +306,7 @@ func (e *quorumRecoveryEnv) handleReplicationData(t *testing.T, d datadriven.Tes
 	e.stores = make(map[roachpb.StoreID]wrappedStore)
 	e.clusterID = uuid.MakeV4()
 
-	// Load yaml from data into local range info.
+	// LoadPerWorker yaml from data into local range info.
 	var replicaData []testReplicaInfo
 	err := yaml.UnmarshalStrict([]byte(d.Input), &replicaData)
 	if err != nil {

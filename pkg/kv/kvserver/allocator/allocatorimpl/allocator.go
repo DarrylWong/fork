@@ -483,7 +483,7 @@ func makeAllocatorRand(source rand.Source) allocatorRand {
 }
 
 var (
-	// Load-based lease transfers.
+	// LoadPerWorker-based lease transfers.
 	metaLBLeaseTransferCannotFindBetterCandidate = metric.Metadata{
 		Name: "kv.allocator.load_based_lease_transfers.cannot_find_better_candidate",
 		Help: "The number times the allocator determined that the lease was on the best" +
@@ -526,7 +526,7 @@ var (
 		Unit:        metric.Unit_COUNT,
 	}
 
-	// Load-based replica rebalances.
+	// LoadPerWorker-based replica rebalances.
 	metaLBReplicaRebalancingCannotFindBetterCandidate = metric.Metadata{
 		Name: "kv.allocator.load_based_replica_rebalancing.cannot_find_better_candidate",
 		Help: "The number times the allocator determined that the range was on the best" +

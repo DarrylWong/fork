@@ -57,7 +57,7 @@ const defaultSoftMaxRegistrySize = 128 << 20 // 128 MB
 // to a batch of updates to the file registry. The updates are replayed
 // in Load.
 type FileRegistry struct {
-	// Initialize the following before calling Load().
+	// Initialize the following before calling LoadPerWorker().
 
 	// The FS to write the file registry file.
 	FS vfs.FS

@@ -82,7 +82,7 @@ func (m *MemProvider) Load(ctx context.Context) (bool, error) {
 	// Clear any in-memory vectors (but not index file).
 	m.Close()
 
-	// Load vectors from the index file.
+	// LoadPerWorker vectors from the index file.
 	m.store, err = loadMemStore(m.indexFileName)
 	if err != nil {
 		return false, err

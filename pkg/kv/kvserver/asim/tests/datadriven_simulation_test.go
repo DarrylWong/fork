@@ -48,7 +48,7 @@ import (
 //     simulation. The default values are: nodes=3 stores_per_node=1.
 //
 //   - "load_cluster": config=<name>
-//     Load a defined cluster configuration to be the generated cluster in the
+//     LoadPerWorker a defined cluster configuration to be the generated cluster in the
 //     simulation. The available confiurations are: single_region: 15 nodes in
 //     region=US, 5 in each zone US_1/US_2/US_3. single_region_multi_store: 3
 //     nodes, 5 stores per node with the same zone/region configuration as

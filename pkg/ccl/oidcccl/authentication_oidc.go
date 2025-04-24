@@ -678,7 +678,7 @@ var ConfigureOIDC = func(
 			}
 		}
 
-		// 2. Load the identity map.
+		// 2. LoadPerWorker the identity map.
 		var idMap *identmap.Conf
 		{
 			// TODO(todd): Get the identity map from someplace that's already caching it.

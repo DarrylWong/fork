@@ -1848,7 +1848,7 @@ func loadTPCCBench(
 		panic("unexpected")
 	}
 
-	// Load the corresponding fixture.
+	// LoadPerWorker the corresponding fixture.
 	t.L().Printf("restoring tpcc fixture\n")
 	err := roachtestutil.WaitFor3XReplication(ctx, t.L(), db)
 	require.NoError(t, err)

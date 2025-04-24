@@ -41,7 +41,7 @@ var embedded embed.FS
 
 // Tables implements the Generator interface.
 func (geospatial) Tables() []workload.Table {
-	// Load the table rows from the embedded files.
+	// LoadPerWorker the table rows from the embedded files.
 	load := func(name string) [][]interface{} {
 		compressed, err := embedded.ReadFile(fmt.Sprintf("data/%s.yaml.gz", name))
 		if err != nil {

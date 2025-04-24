@@ -59,7 +59,7 @@ func loadSchedule(params runParams, scheduleID tree.Datum) (*jobs.ScheduledJob, 
 	env := JobSchedulerEnv(params.ExecCfg().JobsKnobs())
 	schedule := jobs.NewScheduledJob(env)
 
-	// Load schedule expression.  This is needed for resume command, but we
+	// LoadPerWorker schedule expression.  This is needed for resume command, but we
 	// also use this query to check for the schedule existence.
 	//
 	// Run the query as the node user since we perform our own privilege checks

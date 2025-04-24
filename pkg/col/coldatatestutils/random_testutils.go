@@ -31,7 +31,7 @@ const maxVarLen = 64
 var locations []*time.Location
 
 func init() {
-	// Load some random time zones.
+	// LoadPerWorker some random time zones.
 	for _, locationName := range []string{
 		"Africa/Addis_Ababa",
 		"America/Anchorage",

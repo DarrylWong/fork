@@ -40,7 +40,7 @@ func registerAlterPK(r registry.Registry) {
 
 		m := c.NewMonitor(ctx, c.CRDBNodes())
 		m.Go(func(ctx context.Context) error {
-			// Load up a relatively small dataset to perform a workload on.
+			// LoadPerWorker up a relatively small dataset to perform a workload on.
 
 			// Init the workload.
 			cmd := fmt.Sprintf("./cockroach workload init bank --drop --rows %d {pgurl%s}", numRows, c.CRDBNodes())

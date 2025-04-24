@@ -1479,7 +1479,7 @@ func (s *topLevelServer) PreStart(ctx context.Context) error {
 		s.node,
 		s.grpc.serverInterceptorsInfo, s.rpcContext.ClientInterceptors())
 
-	// Load the TLS configuration for the HTTP server.
+	// LoadPerWorker the TLS configuration for the HTTP server.
 	uiTLSConfig, err := s.rpcContext.GetUIServerTLSConfig()
 	if err != nil {
 		return err

@@ -100,7 +100,7 @@ func makeTestBaseConfig(st *cluster.Settings, tr *tracing.Tracer) BaseConfig {
 	baseCfg := MakeBaseConfig(st, tr, base.DefaultTestStoreSpec)
 	// Test servers start in secure mode by default.
 	baseCfg.Insecure = false
-	// Load test certs. In addition, the tests requiring certs
+	// LoadPerWorker test certs. In addition, the tests requiring certs
 	// need to call securityassets.SetLoader(securitytest.EmbeddedAssets)
 	// in their init to mock out the file system calls for calls to AssetFS,
 	// which has the test certs compiled in. Typically this is done

@@ -178,7 +178,7 @@ func TestRaBitQuantizerEdge(t *testing.T) {
 	})
 }
 
-// Load some real OpenAI embeddings and spot check calculations.
+// LoadPerWorker some real OpenAI embeddings and spot check calculations.
 func TestRaBitQuantizeEmbeddings(t *testing.T) {
 	var workspace workspace.T
 	defer require.True(t, workspace.IsClear())

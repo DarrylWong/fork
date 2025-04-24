@@ -108,7 +108,7 @@ func getInitialStateEngine(
 	require.True(b, ok)
 
 	if !inMemory {
-		// Load all the files into the OS buffer cache for better determinism.
+		// LoadPerWorker all the files into the OS buffer cache for better determinism.
 		testutils.ReadAllFiles(filepath.Join(env.Dir, "*"))
 	}
 

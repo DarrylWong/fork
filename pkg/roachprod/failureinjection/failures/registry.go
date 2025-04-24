@@ -35,11 +35,12 @@ func NewFailureRegistry() *FailureRegistry {
 
 func (r *FailureRegistry) Register() {
 	registerCgroupDiskStall(r)
+	registerCPUStressNameFailure(r)
 	registerDmsetupDiskStall(r)
 	registerIPTablesPartitionFailure(r)
 	registerNetworkLatencyFailure(r)
-	registerNoopFailure(r)
 	registerNodeKillFailure(r)
+	registerNoopFailure(r)
 }
 
 func (r *FailureRegistry) add(

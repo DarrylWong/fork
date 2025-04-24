@@ -373,7 +373,7 @@ func TestNamingScheme(t *testing.T) {
 			}
 		}
 
-		// Load certs.
+		// LoadPerWorker certs.
 		cl := security.NewCertificateLoader(certsDir)
 		if data.skipChecks {
 			cl.TestDisablePermissionChecks()

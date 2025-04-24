@@ -1163,7 +1163,7 @@ func getScheduledBackupExecutionArgsFromSchedule(
 	storage jobs.ScheduledJobStorage,
 	scheduleID jobspb.ScheduleID,
 ) (*jobs.ScheduledJob, *backuppb.ScheduledBackupExecutionArgs, error) {
-	// Load the schedule that has spawned this job.
+	// LoadPerWorker the schedule that has spawned this job.
 	sj, err := storage.Load(ctx, env, scheduleID)
 	if err != nil {
 		return nil, nil, errors.Wrapf(err, "failed to load scheduled job %d", scheduleID)

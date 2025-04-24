@@ -53,7 +53,7 @@ func TestAppliedConfig(t *testing.T) {
 
 	datadriven.RunTest(t, "testdata/config",
 		func(t *testing.T, d *datadriven.TestData) string {
-			// Load the default config and apply the test's input.
+			// LoadPerWorker the default config and apply the test's input.
 			h := logconfig.Holder{Config: logconfig.DefaultConfig()}
 			if err := h.Set(d.Input); err != nil {
 				t.Fatal(err)

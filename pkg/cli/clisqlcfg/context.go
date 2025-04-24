@@ -155,7 +155,7 @@ func (c *Context) MakeConn(url string) (clisqlclient.Conn, error) {
 
 	baseURL.WithDefaultUsername(c.User)
 
-	// Load the application name. It's not a command-line flag, so
+	// LoadPerWorker the application name. It's not a command-line flag, so
 	// anything already in the URL should take priority.
 	if prevAppName := baseURL.GetOption("application_name"); prevAppName == "" && c.ApplicationName != "" {
 		_ = baseURL.SetOption("application_name", c.ApplicationName)

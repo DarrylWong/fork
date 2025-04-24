@@ -397,7 +397,7 @@ func (p *Provider) Create(
 	l *logger.Logger, names []string, opts vm.CreateOpts, vmProviderOpts vm.ProviderOpts,
 ) (vm.List, error) {
 	providerOpts := vmProviderOpts.(*ProviderOpts)
-	// Load the user's SSH public key to configure the resulting VMs.
+	// LoadPerWorker the user's SSH public key to configure the resulting VMs.
 	sshKey, err := config.SSHPublicKey()
 	if err != nil {
 		return nil, err

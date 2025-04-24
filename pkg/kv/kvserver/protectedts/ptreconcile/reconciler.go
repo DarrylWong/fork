@@ -110,7 +110,7 @@ func (r *Reconciler) run(ctx context.Context, stopper *stop.Stopper) {
 }
 
 func (r *Reconciler) reconcile(ctx context.Context) {
-	// Load protected timestamp records.
+	// LoadPerWorker protected timestamp records.
 	var state ptpb.State
 	if err := r.db.Txn(ctx, func(ctx context.Context, txn isql.Txn) error {
 		var err error

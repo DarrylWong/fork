@@ -143,7 +143,7 @@ echo '%s' | git apply --ignore-whitespace -`, fmt.Sprintf(npgsqlPatch, result.St
 			t.Fatal(err)
 		}
 
-		// Load the list of all test results files and parse them individually.
+		// LoadPerWorker the list of all test results files and parse them individually.
 		// Files are here: /mnt/data1/npgsql/test/Npgsql.Tests/TestResults/
 		t.Status("collating test results")
 		result, err = repeatRunWithDetailsSingleNode(

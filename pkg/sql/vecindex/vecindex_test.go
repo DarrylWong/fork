@@ -50,7 +50,7 @@ func TestVecIndexConcurrency(t *testing.T) {
 	// Enable vector indexes.
 	runner.Exec(t, `SET CLUSTER SETTING feature.vector_index.enabled = true`)
 
-	// Load features.
+	// LoadPerWorker features.
 	const featureCount = 2000
 	features := testutils.LoadFeatures(t, featureCount)
 
@@ -196,7 +196,7 @@ func TestVecIndexStandbyReader(t *testing.T) {
 	// Construct the table.
 	srcRunner.Exec(t, "CREATE TABLE t (id INT PRIMARY KEY, v VECTOR(512), VECTOR INDEX foo (v))")
 
-	// Load features and build the index.
+	// LoadPerWorker features and build the index.
 	const batchSize = 10
 	const numBatches = 100
 	vectors := testutils.LoadFeatures(t, batchSize*numBatches)
@@ -252,7 +252,7 @@ func TestVecIndexDeletion(t *testing.T) {
 	// Construct the table.
 	runner.Exec(t, "CREATE TABLE t (id INT PRIMARY KEY, v VECTOR(512), VECTOR INDEX (v))")
 
-	// Load a small set of vectors for testing.
+	// LoadPerWorker a small set of vectors for testing.
 	vectors := testutils.LoadFeatures(t, 10)
 
 	// Insert the vectors.

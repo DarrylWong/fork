@@ -2373,7 +2373,7 @@ func (n *alterDatabaseSetZoneConfigExtensionNode) startExec(params runParams) er
 			yamlConfig += "\n"
 		}
 
-		// Load settings from YAML. If there was no YAML (e.g. because the
+		// LoadPerWorker settings from YAML. If there was no YAML (e.g. because the
 		// query specified CONFIGURE ZONE USING), the YAML string will be
 		// empty, in which case the unmarshaling will be a no-op. This is
 		// innocuous.
@@ -2382,7 +2382,7 @@ func (n *alterDatabaseSetZoneConfigExtensionNode) startExec(params runParams) er
 			return pgerror.Wrap(err, pgcode.CheckViolation, "could not parse zone config")
 		}
 
-		// Load settings from var = val assignments. If there were no such
+		// LoadPerWorker settings from var = val assignments. If there were no such
 		// settings, (e.g. because the query specified CONFIGURE ZONE = or
 		// USING DEFAULT), the setter slice will be empty and this will be
 		// a no-op. This is innocuous.

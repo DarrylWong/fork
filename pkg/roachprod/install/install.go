@@ -119,6 +119,11 @@ sudo apt-get install -y nmap;
 sudo apt-get update;
 sudo apt-get install -y vmtouch;
 `,
+
+	"stress-ng": `
+sudo apt-get update;
+sudo apt-get install -y stress-ng;
+`,
 }
 
 // installLocalCmds is a map from software name to a map of strings that

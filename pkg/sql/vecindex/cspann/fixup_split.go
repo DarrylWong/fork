@@ -623,7 +623,7 @@ func (fw *fixupWorker) addToParentPartition(
 			partitionKey, parentPartitionKey, parentLevel, parentMetadata.StateDetails.String())
 	}()
 
-	// Load parent metadata to verify that it's in a state that allows inserts.
+	// LoadPerWorker parent metadata to verify that it's in a state that allows inserts.
 	parentMetadata, err = fw.getPartitionMetadata(ctx, parentPartitionKey)
 	if err != nil {
 		return errors.Wrapf(err, "getting parent partition %d metadata", parentPartitionKey)
@@ -667,7 +667,7 @@ func (fw *fixupWorker) removeFromParentPartition(
 			partitionKey, parentPartitionKey, parentLevel, parentMetadata.StateDetails.String())
 	}()
 
-	// Load parent metadata to verify that it's in a state that allows deletes.
+	// LoadPerWorker parent metadata to verify that it's in a state that allows deletes.
 	parentMetadata, err = fw.getPartitionMetadata(ctx, parentPartitionKey)
 	if err != nil {
 		return errors.Wrapf(err, "getting parent partition %d metadata", parentPartitionKey)

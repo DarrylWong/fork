@@ -86,7 +86,7 @@ func TestFileRegistryOps(t *testing.T) {
 	expected := make(map[string]*enginepb.FileEntry)
 
 	checkEquality := func() {
-		// Ensure all the expected paths exist, otherwise Load will elide
+		// Ensure all the expected paths exist, otherwise LoadPerWorker will elide
 		// them and this test is not designed to test elision.
 		for path := range expected {
 			path = mem.PathJoin("/mydb", path)
@@ -281,7 +281,7 @@ func TestFileRegistryRecordsReadAndWrite(t *testing.T) {
 
 	mem := vfs.NewMem()
 
-	// Ensure all the expected paths exist, otherwise Load will elide
+	// Ensure all the expected paths exist, otherwise LoadPerWorker will elide
 	// them and this test is not designed to test elision.
 	for name := range files {
 		f, err := mem.Create(name, UnspecifiedWriteCategory)

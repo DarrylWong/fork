@@ -28,7 +28,7 @@ import (
 // It reloads all certificates when triggered and construct tls.Config objects for
 // servers or clients.
 //
-// Important note: Load() performs some sanity checks (file pairs match, CA certs don't disappear),
+// Important note: LoadPerWorker() performs some sanity checks (file pairs match, CA certs don't disappear),
 // but these are by no means complete. Completeness is not required as nodes restarting have
 // no fallback if invalid certs/keys are present.
 //
@@ -64,7 +64,7 @@ type CertificateManager struct {
 	// If false, this is the first load. Needed to ensure we do not drop certain certs.
 	initialized bool
 
-	// Set of certs. These are swapped in during Load(), and never mutated afterwards.
+	// Set of certs. These are swapped in during LoadPerWorker(), and never mutated afterwards.
 	caCert         *CertInfo // default CA certificate
 	clientCACert   *CertInfo // optional: certificate to verify client certificates
 	uiCACert       *CertInfo // optional: certificate to verify UI certificates
@@ -76,7 +76,7 @@ type CertificateManager struct {
 	// Certs only used with multi-tenancy.
 	tenantCACert, tenantCert, tenantSigningCert *CertInfo
 
-	// TLS configs. Initialized lazily. Wiped on every successful Load().
+	// TLS configs. Initialized lazily. Wiped on every successful LoadPerWorker().
 	// Server-side config.
 	serverConfig *tls.Config
 	// Server-side config for the Admin UI.

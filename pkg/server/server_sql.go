@@ -1523,7 +1523,7 @@ func (s *SQLServer) preStart(
 		return errors.Wrap(err, "initializing settings")
 	}
 
-	// Load the multi-region enum by reading the system database's descriptor.
+	// LoadPerWorker the multi-region enum by reading the system database's descriptor.
 	// This also serves as a simple check to see if a tenant exist (i.e. by
 	// checking whether the system db has been bootstrapped).
 	regionPhysicalRep, err := startup.RunIdempotentWithRetryEx(ctx,

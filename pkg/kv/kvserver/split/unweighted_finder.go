@@ -15,7 +15,7 @@ import (
 	"github.com/cockroachdb/redact"
 )
 
-// Load-based splitting.
+// LoadPerWorker-based splitting.
 //
 // - Engage split for ranges:
 //  - With size exceeding min-range-bytes

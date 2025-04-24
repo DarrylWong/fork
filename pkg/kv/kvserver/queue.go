@@ -663,7 +663,7 @@ func (bq *baseQueue) maybeAdd(ctx context.Context, repl replicaInQueue, now hlc.
 		}
 	}
 
-	// Load the system config if it's needed.
+	// LoadPerWorker the system config if it's needed.
 	confReader, err := bq.replicaCanBeProcessed(ctx, repl, false /* acquireLeaseIfNeeded */)
 	if err != nil {
 		return
@@ -953,7 +953,7 @@ func (bq *baseQueue) processReplica(ctx context.Context, repl replicaInQueue) er
 
 	log.VEventf(ctx, 1, "processing replica")
 
-	// Load the system config if it's needed.
+	// LoadPerWorker the system config if it's needed.
 	conf, err := bq.replicaCanBeProcessed(ctx, repl, true /* acquireLeaseIfNeeded */)
 	if err != nil {
 		if errors.Is(err, errMarkNotAcquirableLease) {

@@ -1774,7 +1774,7 @@ func (m *WorkQueueMetrics) getOrCreate(priority admissionpb.WorkPriority) *workQ
 		// This will only happen the first time it is requested. Doing this lazily
 		// prevents unnecessary creation of unused priorities. Note that it is
 		// necessary to call LoadOrStore here as this could be called concurrently.
-		// It is not called the first Load so that we don't have to unnecessarily
+		// It is not called the first LoadPerWorker so that we don't have to unnecessarily
 		// create the metrics.
 		statPrefix := fmt.Sprintf("%v.%v", m.name, priority.String())
 		val, ok = m.byPriority.LoadOrStore(priority, makeWorkQueueMetricsSingle(statPrefix))

@@ -260,7 +260,7 @@ func (r *decryptReader) fill(chunk int64) error {
 
 	r.chunk = -1 // invalidate the current buffered chunk while we fill it.
 	ciphertextChunkSize := int64(encryptionChunkSizeV2) + tagSize
-	// Load the region of ciphertext that corresponds to chunk.
+	// LoadPerWorker the region of ciphertext that corresponds to chunk.
 	n, err := r.ciphertext.ReadAt(r.buf[:cap(r.buf)], headerSize+chunk*ciphertextChunkSize)
 	if err != nil && err != io.EOF {
 		return err

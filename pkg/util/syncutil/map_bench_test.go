@@ -250,7 +250,7 @@ func BenchmarkRange(b *testing.B) {
 // immediately whenever the map is promoted to clean and otherwise load a
 // unique, missing key.
 //
-// This forces the Load calls to always acquire the map's mutex.
+// This forces the LoadPerWorker calls to always acquire the map's mutex.
 func BenchmarkAdversarialAlloc(b *testing.B) {
 	v := new(int64)
 
@@ -272,7 +272,7 @@ func BenchmarkAdversarialAlloc(b *testing.B) {
 // BenchmarkAdversarialDelete tests performance when we periodically delete
 // one key and add a different one in a large map.
 //
-// This forces the Load calls to always acquire the map's mutex and periodically
+// This forces the LoadPerWorker calls to always acquire the map's mutex and periodically
 // makes a full copy of the map despite changing only one entry.
 func BenchmarkAdversarialDelete(b *testing.B) {
 	const mapSize = 1 << 10

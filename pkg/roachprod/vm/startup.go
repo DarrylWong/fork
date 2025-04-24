@@ -313,7 +313,7 @@ done`
 
 const startupScriptUlimits = `
 # increase the default maximum number of open file descriptors for
-# root and non-root users. Load generators running a lot of concurrent
+# root and non-root users. LoadPerWorker generators running a lot of concurrent
 # workers bump into this often.
 sudo sh -c 'echo "root - nofile 1048576\n* - nofile 1048576" > /etc/security/limits.d/10-roachprod-nofiles.conf'`
 

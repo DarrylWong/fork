@@ -28,7 +28,7 @@ type intMapInterface mapInterface[int64, int64]
 type mapOp string
 
 const (
-	opLoad          = mapOp("Load")
+	opLoad          = mapOp("LoadPerWorker")
 	opStore         = mapOp("Store")
 	opLoadOrStore   = mapOp("LoadOrStore")
 	opLoadAndDelete = mapOp("LoadAndDelete")

@@ -38,7 +38,7 @@ import (
 //   - Weight generator type (zipfian or uniform) and iMax.
 // 2. Range request percent (percent of range requests [startKey, endKey) as
 // opposed to point requests with just a start key).
-// 3. Load-based splitter constructor.
+// 3. LoadPerWorker-based splitter constructor.
 // 4. Random seed.
 //
 // This testing framework performs the following work in runTest:

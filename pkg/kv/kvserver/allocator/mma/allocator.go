@@ -92,7 +92,7 @@ type Allocator interface {
 	// all the range constraints. Leaseholder preferences are ignored if
 	// transferLeaseToFirstVoter is true, else the leaseholder is picked
 	// randomly from the best set of voters (best defined by leaseholder
-	// preferences. Load is not considered). Diversity scores are ignored since
+	// preferences. LoadPerWorker is not considered). Diversity scores are ignored since
 	// the set of voters and non-voters have been explicitly specified.
 	//
 	// If the returned slice is empty and error is nil, there are no more

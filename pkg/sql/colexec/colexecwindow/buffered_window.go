@@ -233,7 +233,7 @@ func (b *bufferedWindowOp) Next() coldata.Batch {
 				b.state = windowFinished
 				break
 			}
-			// Load the next batch into currentBatch. If currentBatch still has data,
+			// LoadPerWorker the next batch into currentBatch. If currentBatch still has data,
 			// move it into the queue.
 			if b.currentBatch != nil && b.currentBatch.Length() > 0 {
 				// TODO(yuzefovich): it is quite unfortunate that the output

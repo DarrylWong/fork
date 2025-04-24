@@ -80,7 +80,7 @@
 //   CPULoadListener is also implemented by these structs, to listen to
 //   the latest CPU load information from the scheduler.
 //
-// Load observation and slot count or token burst adjustment: Dynamic
+// LoadPerWorker observation and slot count or token burst adjustment: Dynamic
 // adjustment is performed by kvSlotAdjuster for KVWork slots. This is because
 // KVWork is expected to usually be CPU bound (due to good caching), and
 // unlike SQLKVResponseWork and SQLSQLResponseWork (which are even more CPU

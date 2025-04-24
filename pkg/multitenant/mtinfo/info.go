@@ -70,7 +70,7 @@ func GetTenantInfoFromSQLRow(
 		tenantcapabilities.EnableAll(&info.ProtoInfo.Capabilities)
 	}
 
-	// Load the name if defined.
+	// LoadPerWorker the name if defined.
 	if len(row) > 2 && row[2] != tree.DNull {
 		name, ok := tree.AsDString(row[2])
 		if !ok {
@@ -79,7 +79,7 @@ func GetTenantInfoFromSQLRow(
 		info.Name = roachpb.TenantName(name)
 	}
 
-	// Load the data state column if defined.
+	// LoadPerWorker the data state column if defined.
 	// Compute a suitable default value, from the pre-v23.1 info struct.
 	switch info.ProtoInfo.DeprecatedDataState {
 	case mtinfopb.ProtoInfo_READY:
@@ -103,7 +103,7 @@ func GetTenantInfoFromSQLRow(
 		}
 	}
 
-	// Load the service mode if defined.
+	// LoadPerWorker the service mode if defined.
 	if info.DataState == mtinfopb.DataStateReady {
 		// Suitable default for records created for CC Serverless pre-v23.1.
 		info.ServiceMode = mtinfopb.ServiceModeExternal

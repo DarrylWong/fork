@@ -256,7 +256,7 @@ func runOneRoundQueryComparison(
 				}
 			}
 
-			// Load tables with initial data.
+			// LoadPerWorker tables with initial data.
 
 			importStr := ""
 			for tableName, schemaInfo := range schemaMap {

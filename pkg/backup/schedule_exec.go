@@ -455,7 +455,7 @@ func unlinkOrDropDependentSchedule(
 		return 0, nil
 	}
 
-	// Load the dependent schedule.
+	// LoadPerWorker the dependent schedule.
 	dependentSj, dependentArgs, err := getScheduledBackupExecutionArgsFromSchedule(
 		ctx, env, jobs.ScheduledJobTxn(txn), args.DependentScheduleID,
 	)

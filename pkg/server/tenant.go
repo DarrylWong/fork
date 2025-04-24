@@ -565,7 +565,7 @@ func (s *SQLServerWrapper) PreStart(ctx context.Context) error {
 	// If DisableHTTPListener is set, we are relying on the HTTP request
 	// routing performed by the serverController.
 	if !s.sqlServer.cfg.DisableHTTPListener {
-		// Load the TLS configuration for the HTTP server.
+		// LoadPerWorker the TLS configuration for the HTTP server.
 		uiTLSConfig, err := s.rpcContext.GetUIServerTLSConfig()
 		if err != nil {
 			return err

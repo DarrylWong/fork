@@ -65,7 +65,7 @@ import (
 // set_hba
 // <hba config>
 //
-//	Load the provided HBA configuration via the cluster setting
+//	LoadPerWorker the provided HBA configuration via the cluster setting
 //	server.host_based_authentication.configuration.
 //	The expected output is the configuration after parsing
 //	and reloading in the server.
@@ -73,7 +73,7 @@ import (
 // set_identity_map
 // <identity map>
 //
-//	Load the provided identity map via the cluster setting
+//	LoadPerWorker the provided identity map via the cluster setting
 //	server.identity_map.configuration.
 //	The expected output is the configuration after parsing
 //	and reloading in the server.

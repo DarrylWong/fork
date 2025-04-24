@@ -475,7 +475,7 @@ func loadReplicas(ctx context.Context, eng storage.Engine) ([]Replica, error) {
 		}
 	}
 
-	// Load replicas from disk based on their RaftReplicaID and HardState.
+	// LoadPerWorker replicas from disk based on their RaftReplicaID and HardState.
 	//
 	// INVARIANT: all replicas have a persisted full ReplicaID (i.e. a "ReplicaID from disk").
 	//

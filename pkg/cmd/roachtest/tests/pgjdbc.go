@@ -177,7 +177,7 @@ func registerPgjdbc(r registry.Registry) {
 			t.Fatal(err)
 		}
 
-		// Load the list of all test results files and parse them individually.
+		// LoadPerWorker the list of all test results files and parse them individually.
 		// Files are here: /mnt/data1/pgjdbc/pgjdbc-core/target/test-results/test
 		result, err := repeatRunWithDetailsSingleNode(
 			ctx,

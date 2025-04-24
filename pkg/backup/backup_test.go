@@ -8413,7 +8413,7 @@ func TestIncorrectAccessOfFilesInBackupMetadata(t *testing.T) {
 	sqlDB.Exec(t, `INSERT INTO r1.foo VALUES (1)`)
 	sqlDB.Exec(t, `BACKUP DATABASE r1 INTO 'nodelocal://1/test'`)
 
-	// Load/deserialize the manifest so we can mess with it.
+	// LoadPerWorker/deserialize the manifest so we can mess with it.
 	matches, err := filepath.Glob(filepath.Join(rawDir, "test", "*/*/*", backupbase.BackupMetadataName))
 	require.NoError(t, err)
 	require.Len(t, matches, 1)
@@ -8464,7 +8464,7 @@ func TestRestoringAcrossVersions(t *testing.T) {
 
 	backupPath := getFullBackupPaths(t, sqlDB, "nodelocal://1/cross_version")[0]
 
-	// Load/deserialize the manifest so we can mess with it.
+	// LoadPerWorker/deserialize the manifest so we can mess with it.
 	manifestPath := filepath.Join(rawDir, "cross_version", backupPath, backupbase.BackupMetadataName)
 	manifestData, err := os.ReadFile(manifestPath)
 	require.NoError(t, err)

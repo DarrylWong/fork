@@ -1345,7 +1345,7 @@ func TestChooseRangeToRebalanceIgnoresRangeOnBestStores(t *testing.T) {
 		sr := NewStoreRebalancer(cfg.AmbientCtx, cfg.Settings, rq, rr, objectiveProvider)
 		lbRebalanceDimension := sr.RebalanceObjective().ToDimension()
 
-		// Load a fake hot range that's already on the best stores. We want to ensure
+		// LoadPerWorker a fake hot range that's already on the best stores. We want to ensure
 		// that the store rebalancer doesn't attempt to rebalance ranges that it
 		// cannot find better rebalance opportunities for.
 		loadRanges(rr, s,
@@ -1609,7 +1609,7 @@ func TestNoLeaseTransferToBehindReplicas(t *testing.T) {
 		}
 		lbRebalanceDimension := sr.RebalanceObjective().ToDimension()
 
-		// Load in a range with replicas on an overfull node, a slightly underfull
+		// LoadPerWorker in a range with replicas on an overfull node, a slightly underfull
 		// node, and a very underfull node.
 		loadRanges(rr, s, []testRange{{voters: []roachpb.StoreID{1, 4, 5}, qps: 100, reqCPU: 100 * float64(time.Millisecond)}})
 
@@ -1786,7 +1786,7 @@ func TestStoreRebalancerIOOverloadCheck(t *testing.T) {
 			sr := NewStoreRebalancer(cfg.AmbientCtx, cfg.Settings, rq, rr, objectiveProvider)
 			lbRebalanceDimension := sr.RebalanceObjective().ToDimension()
 
-			// Load in a range with replicas on an overfull node, a slightly underfull
+			// LoadPerWorker in a range with replicas on an overfull node, a slightly underfull
 			// node, and a very underfull node.
 			loadRanges(rr, s, []testRange{{voters: []roachpb.StoreID{1, 3, 5}, qps: 100, reqCPU: 100 * float64(time.Millisecond)}})
 

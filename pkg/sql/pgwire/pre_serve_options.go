@@ -78,7 +78,7 @@ func parseClientProvidedSessionParameters(
 		// Case-fold for the key for easier comparison.
 		key = strings.ToLower(key)
 
-		// Load the parameter.
+		// LoadPerWorker the parameter.
 		switch key {
 		case "user":
 			// In CockroachDB SQL, unlike in PostgreSQL, usernames are

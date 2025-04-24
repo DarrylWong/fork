@@ -594,7 +594,7 @@ func TestSideloadStorageSync(t *testing.T) {
 		eng.Close()
 		// Reset filesystem to the last synced state.
 
-		// Emulate process restart. Load from the last synced state.
+		// Emulate process restart. LoadPerWorker from the last synced state.
 		env, err = fs.InitEnv(ctx, crashFS, "", fs.EnvConfig{}, nil /* statsCollector */)
 		require.NoError(t, err)
 		eng, err = storage.Open(ctx, env, cluster.MakeTestingClusterSettings(), storage.ForTesting)

@@ -266,7 +266,7 @@ func CreateNodePair(
 		return err
 	}
 
-	// Load the CA pair.
+	// LoadPerWorker the CA pair.
 	caCert, caPrivateKey, err := loadCACertAndKey(cm.CACertPath(), caKeyPath)
 	if err != nil {
 		return err
@@ -324,7 +324,7 @@ func CreateUIPair(
 		return err
 	}
 
-	// Load the CA pair.
+	// LoadPerWorker the CA pair.
 	caCert, caPrivateKey, err := loadCACertAndKey(cm.UICACertPath(), caKeyPath)
 	if err != nil {
 		return err
@@ -395,7 +395,7 @@ func CreateClientPair(
 		caCertPath = cm.CACertPath()
 	}
 
-	// Load the CA pair.
+	// LoadPerWorker the CA pair.
 	caCert, caPrivateKey, err := loadCACertAndKey(caCertPath, caKeyPath)
 	if err != nil {
 		return err
@@ -468,14 +468,14 @@ func CreateTenantPair(
 		return nil, err
 	}
 
-	// Load the tenant client CA cert info. Note that this falls back to the regular client CA which in turn falls
+	// LoadPerWorker the tenant client CA cert info. Note that this falls back to the regular client CA which in turn falls
 	// back to the CA.
 	clientCA, err := cm.getTenantCACertLocked()
 	if err != nil {
 		return nil, err
 	}
 
-	// Load the CA pair.
+	// LoadPerWorker the CA pair.
 	caCert, caPrivateKey, err := loadCACertAndKey(filepath.Join(certsDir, clientCA.Filename), caKeyPath)
 	if err != nil {
 		return nil, err

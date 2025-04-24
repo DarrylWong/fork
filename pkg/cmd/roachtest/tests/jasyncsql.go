@@ -118,7 +118,7 @@ func registerJasyncSQL(r registry.Registry) {
 			t.Fatal(err)
 		}
 
-		// Load all test results
+		// LoadPerWorker all test results
 		result, err := repeatRunWithDetailsSingleNode(
 			ctx,
 			c,

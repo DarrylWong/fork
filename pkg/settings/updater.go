@@ -203,7 +203,7 @@ func (u updater) SetFromStorage(
 	if !u.sv.SpecializedToVirtualCluster() /* system tenant */ ||
 		d.Class() == ApplicationLevel {
 		// The value is being loaded from the current virtual cluster's
-		// system.settings. Load it as an active value.
+		// system.settings. LoadPerWorker it as an active value.
 		return u.setInternal(ctx, key, value, d, origin)
 	}
 

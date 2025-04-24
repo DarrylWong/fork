@@ -1054,7 +1054,7 @@ func (r *Replica) handleRaftReadyRaftMuLocked(
 	r.traceMessageSends(ready.Messages, "sending messages")
 	r.sendRaftMessages(ctx, ready.Messages, pausedFollowers)
 
-	// Load the committed entries to be applied after releasing Replica.mu, to
+	// LoadPerWorker the committed entries to be applied after releasing Replica.mu, to
 	// ensure that we don't have IO under this narrow/lightweight mutex. The
 	// RawNode can be making progress in the meantime, but it will never overwrite
 	// the committed entries it has been observing during the Ready() call.

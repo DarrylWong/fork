@@ -39,13 +39,13 @@ var runManual = flag.Bool(
 // --- PASS: TestAdaptiveThrottling (114.51s)
 //
 //	automatic_stats_manual_test.go:72: Populate table took 7.639067726s
-//	automatic_stats_manual_test.go:72: --- Load 0% ---
+//	automatic_stats_manual_test.go:72: --- LoadPerWorker 0% ---
 //	automatic_stats_manual_test.go:72: Create stats took 1.198634729s
-//	automatic_stats_manual_test.go:72: --- Load 30% ---
+//	automatic_stats_manual_test.go:72: --- LoadPerWorker 30% ---
 //	automatic_stats_manual_test.go:72: Create stats took 2.270165784s
-//	automatic_stats_manual_test.go:72: --- Load 50% ---
+//	automatic_stats_manual_test.go:72: --- LoadPerWorker 50% ---
 //	automatic_stats_manual_test.go:72: Create stats took 7.324599981s
-//	automatic_stats_manual_test.go:72: --- Load 70% ---
+//	automatic_stats_manual_test.go:72: --- LoadPerWorker 70% ---
 //	automatic_stats_manual_test.go:72: Create stats took 15.886412857s
 func TestAdaptiveThrottling(t *testing.T) {
 	defer leaktest.AfterTest(t)()
@@ -81,7 +81,7 @@ func TestAdaptiveThrottling(t *testing.T) {
 	})
 
 	for _, load := range []int{0, 3, 5, 7} {
-		log(fmt.Sprintf("--- Load %d%% ---", load*10))
+		log(fmt.Sprintf("--- LoadPerWorker %d%% ---", load*10))
 		// Set up a load on each CPU.
 		cancel := make(chan struct{})
 		var wg sync.WaitGroup

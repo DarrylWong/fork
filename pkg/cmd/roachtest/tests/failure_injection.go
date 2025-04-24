@@ -721,6 +721,14 @@ var nodeKillTests = func(c cluster.Cluster) []failureSmokeTest {
 	return tests
 }
 
+var cpuStressTest = func(c cluster.Cluster) failureSmokeTest {
+	return failureSmokeTest{
+		testName:    failures.CPUStressName,
+		failureName: failures.CPUStressName,
+		args:        failures.CPUStressArgs{},
+	}
+}
+
 func defaultFailureSmokeTestWorkload(ctx context.Context, c cluster.Cluster, args ...string) error {
 	workloadArgs := strings.Join(args, " ")
 	cmd := roachtestutil.NewCommand("./cockroach workload run kv %s", workloadArgs).

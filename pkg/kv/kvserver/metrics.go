@@ -2490,21 +2490,21 @@ Note that the measurement does not include the duration for replicating the eval
 	}
 	metaPopularKeyCount = metric.Metadata{
 		Name:        "kv.loadsplitter.popularkey",
-		Help:        "Load-based splitter could not find a split key and the most popular sampled split key occurs in >= 25% of the samples.",
+		Help:        "LoadPerWorker-based splitter could not find a split key and the most popular sampled split key occurs in >= 25% of the samples.",
 		Measurement: "Occurrences",
 		Unit:        metric.Unit_COUNT,
 	}
 
 	metaNoSplitKeyCount = metric.Metadata{
 		Name:        "kv.loadsplitter.nosplitkey",
-		Help:        "Load-based splitter could not find a split key.",
+		Help:        "LoadPerWorker-based splitter could not find a split key.",
 		Measurement: "Occurrences",
 		Unit:        metric.Unit_COUNT,
 	}
 
 	metaClearDirectionCount = metric.Metadata{
 		Name:        "kv.loadsplitter.cleardirection",
-		Help:        "Load-based splitter observed an access direction greater than 80% left or right in the samples.",
+		Help:        "LoadPerWorker-based splitter observed an access direction greater than 80% left or right in the samples.",
 		Measurement: "Occurrences",
 		Unit:        metric.Unit_COUNT,
 	}
