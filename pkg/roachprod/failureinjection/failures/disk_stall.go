@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"math/rand"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -275,42 +274,6 @@ func (s *CGroupDiskStaller) setThroughput(
 		strings.Join(limits, " "),
 		cockroachIOController,
 	))
-}
-
-// GetReadWriteBytes parses the io.stat file to get the number of bytes read and written.
-// TODO(darryl): switch to using a lightweight exporter instead: https://github.com/cockroachdb/cockroach/issues/144052
-func (s *CGroupDiskStaller) GetReadWriteBytes(
-	ctx context.Context, l *logger.Logger, node install.Nodes,
-) (int, int, error) {
-	maj, min, err := s.DiskDeviceMajorMinor(ctx, l)
-	if err != nil {
-		return 0, 0, err
-	}
-	// Check the number of bytes read and written to disk.
-	res, err := s.RunWithDetails(
-		ctx, l, node,
-		fmt.Sprintf(`grep -E '%d:%d' /sys/fs/cgroup/system.slice/io.stat |`, maj, min),
-		`grep -oE 'rbytes=[0-9]+|wbytes=[0-9]+' |`,
-		`awk -F= '{printf "%s ", $2} END {print ""}'`,
-	)
-	if err != nil {
-		return 0, 0, err
-	}
-	fields := strings.Fields(res.Stdout)
-	if len(fields) != 2 {
-		return 0, 0, errors.Errorf("expected 2 fields, got %d: %s", len(fields), res.Stdout)
-	}
-
-	readBytes, err := strconv.Atoi(fields[0])
-	if err != nil {
-		return 0, 0, err
-	}
-	writeBytes, err := strconv.Atoi(fields[1])
-	if err != nil {
-		return 0, 0, err
-	}
-
-	return readBytes, writeBytes, nil
 }
 
 const DmsetupDiskStallName = "dmsetup-disk-stall"

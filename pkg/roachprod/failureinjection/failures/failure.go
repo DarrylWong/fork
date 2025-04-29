@@ -9,8 +9,8 @@ import (
 	"context"
 	gosql "database/sql"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/roachprodutil"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -190,23 +190,12 @@ func (f *GenericFailure) NetworkInterfaces(
 
 func getDiskDevice(ctx context.Context, f *GenericFailure, l *logger.Logger) error {
 	if f.diskDevice.name == "" {
-		res, err := f.c.RunWithDetails(ctx, l, install.WithNodes(f.c.Nodes[:1]), "Get Disk Device", "lsblk -o NAME,MAJ:MIN,MOUNTPOINTS | grep /mnt/data1 | awk '{print $1, $2}'")
+		res, err := f.c.RunWithDetails(ctx, l, install.WithNodes(f.c.Nodes[:1]), "Get Disk Device", roachprodutil.GetDiskDeviceCmd())
 		if err != nil {
 			return errors.Wrapf(err, "error when determining block device")
 		}
-		parts := strings.Split(strings.TrimSpace(res[0].Stdout), " ")
-		if len(parts) != 2 {
-			return errors.Newf("unexpected output from lsblk: %s", res[0].Stdout)
-		}
-		f.diskDevice.name = strings.TrimSpace(parts[0])
-		major, minor, found := strings.Cut(parts[1], ":")
-		if !found {
-			return errors.Newf("unexpected output from lsblk: %s", res[0].Stdout)
-		}
-		if f.diskDevice.major, err = strconv.Atoi(major); err != nil {
-			return err
-		}
-		if f.diskDevice.minor, err = strconv.Atoi(minor); err != nil {
+		f.diskDevice.name, f.diskDevice.major, f.diskDevice.minor, err = roachprodutil.ParseDiskDeviceResult(res[0].Stdout)
+		if err != nil {
 			return err
 		}
 	}

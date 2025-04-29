@@ -8,6 +8,10 @@ package tests
 import (
 	"context"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/clusterstats"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/prometheus"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/roachprodutil"
+	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"math/rand"
 	"os"
 	"regexp"
@@ -389,6 +393,45 @@ var latencyTest = func(c cluster.Cluster) failureSmokeTest {
 	}
 }
 
+// getMetricForDiskDevice queries the internal prom instance for the metric with the
+// corresponding node and device label.
+//
+// TODO(darryl): Ideally the block device used by the cluster should automatically be
+// selected without having to pass it in here. We should also not have to index into device
+// and node after including it as part of our query. Instead of teaching clusterstats how
+// to handle cgroups metrics, lets revisit this after we switch metrics gathering to
+// https://github.com/cockroachdb/cockroach/issues/143404.
+func getMetricForDiskDevice(
+	ctx context.Context,
+	l *logger.Logger,
+	c cluster.Cluster,
+	node int,
+	diskDevice string,
+	metricName string,
+) (float64, error) {
+	// TODO(darryl): it'd be nice if roachtest could provide a prom client for us as well
+	// as handle spinning/cleaning up the prom instance, perhaps conditional on a test spec.
+	promClient, err := clusterstats.SetupCollectorPromClient(ctx, c, l, failureSmokeTestPromCfg(c))
+	if err != nil {
+		return 0, err
+	}
+	statCollector := clusterstats.NewStatsCollector(ctx, promClient)
+	point, err := statCollector.CollectPoint(ctx, l, timeutil.Now(), fmt.Sprintf(`%s{node="%d", device="%s"}`, metricName, node, diskDevice))
+	if err != nil {
+		return 0, err
+	}
+	valPerNode, ok := point["device"]
+	if !ok {
+		return 0, errors.Errorf("malformed metric response, expected device label: %v", point)
+	}
+
+	val, ok := valPerNode[diskDevice]
+	if !ok {
+		return 0, errors.Errorf("malformed metric response, unable to find block device: %v", diskDevice)
+	}
+	return val.Value, nil
+}
+
 var cgroupsDiskStallTests = func(c cluster.Cluster) []failureSmokeTest {
 	type rwBytes struct {
 		stalledRead     int
@@ -396,42 +439,83 @@ var cgroupsDiskStallTests = func(c cluster.Cluster) []failureSmokeTest {
 		unaffectedRead  int
 		unaffectedWrite int
 	}
-	getRWBytes := func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.CGroupDiskStaller, stalledNode, unaffectedNode option.NodeListOption) (rwBytes, error) {
-		stalledReadBytes, stalledWriteBytes, err := f.GetReadWriteBytes(ctx, l, stalledNode.InstallNodes())
+	getRWBytes := func(ctx context.Context, l *logger.Logger, c cluster.Cluster, stalledNode, unaffectedNode option.NodeListOption) (rwBytes, error) {
+		const (
+			readBytesMetric  = "cgroup_io_read_bytes_total"
+			writeBytesMetric = "cgroup_io_write_bytes_total"
+		)
+		res, err := c.RunWithDetailsSingleNode(ctx, l, option.WithNodes(unaffectedNode), roachprodutil.GetDiskDeviceCmd())
 		if err != nil {
 			return rwBytes{}, err
 		}
-		unaffectedNodeReadBytes, unaffectedNodeWriteBytes, err := f.GetReadWriteBytes(ctx, l, unaffectedNode.InstallNodes())
+		_, major, minor, err := roachprodutil.ParseDiskDeviceResult(res.Stdout)
+		diskDevice := fmt.Sprintf("%d:%d", major, minor)
+
+		stalledReadBytes, err := getMetricForDiskDevice(ctx, l, c, stalledNode[0], diskDevice, readBytesMetric)
+		if err != nil {
+			return rwBytes{}, err
+		}
+		stalledWriteBytes, err := getMetricForDiskDevice(ctx, l, c, stalledNode[0], diskDevice, writeBytesMetric)
+		if err != nil {
+			return rwBytes{}, err
+		}
+		unaffectedNodeReadBytes, err := getMetricForDiskDevice(ctx, l, c, unaffectedNode[0], diskDevice, readBytesMetric)
+		if err != nil {
+			return rwBytes{}, err
+		}
+		unaffectedNodeWriteBytes, err := getMetricForDiskDevice(ctx, l, c, unaffectedNode[0], diskDevice, writeBytesMetric)
 		if err != nil {
 			return rwBytes{}, err
 		}
 
 		return rwBytes{
-			stalledRead:     stalledReadBytes,
-			stalledWrite:    stalledWriteBytes,
-			unaffectedRead:  unaffectedNodeReadBytes,
-			unaffectedWrite: unaffectedNodeWriteBytes,
+			stalledRead:     int(stalledReadBytes),
+			stalledWrite:    int(stalledWriteBytes),
+			unaffectedRead:  int(unaffectedNodeReadBytes),
+			unaffectedWrite: int(unaffectedNodeWriteBytes),
 		}, nil
 	}
 
 	// Returns the read and write bytes read/written to disk over the last 30 seconds of the
 	// stalled node and a control unaffected node.
-	getRWBytesOverTime := func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.CGroupDiskStaller, stalledNode, unaffectedNode option.NodeListOption) (rwBytes, error) {
-		beforeRWBytes, err := getRWBytes(ctx, l, c, f, stalledNode, unaffectedNode)
+	getRWBytesOverTime := func(ctx context.Context, l *logger.Logger, c cluster.Cluster, stalledNode, unaffectedNode option.NodeListOption) (rwBytes, error) {
+		// The cgroups exporter scrapes every 15 seconds so we have to block for that amount.
+		// Otherwise, we might read from an interval before the disk was stalled.
+		select {
+		case <-ctx.Done():
+			return rwBytes{}, ctx.Err()
+		case <-time.After(15 * time.Second):
+		}
+
+		beforeRWBytes, err := getRWBytes(ctx, l, c, stalledNode, unaffectedNode)
 		if err != nil {
 			return rwBytes{}, err
 		}
 		// Evict the store from memory on each VM to force them to read from disk.
 		// Without this, we don't run the workload long enough for the process to read
 		// from disk instead of memory.
-		c.Run(ctx, option.WithNodes(c.CRDBNodes()), "vmtouch -ve /mnt/data1")
+		//
+		// For some unknown reason, vmtouch very rarely hangs indefinitely. Evict the nodes
+		// sequentially so we can stream the output and figure out what's wrong. This normally
+		// takes less than a second so it shouldn't impact the correctness of the test.
+		vmtouchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		_, err = c.RunWithDetailsSingleNode(vmtouchCtx, l, option.WithNodes(stalledNode), "vmtouch -ve /mnt/data1")
+		if err != nil {
+			return rwBytes{}, err
+		}
+		_, err = c.RunWithDetailsSingleNode(vmtouchCtx, l, option.WithNodes(unaffectedNode), "vmtouch -ve /mnt/data1")
+		if err != nil {
+			return rwBytes{}, err
+		}
+
 		select {
 		case <-ctx.Done():
 			return rwBytes{}, ctx.Err()
 		case <-time.After(30 * time.Second):
 		}
 
-		afterRWBytes, err := getRWBytes(ctx, l, c, f, stalledNode, unaffectedNode)
+		afterRWBytes, err := getRWBytes(ctx, l, c, stalledNode, unaffectedNode)
 		if err != nil {
 			return rwBytes{}, err
 		}
@@ -531,7 +615,7 @@ var cgroupsDiskStallTests = func(c cluster.Cluster) []failureSmokeTest {
 				},
 				validateFailure: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
 					l.Printf("Stalled nodes: %d, Unaffected nodes: %d, Stalled validation node: %d, Unaffected validation node: %d", stalledNodeGroup, unaffectedNodeGroup, stalledNode, unaffectedNode)
-					res, err := getRWBytesOverTime(ctx, l, c, f.FailureMode.(*failures.CGroupDiskStaller), stalledNode, unaffectedNode)
+					res, err := getRWBytesOverTime(ctx, l, c, stalledNode, unaffectedNode)
 					if err != nil {
 						return err
 					}
@@ -540,7 +624,7 @@ var cgroupsDiskStallTests = func(c cluster.Cluster) []failureSmokeTest {
 					return assertRWBytes(ctx, l, res, stallReads, stallWrites)
 				},
 				validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
-					res, err := getRWBytesOverTime(ctx, l, c, f.FailureMode.(*failures.CGroupDiskStaller), stalledNode, unaffectedNode)
+					res, err := getRWBytesOverTime(ctx, l, c, stalledNode, unaffectedNode)
 					if err != nil {
 						return err
 					}
@@ -737,8 +821,15 @@ func defaultFailureSmokeTestWorkload(ctx context.Context, c cluster.Cluster, arg
 	return c.RunE(ctx, option.WithNodes(c.WorkloadNode()), cmd)
 }
 
+func failureSmokeTestPromCfg(c cluster.Cluster) *prometheus.Config {
+	promCfg := &prometheus.Config{}
+	return promCfg.WithPrometheusNode(c.WorkloadNode().InstallNodes()[0]).
+		WithCluster(c.CRDBNodes().InstallNodes()).
+		WithCgroupExporter(c.CRDBNodes().InstallNodes())
+}
+
 func setupFailureSmokeTests(
-	ctx context.Context, t test.Test, c cluster.Cluster, fr *failures.FailureRegistry,
+	ctx context.Context, t test.Test, c cluster.Cluster,
 ) error {
 	// Download any dependencies needed.
 	if err := c.Install(ctx, t.L(), c.CRDBNodes(), "nmap"); err != nil {
@@ -747,6 +838,16 @@ func setupFailureSmokeTests(
 	if err := c.Install(ctx, t.L(), c.CRDBNodes(), "vmtouch"); err != nil {
 		return err
 	}
+
+	// Setup cgroup_exporter.
+	promSetupLogger, _, err := roachtestutil.LoggerForCmd(t.L(), c.WorkloadNode(), "setup-prom")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.StartGrafana(ctx, promSetupLogger, failureSmokeTestPromCfg(c)); err != nil {
+		t.Fatal(err)
+	}
+
 	startSettings := install.MakeClusterSettings()
 	startSettings.Env = append(startSettings.Env,
 		// Increase the time writes must be stalled before a node fatals. Disk stall tests
@@ -769,7 +870,7 @@ func setupFailureSmokeTests(
 func runFailureSmokeTest(ctx context.Context, t test.Test, c cluster.Cluster, noopFailer bool) {
 	fr := failures.NewFailureRegistry()
 	fr.Register()
-	if err := setupFailureSmokeTests(ctx, t, c, fr); err != nil {
+	if err := setupFailureSmokeTests(ctx, t, c); err != nil {
 		t.Error(err)
 	}
 
