@@ -6,9 +6,10 @@
 package roachprodutil
 
 import (
-	"github.com/cockroachdb/errors"
 	"strconv"
 	"strings"
+
+	"github.com/cockroachdb/errors"
 )
 
 func GetDiskDeviceCmd() string {

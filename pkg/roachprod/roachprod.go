@@ -1077,7 +1077,9 @@ func Install(ctx context.Context, l *logger.Logger, clusterName string, software
 	})
 }
 
-func InstallGoVersion(ctx context.Context, l *logger.Logger, clusterName string, version string) error {
+func InstallGoVersion(
+	ctx context.Context, l *logger.Logger, clusterName string, version string,
+) error {
 	c, err := GetClusterFromCache(l, clusterName)
 	if err != nil {
 		return err
