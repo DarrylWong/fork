@@ -268,6 +268,18 @@ func (q *promMetricQuery) Avg() MetricQuery {
 	return q
 }
 
+// Increase sets the aggregation to Increase.
+func (q *promMetricQuery) Increase() MetricQuery {
+	q.aggregation = "increase"
+	return q
+}
+
+// Delta sets the aggregation to Delta.
+func (q *promMetricQuery) Delta() MetricQuery {
+	q.aggregation = "delta"
+	return q
+}
+
 // Max sets the aggregation to maximum.
 func (q *promMetricQuery) Max() MetricQuery {
 	q.aggregation = "max"
@@ -481,11 +493,14 @@ func (q *promMetricQuery) handleTimeSeriesData(result model.Value, dest interfac
 // Scan executes the query and stores the result in the provided destination.
 func (q *promMetricQuery) Scan(dest interface{}) error {
 	query := q.buildQuery()
+	fmt.Printf("darryl: query=%s\n", query)
 	result, warnings, err := q.api.promClient.Query(q.api.ctx, query, timeutil.Now())
 	if err != nil {
 		return errors.Wrap(err, "failed to execute query")
 	}
-
+	for k, v := range result.(model.Vector) {
+		fmt.Printf("darryl: result[%d]=%s\n", k, v.String())
+	}
 	if len(warnings) > 0 {
 		q.api.logger.Printf("Query warnings: %v", warnings)
 	}

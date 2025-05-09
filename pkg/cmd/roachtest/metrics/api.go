@@ -26,6 +26,8 @@ type MetricQuery interface {
 	Sum() MetricQuery
 	Avg() MetricQuery
 	Max() MetricQuery
+	Increase() MetricQuery
+	Delta() MetricQuery
 	Rate() MetricQuery
 
 	// Execution methods
