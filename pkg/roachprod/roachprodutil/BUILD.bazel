@@ -2,7 +2,10 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "roachprodutil",
-    srcs = ["identity.go"],
+    srcs = [
+        "identity.go",
+        "utils.go",
+    ],
     importpath = "github.com/cockroachdb/cockroach/pkg/roachprod/roachprodutil",
     visibility = ["//visibility:public"],
     deps = [
