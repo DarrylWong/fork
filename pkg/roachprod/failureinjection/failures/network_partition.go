@@ -95,34 +95,36 @@ sudo iptables-save
 
 	// Drop all incoming and outgoing traffic to the ip address.
 	bidirectionalPartitionCmd = `
-sudo iptables %[1]s INPUT  -s {ip:%[2]d} -p tcp --dport {pgport:%[2]d} -j DROP;
-sudo iptables %[1]s OUTPUT -d {ip:%[2]d} -p tcp --dport {pgport:%[2]d} -j DROP;
-sudo iptables %[1]s INPUT  -s {ip:%[2]d} -p tcp --sport {pgport:%[2]d} -j DROP;
-sudo iptables %[1]s OUTPUT -d {ip:%[2]d} -p tcp --sport {pgport:%[2]d} -j DROP;
-sudo iptables %[1]s INPUT  -s {ip:%[2]d:public} -p tcp --dport {pgport:%[2]d} -j DROP;
-sudo iptables %[1]s OUTPUT -d {ip:%[2]d:public} -p tcp --dport {pgport:%[2]d} -j DROP;
-sudo iptables %[1]s INPUT  -s {ip:%[2]d:public} -p tcp --sport {pgport:%[2]d} -j DROP;
-sudo iptables %[1]s OUTPUT -d {ip:%[2]d:public} -p tcp --sport {pgport:%[2]d} -j DROP;
+sudo iptables %[1]s INPUT  -s {ip:%[2]d} -p tcp --dport {pgport:%[2]d:%[3]s} -j DROP;
+sudo iptables %[1]s OUTPUT -d {ip:%[2]d} -p tcp --dport {pgport:%[2]d:%[3]s} -j DROP;
+sudo iptables %[1]s INPUT  -s {ip:%[2]d} -p tcp --sport {pgport:%[2]d:%[3]s} -j DROP;
+sudo iptables %[1]s OUTPUT -d {ip:%[2]d} -p tcp --sport {pgport:%[2]d:%[3]s} -j DROP;
+sudo iptables %[1]s INPUT  -s {ip:%[2]d:public} -p tcp --dport {pgport:%[2]d:%[3]s} -j DROP;
+sudo iptables %[1]s OUTPUT -d {ip:%[2]d:public} -p tcp --dport {pgport:%[2]d:%[3]s} -j DROP;
+sudo iptables %[1]s INPUT  -s {ip:%[2]d:public} -p tcp --sport {pgport:%[2]d:%[3]s} -j DROP;
+sudo iptables %[1]s OUTPUT -d {ip:%[2]d:public} -p tcp --sport {pgport:%[2]d:%[3]s} -j DROP;
 `
 	// Drop all incoming traffic from the ip address.
 	asymmetricInputPartitionCmd = `
-sudo iptables %[1]s INPUT -s {ip:%[2]d} -p tcp --dport {pgport:%[2]d} -j DROP;
-sudo iptables %[1]s INPUT -s {ip:%[2]d:public} -p tcp --dport {pgport:%[2]d} -j DROP;
+sudo iptables %[1]s INPUT -s {ip:%[2]d} -p tcp --dport {pgport:%[2]d:%[3]s} -j DROP;
+sudo iptables %[1]s INPUT -s {ip:%[2]d:public} -p tcp --dport {pgport:%[2]d:%[3]s} -j DROP;
 `
 
 	// Drop all outgoing traffic to the ip address.
 	asymmetricOutputPartitionCmd = `
-sudo iptables %[1]s OUTPUT -d {ip:%[2]d} -p tcp --dport {pgport:%[2]d} -j DROP;
-sudo iptables %[1]s OUTPUT -d {ip:%[2]d:public} -p tcp --dport {pgport:%[2]d} -j DROP;
+sudo iptables %[1]s OUTPUT -d {ip:%[2]d} -p tcp --dport {pgport:%[2]d:%[3]s} -j DROP;
+sudo iptables %[1]s OUTPUT -d {ip:%[2]d:public} -p tcp --dport {pgport:%[2]d:%[3]s} -j DROP;
 `
 )
 
-func constructIPTablesRule(partitionCmd string, targetNode install.Node, addRule bool) string {
+func constructIPTablesRule(
+	partitionCmd string, targetNode install.Node, addRule bool, virtualClusterName string,
+) string {
 	addOrDropRule := "-D"
 	if addRule {
 		addOrDropRule = "-A"
 	}
-	return fmt.Sprintf(partitionTemplateWrapper, fmt.Sprintf(partitionCmd, addOrDropRule, targetNode))
+	return fmt.Sprintf(partitionTemplateWrapper, fmt.Sprintf(partitionCmd, addOrDropRule, targetNode, virtualClusterName))
 }
 
 func (f *IPTablesPartitionFailure) Inject(
@@ -134,13 +136,13 @@ func (f *IPTablesPartitionFailure) Inject(
 			var cmd string
 			switch partition.Type {
 			case Bidirectional:
-				cmd = constructIPTablesRule(bidirectionalPartitionCmd, destinationNode, true /* addRule */)
+				cmd = constructIPTablesRule(bidirectionalPartitionCmd, destinationNode, true /* addRule */, f.virtualClusterName)
 				l.Printf("Dropping packets between nodes %d and node %d", partition.Source, destinationNode)
 			case Incoming:
-				cmd = constructIPTablesRule(asymmetricInputPartitionCmd, destinationNode, true /* addRule */)
+				cmd = constructIPTablesRule(asymmetricInputPartitionCmd, destinationNode, true /* addRule */, f.virtualClusterName)
 				l.Printf("Dropping packets from node %d to nodes %d", destinationNode, partition.Source)
 			case Outgoing:
-				cmd = constructIPTablesRule(asymmetricOutputPartitionCmd, destinationNode, true /* addRule */)
+				cmd = constructIPTablesRule(asymmetricOutputPartitionCmd, destinationNode, true /* addRule */, f.virtualClusterName)
 				l.Printf("Dropping packets from nodes %d to node %d", partition.Source, destinationNode)
 			default:
 				panic("unhandled default case")
@@ -162,13 +164,13 @@ func (f *IPTablesPartitionFailure) Recover(
 			var cmd string
 			switch partition.Type {
 			case Bidirectional:
-				cmd = constructIPTablesRule(bidirectionalPartitionCmd, destinationNode, false /* addRule */)
+				cmd = constructIPTablesRule(bidirectionalPartitionCmd, destinationNode, false /* addRule */, f.virtualClusterName)
 				l.Printf("Resuming packets between nodes %d and node %d", partition.Source, destinationNode)
 			case Incoming:
-				cmd = constructIPTablesRule(asymmetricInputPartitionCmd, destinationNode, false /* addRule */)
+				cmd = constructIPTablesRule(asymmetricInputPartitionCmd, destinationNode, false /* addRule */, f.virtualClusterName)
 				l.Printf("Resuming packets from node %d to nodes %d", destinationNode, partition.Source)
 			case Outgoing:
-				cmd = constructIPTablesRule(asymmetricOutputPartitionCmd, destinationNode, false /* addRule */)
+				cmd = constructIPTablesRule(asymmetricOutputPartitionCmd, destinationNode, false /* addRule */, f.virtualClusterName)
 				l.Printf("Resuming packets from nodes %d to node %d", partition.Source, destinationNode)
 			default:
 				panic("unhandled default case")

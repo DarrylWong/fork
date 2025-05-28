@@ -63,9 +63,9 @@ type failureSmokeTest struct {
 }
 
 func (t *failureSmokeTest) run(
-	ctx context.Context, l *logger.Logger, c cluster.Cluster,
+	ctx context.Context, l *logger.Logger, c cluster.Cluster, virtualClusterName string,
 ) (err error) {
-	failer, err := c.GetFailer(l, c.CRDBNodes(), t.failureName, failures.ReplicationFactor(3))
+	failer, err := c.GetFailer(l, c.CRDBNodes(), t.failureName, failures.VirtualClusterName(virtualClusterName), failures.SQLInstance(0))
 	if err != nil {
 		return err
 	}
@@ -165,8 +165,10 @@ func (t *failureSmokeTest) run(
 	return t.validateRecover(ctx, l, c, failer)
 }
 
-func (t *failureSmokeTest) noopRun(ctx context.Context, l *logger.Logger, c cluster.Cluster) error {
-	failer, err := c.GetFailer(l, c.CRDBNodes(), t.failureName)
+func (t *failureSmokeTest) noopRun(
+	ctx context.Context, l *logger.Logger, c cluster.Cluster, virtualClusterName string,
+) error {
+	failer, err := c.GetFailer(l, c.CRDBNodes(), t.failureName, failures.VirtualClusterName(virtualClusterName), failures.SQLInstance(0))
 	if err != nil {
 		return err
 	}
@@ -179,7 +181,7 @@ func (t *failureSmokeTest) noopRun(ctx context.Context, l *logger.Logger, c clus
 	return nil
 }
 
-var bidirectionalNetworkPartitionTest = func(c cluster.Cluster) failureSmokeTest {
+var bidirectionalNetworkPartitionTest = func(c cluster.Cluster, virtualClusterName string) failureSmokeTest {
 	nodes := c.CRDBNodes()
 	rand.Shuffle(len(nodes), func(i, j int) {
 		nodes[i], nodes[j] = nodes[j], nodes[i]
@@ -198,7 +200,7 @@ var bidirectionalNetworkPartitionTest = func(c cluster.Cluster) failureSmokeTest
 			}},
 		},
 		validateFailure: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
-			blocked, err := roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(srcNode), c.Nodes(destNode), fmt.Sprintf("{pgport:%d}", destNode))
+			blocked, err := roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(srcNode), c.Nodes(destNode), fmt.Sprintf("{pgport:%d:%s}", destNode, virtualClusterName))
 			if err != nil {
 				return err
 			}
@@ -206,7 +208,7 @@ var bidirectionalNetworkPartitionTest = func(c cluster.Cluster) failureSmokeTest
 				return errors.Errorf("expected connections from node %d to node %d to be blocked", srcNode, destNode)
 			}
 
-			blocked, err = roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(srcNode), c.Nodes(unaffectedNode), fmt.Sprintf("{pgport:%d}", unaffectedNode))
+			blocked, err = roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(srcNode), c.Nodes(unaffectedNode), fmt.Sprintf("{pgport:%d:%s}", unaffectedNode, virtualClusterName))
 			if err != nil {
 				return err
 			}
@@ -216,7 +218,7 @@ var bidirectionalNetworkPartitionTest = func(c cluster.Cluster) failureSmokeTest
 			return nil
 		},
 		validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
-			blocked, err := roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(srcNode), c.Nodes(destNode), fmt.Sprintf("{pgport:%d}", destNode))
+			blocked, err := roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(srcNode), c.Nodes(destNode), fmt.Sprintf("{pgport:%d:%s}", destNode, virtualClusterName))
 			if err != nil {
 				return err
 			}
@@ -228,7 +230,7 @@ var bidirectionalNetworkPartitionTest = func(c cluster.Cluster) failureSmokeTest
 	}
 }
 
-var asymmetricIncomingNetworkPartitionTest = func(c cluster.Cluster) failureSmokeTest {
+var asymmetricIncomingNetworkPartitionTest = func(c cluster.Cluster, virtualClusterName string) failureSmokeTest {
 	nodes := c.CRDBNodes()
 	rand.Shuffle(len(nodes), func(i, j int) {
 		nodes[i], nodes[j] = nodes[j], nodes[i]
@@ -246,7 +248,7 @@ var asymmetricIncomingNetworkPartitionTest = func(c cluster.Cluster) failureSmok
 			}},
 		},
 		validateFailure: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
-			blocked, err := roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(srcNode), c.Nodes(destNode), fmt.Sprintf("{pgport:%d}", destNode))
+			blocked, err := roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(srcNode), c.Nodes(destNode), fmt.Sprintf("{pgport:%d:%s}", destNode, virtualClusterName))
 			if err != nil {
 				return err
 			}
@@ -254,7 +256,7 @@ var asymmetricIncomingNetworkPartitionTest = func(c cluster.Cluster) failureSmok
 				return errors.Errorf("expected connections from node %d to node %d to be open", srcNode, destNode)
 			}
 
-			blocked, err = roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(destNode), c.Nodes(srcNode), fmt.Sprintf("{pgport:%d}", srcNode))
+			blocked, err = roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(destNode), c.Nodes(srcNode), fmt.Sprintf("{pgport:%d:%s}", srcNode, virtualClusterName))
 			if err != nil {
 				return err
 			}
@@ -264,7 +266,7 @@ var asymmetricIncomingNetworkPartitionTest = func(c cluster.Cluster) failureSmok
 			return nil
 		},
 		validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
-			blocked, err := roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(srcNode), c.Nodes(destNode), fmt.Sprintf("{pgport:%d}", destNode))
+			blocked, err := roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(srcNode), c.Nodes(destNode), fmt.Sprintf("{pgport:%d:%s}", destNode, virtualClusterName))
 			if err != nil {
 				return err
 			}
@@ -276,7 +278,7 @@ var asymmetricIncomingNetworkPartitionTest = func(c cluster.Cluster) failureSmok
 	}
 }
 
-var asymmetricOutgoingNetworkPartitionTest = func(c cluster.Cluster) failureSmokeTest {
+var asymmetricOutgoingNetworkPartitionTest = func(c cluster.Cluster, virtualClusterName string) failureSmokeTest {
 	nodes := c.CRDBNodes()
 	rand.Shuffle(len(nodes), func(i, j int) {
 		nodes[i], nodes[j] = nodes[j], nodes[i]
@@ -294,7 +296,7 @@ var asymmetricOutgoingNetworkPartitionTest = func(c cluster.Cluster) failureSmok
 			}},
 		},
 		validateFailure: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
-			blocked, err := roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(srcNode), c.Nodes(destNode), fmt.Sprintf("{pgport:%d}", destNode))
+			blocked, err := roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(srcNode), c.Nodes(destNode), fmt.Sprintf("{pgport:%d:%s}", destNode, virtualClusterName))
 			if err != nil {
 				return err
 			}
@@ -302,7 +304,7 @@ var asymmetricOutgoingNetworkPartitionTest = func(c cluster.Cluster) failureSmok
 				return errors.Errorf("expected connections from node %d to node %d to be blocked", srcNode, destNode)
 			}
 
-			blocked, err = roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(destNode), c.Nodes(srcNode), fmt.Sprintf("{pgport:%d}", srcNode))
+			blocked, err = roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(destNode), c.Nodes(srcNode), fmt.Sprintf("{pgport:%d:%s}", srcNode, virtualClusterName))
 			if err != nil {
 				return err
 			}
@@ -312,7 +314,7 @@ var asymmetricOutgoingNetworkPartitionTest = func(c cluster.Cluster) failureSmok
 			return nil
 		},
 		validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
-			blocked, err := roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(srcNode), c.Nodes(destNode), fmt.Sprintf("{pgport:%d}", destNode))
+			blocked, err := roachtestutil.CheckPortBlocked(ctx, l, c, c.Nodes(srcNode), c.Nodes(destNode), fmt.Sprintf("{pgport:%d:%s}", destNode, virtualClusterName))
 			if err != nil {
 				return err
 			}
@@ -324,7 +326,7 @@ var asymmetricOutgoingNetworkPartitionTest = func(c cluster.Cluster) failureSmok
 	}
 }
 
-var latencyTest = func(c cluster.Cluster) failureSmokeTest {
+var latencyTest = func(c cluster.Cluster, virtualClusterName string) failureSmokeTest {
 	nodes := c.CRDBNodes()
 	rand.Shuffle(len(nodes), func(i, j int) {
 		nodes[i], nodes[j] = nodes[j], nodes[i]
@@ -351,11 +353,11 @@ var latencyTest = func(c cluster.Cluster) failureSmokeTest {
 		},
 		validateFailure: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
 			// Note that this is one way latency, since the sender doesn't have the matching port.
-			delayedLatency, err := roachtestutil.PortLatency(ctx, l, c, c.Nodes(srcNode), c.Nodes(destNode))
+			delayedLatency, err := roachtestutil.PortLatency(ctx, l, c, virtualClusterName, c.Nodes(srcNode), c.Nodes(destNode))
 			if err != nil {
 				return err
 			}
-			normalLatency, err := roachtestutil.PortLatency(ctx, l, c, c.Nodes(unaffectedNode), c.Nodes(destNode))
+			normalLatency, err := roachtestutil.PortLatency(ctx, l, c, virtualClusterName, c.Nodes(unaffectedNode), c.Nodes(destNode))
 			if err != nil {
 				return err
 			}
@@ -368,11 +370,11 @@ var latencyTest = func(c cluster.Cluster) failureSmokeTest {
 			return nil
 		},
 		validateRecover: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
-			delayedLatency, err := roachtestutil.PortLatency(ctx, l, c, c.Nodes(srcNode), c.Nodes(destNode))
+			delayedLatency, err := roachtestutil.PortLatency(ctx, l, c, virtualClusterName, c.Nodes(srcNode), c.Nodes(destNode))
 			if err != nil {
 				return err
 			}
-			normalLatency, err := roachtestutil.PortLatency(ctx, l, c, c.Nodes(unaffectedNode), c.Nodes(destNode))
+			normalLatency, err := roachtestutil.PortLatency(ctx, l, c, virtualClusterName, c.Nodes(unaffectedNode), c.Nodes(destNode))
 			if err != nil {
 				return err
 			}
@@ -387,7 +389,7 @@ var latencyTest = func(c cluster.Cluster) failureSmokeTest {
 	}
 }
 
-var cgroupsDiskStallTests = func(c cluster.Cluster) []failureSmokeTest {
+var cgroupsDiskStallTests = func(c cluster.Cluster, virtualClusterName string) []failureSmokeTest {
 	type rwBytes struct {
 		stalledRead     int
 		stalledWrite    int
@@ -499,19 +501,15 @@ var cgroupsDiskStallTests = func(c cluster.Cluster) []failureSmokeTest {
 		return nil
 	}
 
+	rng, _ := randutil.NewPseudoRand()
 	var tests []failureSmokeTest
 	for _, stallWrites := range []bool{true, false} {
 		for _, stallReads := range []bool{true, false} {
 			if !stallWrites && !stallReads {
 				continue
 			}
+			stalledNodeGroup, unaffectedNodeGroup := randFailureGroups(c, rng, !install.IsSystemInterface(virtualClusterName))
 
-			rng, _ := randutil.NewPseudoRand()
-			// SeededRandGroups only returns an error if the requested size is larger than the
-			// number of nodes, so we can safely ignore the error.
-			groups, _ := c.CRDBNodes().SeededRandGroups(rng, 2 /* numGroups */)
-			stalledNodeGroup := groups[0]
-			unaffectedNodeGroup := groups[1]
 			// To simplify the smoke test, only run validation on these two
 			// randomly chosen nodes.
 			stalledNode := stalledNodeGroup.SeededRandNode(rng)
@@ -550,6 +548,9 @@ var cgroupsDiskStallTests = func(c cluster.Cluster) []failureSmokeTest {
 				},
 				workload: func(ctx context.Context, c cluster.Cluster, args ...string) error {
 					return defaultFailureSmokeTestWorkload(ctx, c,
+						// The disk stall failure mode currently supports stalling `{store-dir}` and not
+						// any secondary tenant stores.
+						install.SystemInterfaceName,
 						// Tolerate errors as we expect nodes to fatal.
 						"--tolerate-errors",
 						// Without this, kv workload will read from keys with no values.
@@ -569,7 +570,7 @@ var cgroupsDiskStallTests = func(c cluster.Cluster) []failureSmokeTest {
 	return tests
 }
 
-var cgroupStallLogsTest = func(c cluster.Cluster) failureSmokeTest {
+var cgroupStallLogsTest = func(c cluster.Cluster, virtualClusterName string) failureSmokeTest {
 	nodes := c.CRDBNodes()
 	rand.Shuffle(len(nodes), func(i, j int) {
 		nodes[i], nodes[j] = nodes[j], nodes[i]
@@ -639,13 +640,9 @@ var cgroupStallLogsTest = func(c cluster.Cluster) failureSmokeTest {
 	}
 }
 
-var dmsetupDiskStallTest = func(c cluster.Cluster) failureSmokeTest {
+var dmsetupDiskStallTest = func(c cluster.Cluster, virtualClusterName string) failureSmokeTest {
 	rng, _ := randutil.NewPseudoRand()
-	// SeededRandGroups only returns an error if the requested size is larger than the
-	// number of nodes, so we can safely ignore the error.
-	groups, _ := c.CRDBNodes().SeededRandGroups(rng, 2 /* numGroups */)
-	stalledNodeGroup := groups[0]
-	unaffectedNodeGroup := groups[1]
+	stalledNodeGroup, unaffectedNodeGroup := randFailureGroups(c, rng, !install.IsSystemInterface(virtualClusterName))
 	// These are the nodes that we will run validation on.
 	stalledNode := stalledNodeGroup.SeededRandNode(rng)
 	unaffectedNode := unaffectedNodeGroup.SeededRandNode(rng)
@@ -687,7 +684,7 @@ var dmsetupDiskStallTest = func(c cluster.Cluster) failureSmokeTest {
 		},
 		workload: func(ctx context.Context, c cluster.Cluster, args ...string) error {
 			// Tolerate errors as we expect nodes to fatal.
-			return defaultFailureSmokeTestWorkload(ctx, c, "--tolerate-errors")
+			return defaultFailureSmokeTestWorkload(ctx, c, virtualClusterName, "--tolerate-errors")
 		},
 		// Wait for two minutes with the failure injected so the cluster starts rebalancing
 		// ranges, and we can properly test WaitForFailureToRecover.
@@ -695,13 +692,11 @@ var dmsetupDiskStallTest = func(c cluster.Cluster) failureSmokeTest {
 	}
 }
 
-var processKillTests = func(c cluster.Cluster) []failureSmokeTest {
+var processKillTests = func(c cluster.Cluster, virtualClusterName string) []failureSmokeTest {
 	rng, _ := randutil.NewPseudoRand()
 	var tests []failureSmokeTest
 	for _, gracefulShutdown := range []bool{true, false} {
-		groups, _ := c.CRDBNodes().SeededRandGroups(rng, 2 /* numGroups */)
-		killedNodeGroup := groups[0]
-		unaffectedNodeGroup := groups[1]
+		killedNodeGroup, unaffectedNodeGroup := randFailureGroups(c, rng, !install.IsSystemInterface(virtualClusterName))
 
 		// These are the nodes that we will run validation on.
 		killedNode := killedNodeGroup.SeededRandNode(rng)
@@ -716,9 +711,10 @@ var processKillTests = func(c cluster.Cluster) []failureSmokeTest {
 				GracePeriod:      time.Minute,
 			},
 			validateFailure: func(ctx context.Context, l *logger.Logger, c cluster.Cluster, f *failures.Failer) error {
-				// If we initiate a graceful shutdown, the cockroach process should
-				// intercept it and start draining the node.
-				if gracefulShutdown {
+				// If we initiate a graceful shutdown on the storage nodes, the cockroach process should
+				// intercept it and start draining the node. `cockroach node status` only works for the
+				// system tenant.
+				if gracefulShutdown && virtualClusterName == install.SystemInterfaceName {
 					err := testutils.SucceedsSoonError(func() error {
 						if ctx.Err() != nil {
 							return ctx.Err()
@@ -748,7 +744,7 @@ var processKillTests = func(c cluster.Cluster) []failureSmokeTest {
 						return ctx.Err()
 					}
 
-					killedDB, err := c.ConnE(ctx, l, killedNode[0])
+					killedDB, err := c.ConnE(ctx, l, killedNode[0], option.VirtualClusterName(virtualClusterName))
 					if err == nil {
 						defer killedDB.Close()
 						if err := killedDB.Ping(); err == nil {
@@ -770,7 +766,7 @@ var processKillTests = func(c cluster.Cluster) []failureSmokeTest {
 				return nil
 			},
 			workload: func(ctx context.Context, c cluster.Cluster, args ...string) error {
-				return defaultFailureSmokeTestWorkload(ctx, c, "--tolerate-errors")
+				return defaultFailureSmokeTestWorkload(ctx, c, virtualClusterName, "--tolerate-errors")
 			},
 			// Shutting down the server right after it's started can cause draining to be skipped.
 			workloadRamp: 30 * time.Second,
@@ -780,8 +776,7 @@ var processKillTests = func(c cluster.Cluster) []failureSmokeTest {
 		})
 	}
 
-	groups, _ := c.CRDBNodes().SeededRandGroups(rng, 2 /* numGroups */)
-	killedNodeGroup := groups[0]
+	killedNodeGroup, _ := randFailureGroups(c, rng, !install.IsSystemInterface(virtualClusterName))
 	// This is the node that we will run validation on.
 	killedNode := killedNodeGroup.SeededRandNode(rng)
 	noopSignal := 0
@@ -806,7 +801,7 @@ var processKillTests = func(c cluster.Cluster) []failureSmokeTest {
 			return nil
 		},
 		workload: func(ctx context.Context, c cluster.Cluster, args ...string) error {
-			return defaultFailureSmokeTestWorkload(ctx, c, "--tolerate-errors")
+			return defaultFailureSmokeTestWorkload(ctx, c, virtualClusterName, "--tolerate-errors")
 		},
 		// Shutting down the server right after it's started can cause draining to be skipped.
 		workloadRamp: 30 * time.Second,
@@ -814,7 +809,7 @@ var processKillTests = func(c cluster.Cluster) []failureSmokeTest {
 	return tests
 }
 
-var resetVMTests = func(c cluster.Cluster) []failureSmokeTest {
+var resetVMTests = func(c cluster.Cluster, virtualClusterName string) []failureSmokeTest {
 	rng, _ := randutil.NewPseudoRand()
 	rebootedNode := c.CRDBNodes().SeededRandNode(rng)
 	var tests []failureSmokeTest
@@ -854,28 +849,30 @@ var resetVMTests = func(c cluster.Cluster) []failureSmokeTest {
 				return nil
 			},
 			workload: func(ctx context.Context, c cluster.Cluster, args ...string) error {
-				return defaultFailureSmokeTestWorkload(ctx, c, "--tolerate-errors")
+				return defaultFailureSmokeTestWorkload(ctx, c, virtualClusterName, "--tolerate-errors")
 			},
 		})
 	}
 	return tests
 }
 
-func defaultFailureSmokeTestWorkload(ctx context.Context, c cluster.Cluster, args ...string) error {
+func defaultFailureSmokeTestWorkload(
+	ctx context.Context, c cluster.Cluster, virtualClusterName string, args ...string,
+) error {
 	workloadArgs := strings.Join(args, " ")
 	cmd := roachtestutil.NewCommand("./cockroach workload run kv %s", workloadArgs).
-		Arg("{pgurl%s}", c.CRDBNodes()).
+		Arg("{pgurl%s:%s}", c.CRDBNodes(), virtualClusterName).
 		String()
 	return c.RunE(ctx, option.WithNodes(c.WorkloadNode()), cmd)
 }
 
-func setupFailureSmokeTests(ctx context.Context, t test.Test, c cluster.Cluster) error {
+func setupFailureSmokeTests(ctx context.Context, t test.Test, c cluster.Cluster) (string, error) {
 	// Download any dependencies needed.
 	if err := c.Install(ctx, t.L(), c.CRDBNodes(), "nmap"); err != nil {
-		return err
+		return "", err
 	}
 	if err := c.Install(ctx, t.L(), c.CRDBNodes(), "vmtouch"); err != nil {
-		return err
+		return "", err
 	}
 	startSettings := install.MakeClusterSettings()
 	startSettings.Env = append(startSettings.Env,
@@ -886,32 +883,33 @@ func setupFailureSmokeTests(ctx context.Context, t test.Test, c cluster.Cluster)
 		fmt.Sprintf("COCKROACH_LOG_MAX_SYNC_DURATION=%s", 2*time.Minute),
 		fmt.Sprintf("COCKROACH_ENGINE_MAX_SYNC_DURATION_DEFAULT=%s", 2*time.Minute))
 
-	// Some failure modes may take down a node. To speed up the exercise of waiting
-	// for a failure to propagate/restore, set `server.time_until_store_dead` to 30s.
-	startSettings.ClusterSettings["server.time_until_store_dead"] = "30s"
-	c.Start(ctx, t.L(), option.DefaultStartOpts(), startSettings, c.CRDBNodes())
+	_, virtualClusterName, err := roachtestutil.StartRandomizedVirtualCluster(ctx, c, t.L(), c.CRDBNodes(), option.DefaultStartOpts(), startSettings)
+	if err != nil {
+		return "", err
+	}
 
 	// Initialize the workloads we will use.
-	c.Run(ctx, option.WithNodes(c.WorkloadNode()), "./cockroach workload init kv {pgurl:1}")
-	return nil
+	c.Run(ctx, option.WithNodes(c.WorkloadNode()), fmt.Sprintf("./cockroach workload init kv {pgurl:1:%s}", virtualClusterName))
+	return virtualClusterName, nil
 }
 
 func runFailureSmokeTest(ctx context.Context, t test.Test, c cluster.Cluster, noopFailer bool) {
-	if err := setupFailureSmokeTests(ctx, t, c); err != nil {
+	virtualClusterName, err := setupFailureSmokeTests(ctx, t, c)
+	if err != nil {
 		t.Error(err)
 	}
 
 	var failureSmokeTests = []failureSmokeTest{
-		bidirectionalNetworkPartitionTest(c),
-		asymmetricIncomingNetworkPartitionTest(c),
-		asymmetricOutgoingNetworkPartitionTest(c),
-		latencyTest(c),
-		dmsetupDiskStallTest(c),
-		cgroupStallLogsTest(c),
+		bidirectionalNetworkPartitionTest(c, virtualClusterName),
+		asymmetricIncomingNetworkPartitionTest(c, virtualClusterName),
+		asymmetricOutgoingNetworkPartitionTest(c, virtualClusterName),
+		latencyTest(c, virtualClusterName),
+		dmsetupDiskStallTest(c, virtualClusterName),
+		cgroupStallLogsTest(c, virtualClusterName),
 	}
-	failureSmokeTests = append(failureSmokeTests, cgroupsDiskStallTests(c)...)
-	failureSmokeTests = append(failureSmokeTests, processKillTests(c)...)
-	failureSmokeTests = append(failureSmokeTests, resetVMTests(c)...)
+	failureSmokeTests = append(failureSmokeTests, cgroupsDiskStallTests(c, virtualClusterName)...)
+	failureSmokeTests = append(failureSmokeTests, processKillTests(c, virtualClusterName)...)
+	failureSmokeTests = append(failureSmokeTests, resetVMTests(c, virtualClusterName)...)
 
 	// Randomize the order of the tests in case any of the failures have unexpected side
 	// effects that may mask failures, e.g. a cgroups disk stall isn't properly recovered
@@ -939,18 +937,20 @@ func runFailureSmokeTest(ctx context.Context, t test.Test, c cluster.Cluster, no
 	for _, test := range failureSmokeTests {
 		t.L().Printf("\n=====running %s test=====", test.testName)
 		if noopFailer {
-			if err := test.noopRun(ctx, t.L(), c); err != nil {
+			if err := test.noopRun(ctx, t.L(), c, virtualClusterName); err != nil {
 				t.Fatal(err)
 			}
 		} else {
-			backgroundWorkload := defaultFailureSmokeTestWorkload
+			backgroundWorkload := func(ctx context.Context, c cluster.Cluster, args ...string) error {
+				return defaultFailureSmokeTestWorkload(ctx, c, virtualClusterName, args...)
+			}
 			if test.workload != nil {
 				backgroundWorkload = test.workload
 			}
 			cancel := t.GoWithCancel(func(goCtx context.Context, l *logger.Logger) error {
 				return backgroundWorkload(goCtx, c)
 			}, task.Name(fmt.Sprintf("%s-workload", test.testName)))
-			err := test.run(ctx, t.L(), c)
+			err = test.run(ctx, t.L(), c, virtualClusterName)
 			cancel()
 			if err != nil {
 				t.Fatal(errors.Wrapf(err, "%s failed", test.testName))
@@ -965,8 +965,9 @@ func registerFISmokeTest(r registry.Registry) {
 	r.Add(registry.TestSpec{
 		Name:  "failure-injection/smoke-test",
 		Owner: registry.OwnerTestEng,
-		// We want at least 4 CRDB nodes so ranges get rebalanced when nodes go down.
-		Cluster:          r.MakeClusterSpec(5, spec.WorkloadNode(), spec.CPU(2), spec.WorkloadNodeCPU(2), spec.ReuseNone()),
+		// We want at least 5 CRDB nodes so we can test killing multiple system
+		// tenants without external tenants unexpectedly dying.
+		Cluster:          r.MakeClusterSpec(6, spec.WorkloadNode(), spec.WorkloadNodeCPU(2), spec.ReuseNone()),
 		CompatibleClouds: registry.OnlyGCE,
 		// TODO(darryl): When the FI library starts seeing more use through roachtests, CLI, etc. switch this to Nightly.
 		Suites: registry.ManualOnly,
@@ -977,11 +978,39 @@ func registerFISmokeTest(r registry.Registry) {
 	r.Add(registry.TestSpec{
 		Name:             "failure-injection/smoke-test/noop",
 		Owner:            registry.OwnerTestEng,
-		Cluster:          r.MakeClusterSpec(5, spec.WorkloadNode(), spec.CPU(2), spec.WorkloadNodeCPU(2), spec.ReuseNone()),
+		Cluster:          r.MakeClusterSpec(6, spec.WorkloadNode(), spec.CPU(2), spec.WorkloadNodeCPU(2), spec.ReuseNone()),
 		CompatibleClouds: registry.OnlyGCE,
 		Suites:           registry.ManualOnly,
 		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 			runFailureSmokeTest(ctx, t, c, true /* noopFailer */)
 		},
 	})
+}
+
+// randFailureGroups is a helper function for failure injection smoke tests to
+// create two random groups of nodes to inject failures on.
+func randFailureGroups(
+	c cluster.Cluster, rng *rand.Rand, multitenant bool,
+) (failureGroup, unaffectedGroup option.NodeListOption) {
+	// SeededRandGroups only returns an error if the requested size is larger than the
+	// number of nodes, so we can safely ignore the error.
+	groups, _ := c.CRDBNodes().SeededRandGroups(rng, 2 /* numGroups */)
+	failureGroup = groups[0]
+	unaffectedGroup = groups[1]
+
+	// A loss of quorum on the system table can cause external processes to exit
+	// if `server.sqlliveness.ttl` duration passes without a successful heartbeat.
+	// Unfortunately, the same can happen if just two out of five of the nodes are
+	// killed as the cluster may be overloaded. In multitenant deployments, limit
+	// the number of nodes in the failure group to just one.
+	if multitenant {
+		nodes := c.CRDBNodes()
+		rng.Shuffle(len(nodes), func(i, j int) {
+			nodes[i], nodes[j] = nodes[j], nodes[i]
+		})
+		failureGroup = nodes[:1]
+		unaffectedGroup = nodes[1:]
+	}
+
+	return failureGroup, unaffectedGroup
 }

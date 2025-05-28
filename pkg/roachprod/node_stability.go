@@ -57,24 +57,52 @@ func WaitForSQLUnavailable(
 	})
 }
 
+func SystemdProcessName(virtualClusterName string, sqlInstance int) string {
+	var sqlInstanceName string
+	if !install.IsSystemInterface(virtualClusterName) {
+		sqlInstanceName = fmt.Sprintf("_%d", sqlInstance)
+	}
+	return fmt.Sprintf("cockroach-%s%s.service", virtualClusterName, sqlInstanceName)
+}
+
+// IsProcessRunning returns if the cockroach process on the given node is still
+// alive according to systemd.
+func IsProcessRunning(
+	ctx context.Context,
+	c *install.SyncedCluster,
+	l *logger.Logger,
+	node install.Nodes,
+	processName string,
+) (bool, string, error) {
+	res, err := c.RunWithDetails(ctx, l, install.WithNodes(node), "IsProcessRunning", fmt.Sprintf("systemctl is-active %s", processName))
+	if err != nil {
+		return false, "", err
+	}
+	status := strings.TrimSpace(res[0].Stdout)
+	return status == "active", status, nil
+}
+
 // WaitForProcessDeath checks systemd until the cockroach process is no longer marked
 // as active.
 func WaitForProcessDeath(
 	ctx context.Context,
-	c install.SyncedCluster,
+	c *install.SyncedCluster,
 	l *logger.Logger,
 	node install.Nodes,
+	virtualClusterName string,
+	sqlInstance int,
 	opts ...install.RetryOptionFunc,
 ) error {
 	config := makeRetryOpts(opts...)
+	processName := SystemdProcessName(virtualClusterName, sqlInstance)
 	start := timeutil.Now()
 	return config.Do(ctx, func(ctx context.Context) error {
-		res, err := c.RunWithDetails(ctx, l, install.WithNodes(node), "WaitForProcessDeath", "systemctl is-active cockroach-system.service")
+		isRunning, status, err := IsProcessRunning(ctx, c, l, node, processName)
 		if err != nil {
+			l.Printf(err.Error())
 			return err
 		}
-		status := strings.TrimSpace(res[0].Stdout)
-		if status != "active" {
+		if !isRunning {
 			l.Printf("n%d cockroach process exited after %s: %s", node, timeutil.Since(start), status)
 			return nil
 		}

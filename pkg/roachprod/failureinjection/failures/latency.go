@@ -126,13 +126,13 @@ sudo tc qdisc add dev ${NETWORK_IFACE} parent 1:${CLASS} handle ${HANDLE}: netem
 # remove since a priority would be randomly assigned.
 sudo tc filter add dev ${NETWORK_IFACE} parent 1: protocol ip prio ${CLASS} u32 \
 match ip dst {ip:%[5]d}/32 \
-match ip dport {pgport:%[5]d} 0xffff \
+match ip dport {pgport:%[5]d:%[6]s} 0xffff \
 flowid 1:${CLASS}
 
 # Same as above but with the public IP.
 sudo tc filter add dev ${NETWORK_IFACE} parent 1: protocol ip prio ${CLASS} u32 \
 match ip dst {ip:%[5]d:public}/32 \
-match ip dport {pgport:%[5]d} 0xffff \
+match ip dport {pgport:%[5]d:%[6]s} 0xffff \
 flowid 1:${CLASS}
 `
 
@@ -190,7 +190,7 @@ func (f *NetworkLatency) Inject(ctx context.Context, l *logger.Logger, args Fail
 				if iface == "lo" {
 					continue
 				}
-				cmd += fmt.Sprintf(addFilterCmd, iface, class, handle, latency.Delay, dest)
+				cmd += fmt.Sprintf(addFilterCmd, iface, class, handle, latency.Delay, dest, f.virtualClusterName)
 			}
 			l.Printf("Adding artificial latency from nodes %d to node %d", latency.Source, dest)
 			if err := f.Run(ctx, l, latency.Source, cmd); err != nil {

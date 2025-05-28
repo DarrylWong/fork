@@ -131,12 +131,21 @@ const (
 	// cluster that can use the test fixtures in
 	// `pkg/cmd/roachtest/fixtures`.
 	numNodesInFixtures = 4
+)
 
-	// These `*Deployment` constants are used to indicate different
-	// deployment modes that a test may choose to enable/disable.
-	SystemOnlyDeployment      = DeploymentMode("system-only")
-	SharedProcessDeployment   = DeploymentMode("shared-process")
-	SeparateProcessDeployment = DeploymentMode("separate-process")
+// DeploymentMode is a type alias for roachtestutil.DeploymentMode.
+// We alias the type and re-export its constants for ease of refactoring
+// in case the supported deployment modes diverge in the future, i.e.
+// we decide to support running multiple separate process tenants per
+// cluster.
+type DeploymentMode = roachtestutil.DeploymentMode
+
+// These `*Deployment` constants are used to indicate different
+// deployment modes that a test may choose to enable/disable.
+const (
+	SystemOnlyDeployment      = roachtestutil.SystemOnlyDeployment
+	SharedProcessDeployment   = roachtestutil.SharedProcessDeployment
+	SeparateProcessDeployment = roachtestutil.SeparateProcessDeployment
 )
 
 // These env vars are used by the planner to generate plans with
@@ -394,8 +403,6 @@ type (
 	// authors when they want to stop a background step as part of test
 	// logic itself, without causing the test to fail.
 	StopFunc func()
-
-	DeploymentMode string
 )
 
 // NeverUseFixtures is an option that can be passed to `NewTest` to

@@ -25,6 +25,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/util"
+	"github.com/cockroachdb/cockroach/pkg/util/randutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/require"
@@ -263,9 +264,13 @@ func CheckPortBlocked(
 // PortLatency returns the latency from one node to another port.
 // Requires nmap to be installed.
 func PortLatency(
-	ctx context.Context, l *logger.Logger, c cluster.Cluster, fromNode, toNode option.NodeListOption,
+	ctx context.Context,
+	l *logger.Logger,
+	c cluster.Cluster,
+	virtualClusterName string,
+	fromNode, toNode option.NodeListOption,
 ) (time.Duration, error) {
-	res, err := c.RunWithDetailsSingleNode(ctx, l, option.WithNodes(fromNode), fmt.Sprintf("nmap -p {pgport%[1]s} -Pn {ip%[1]s} -oG - | grep 'scanned in' | awk '{print $(NF-1)}'", toNode))
+	res, err := c.RunWithDetailsSingleNode(ctx, l, option.WithNodes(fromNode), fmt.Sprintf("nmap -p {pgport%[1]s:%[2]s} -Pn {ip%[1]s} -oG - | grep 'scanned in' | awk '{print $(NF-1)}'", toNode, virtualClusterName))
 	if err != nil {
 		return 0, err
 	}
@@ -283,4 +288,64 @@ func PrefixCmdOutputWithTimestamp(cmd string) string {
 	// Don't prefix blank lines with timestamps.
 	awkCmd := `awk 'NF { cmd="date +\"%H:%M:%S\""; cmd | getline ts; close(cmd); print ts ":", $0; next } { print }'`
 	return fmt.Sprintf(`bash -c '%s' 2>&1 |`, cmd) + awkCmd
+}
+
+// DeploymentMode represents the different ways a cockroach cluster can be deployed.
+type DeploymentMode string
+
+const (
+	SystemOnlyDeployment      = DeploymentMode("system-only")
+	SharedProcessDeployment   = DeploymentMode("shared-process")
+	SeparateProcessDeployment = DeploymentMode("separate-process")
+)
+
+// StartRandomizedVirtualCluster starts a cockroach cluster with a randomized deployment mode.
+// In multitenant deployments, it handles starting both the system and secondary tenant.
+func StartRandomizedVirtualCluster(
+	ctx context.Context,
+	c cluster.Cluster,
+	l *logger.Logger,
+	nodes option.NodeListOption,
+	startOpts option.StartOpts,
+	settings install.ClusterSettings,
+) (DeploymentMode, string, error) {
+	rng, _ := randutil.NewPseudoRand()
+	var validDeploymentModes = []DeploymentMode{
+		SystemOnlyDeployment,
+		SharedProcessDeployment,
+		SeparateProcessDeployment,
+	}
+	//deploymentMode := validDeploymentModes[rng.Intn(len(validDeploymentModes))]
+	deploymentMode := validDeploymentModes[2]
+
+	var virtualClusterName string
+	var virtualStartOpts option.StartOpts
+	switch deploymentMode {
+	case SystemOnlyDeployment:
+		virtualClusterName = install.SystemInterfaceName
+	case SharedProcessDeployment:
+		virtualClusterName = "shared-process-tenant"
+		virtualStartOpts = option.StartSharedVirtualClusterOpts(virtualClusterName, option.WithInitTarget(nodes.SeededRandNode(rng)[0]))
+	case SeparateProcessDeployment:
+		// For simplicity, we only create a single tenant + instance that uses all storage
+		// nodes. In the future, we should support randomly creating multiple tenants and
+		// instances.
+		virtualClusterName = "separate-process-tenant"
+		virtualStartOpts = option.StartVirtualClusterOpts(virtualClusterName, nodes, option.StorageCluster(nodes))
+	}
+
+	// We always start the system tenant first in all deployment modes.
+	c.Start(ctx, l, startOpts, settings, nodes)
+
+	// If we picked a multitenant deployment, start the secondary tenant.
+	if deploymentMode != SystemOnlyDeployment {
+		c.StartServiceForVirtualCluster(ctx, l, virtualStartOpts, settings)
+
+		db := c.Conn(ctx, l, nodes.SeededRandNode(rng)[0], option.VirtualClusterName(virtualClusterName))
+		if err := WaitForSQLReady(ctx, db); err != nil {
+			return deploymentMode, "", errors.Wrapf(err, "failed to connect to virtual cluster %s", virtualClusterName)
+		}
+	}
+
+	return deploymentMode, virtualClusterName, nil
 }

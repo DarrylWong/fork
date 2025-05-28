@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cockroachdb/cockroach/pkg/roachprod"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
@@ -25,6 +24,12 @@ var cockroachIOController = filepath.Join("/sys/fs/cgroup/system.slice", install
 
 const CgroupsDiskStallName = "cgroup-disk-stall"
 
+// CGroupDiskStaller implements a disk stall failure mode using cgroups v2.
+// N.B. The CGroup disk staller implementation has a few limitations:
+// 1. It only supports stalling the first store on each node.
+// 2. It does not support stalling separate process stores.
+//
+// TODO(darryl): support passing in a specific store to stall.
 type CGroupDiskStaller struct {
 	GenericFailure
 	// Used in conjunction with the `Cycle` option to manage the
@@ -93,7 +98,8 @@ func (s *CGroupDiskStaller) Setup(ctx context.Context, l *logger.Logger, args Fa
 		// N.B. Because multiple FS operations aren't atomic, we must temporarily
 		// stop the cluster before moving the logs directory.
 		if diskStallArgs.RestartNodes {
-			if err := s.StopCluster(ctx, l, roachprod.DefaultStopOpts()); err != nil {
+			s.CaptureProcesses(ctx, l, s.c.Nodes)
+			if err := s.StopProcesses(ctx, l); err != nil {
 				return err
 			}
 		}
@@ -120,7 +126,7 @@ fi
 			return err
 		}
 		if diskStallArgs.RestartNodes {
-			if err := s.StartCluster(ctx, l); err != nil {
+			if err := s.RestartProcesses(ctx, l); err != nil {
 				return err
 			}
 		}
@@ -139,7 +145,8 @@ func (s *CGroupDiskStaller) Cleanup(ctx context.Context, l *logger.Logger, args 
 			return err
 		}
 		if diskStallArgs.RestartNodes {
-			if err := s.StopCluster(ctx, l, roachprod.DefaultStopOpts()); err != nil {
+			s.CaptureProcesses(ctx, l, s.c.Nodes)
+			if err := s.StopProcesses(ctx, l); err != nil {
 				return err
 			}
 		}
@@ -147,7 +154,7 @@ func (s *CGroupDiskStaller) Cleanup(ctx context.Context, l *logger.Logger, args 
 			return err
 		}
 		if diskStallArgs.RestartNodes {
-			return s.StartCluster(ctx, l)
+			return s.RestartProcesses(ctx, l)
 		}
 	}
 	return nil
@@ -259,7 +266,7 @@ func (s *CGroupDiskStaller) Recover(ctx context.Context, l *logger.Logger, args 
 	}
 
 	l.Printf("unstalling disk I/O on nodes %d", nodes)
-	// N.B. cgroups v2 relies on systemd running, however if our disk stall
+	// N.B. cgroups v2 relies on systemd running, however if our disk stalls
 	// was injected for too long, the cockroach process will detect a disk stall
 	// and exit. This deletes the cockroach service and there is no need to
 	// unlimit anything.
@@ -277,12 +284,11 @@ func (s *CGroupDiskStaller) Recover(ctx context.Context, l *logger.Logger, args 
 
 	// If we are restarting nodes, then we assume the failure above is because
 	// the disk stall was injected too long, and it was an expected death. Restart
-	// any dead nodes.
-	return forEachNode(diskStallArgs.Nodes, func(n install.Nodes) error {
-		err = s.Run(ctx, l, n, "cat", cockroachIOController)
-		if err != nil && diskStallArgs.RestartNodes {
+	// any dead system processes on the nodes we targeted.
+	return forEachNode(nodes, func(n install.Nodes) error {
+		if err = s.Run(ctx, l, n, "cat", cockroachIOController); err != nil {
 			l.Printf("failed to log cgroup bandwidth limits, assuming n%d exited and restarting: %v", n, err)
-			return s.StartNodes(ctx, l, n)
+			return s.StartNodes(ctx, l, n, withSystemCluster())
 		}
 		return nil
 	})
@@ -300,8 +306,13 @@ func (s *CGroupDiskStaller) WaitForFailureToPropagate(
 	if diskStallArgs.StallWrites {
 		// If writes are stalled, we expect the disk stall detection to kick in
 		// and kill the node.
+		//
+		// Unfortunately, if writes remain stalled the cockroach process may
+		// remain as a zombie process, making it inconsistent to wait until systemctl
+		// marks the process as dead. Instead, we make the weaker assertion that SQL
+		// connections are unavailable.
 		return forEachNode(diskStallArgs.Nodes, func(n install.Nodes) error {
-			return s.WaitForSQLUnavailable(ctx, l, n, 3*time.Minute)
+			return s.WaitForSQLUnavailable(ctx, l, n, 3*time.Minute, withSystemCluster())
 		})
 	}
 	return nil
@@ -410,6 +421,11 @@ const (
 	dmsetupUnstallCmd    = "sudo dmsetup resume data1"
 )
 
+// DmsetupDiskStaller implements a disk stall failure mode using dmsetup.
+// N.B. The dmsetup disk staller implementation has a few limitations:
+// 1. It only supports stalling the first store on each node.
+// 2. It does not support stalling separate process stores.
+// 3. It only supports complete write stalls, not slows or read stalls/slows.
 type DmsetupDiskStaller struct {
 	GenericFailure
 	// Used in conjunction with the `Cycle` option to manage the
@@ -438,14 +454,11 @@ func (s *DmsetupDiskStaller) Description() string {
 
 func (s *DmsetupDiskStaller) Setup(ctx context.Context, l *logger.Logger, args FailureArgs) error {
 	diskStallArgs := args.(DiskStallArgs)
-	var err error
 
 	// Disabling journaling requires the cockroach process to not have been started yet.
 	if diskStallArgs.RestartNodes {
-		// Use the default stop opts, if the user wants more control, they should manage
-		// the cluster restart themselves.
-		stopOpts := roachprod.DefaultStopOpts()
-		if err = s.StopCluster(ctx, l, stopOpts); err != nil {
+		s.CaptureProcesses(ctx, l, s.c.Nodes)
+		if err := s.StopProcesses(ctx, l); err != nil {
 			return err
 		}
 	}
@@ -486,9 +499,7 @@ func (s *DmsetupDiskStaller) Setup(ctx context.Context, l *logger.Logger, args F
 	}
 
 	if diskStallArgs.RestartNodes {
-		if err = s.StartCluster(ctx, l); err != nil {
-			return err
-		}
+		return s.RestartProcesses(ctx, l)
 	}
 	return nil
 }
@@ -536,7 +547,7 @@ func (s *DmsetupDiskStaller) Recover(
 		return forEachNode(nodes, func(n install.Nodes) error {
 			if err := s.PingNode(ctx, l, n); err != nil {
 				l.Printf("failed to connect to n%d, assuming node exited and restarting: %v", n, err)
-				return s.StartNodes(ctx, l, n)
+				return s.StartNodes(ctx, l, n, withSystemCluster())
 			}
 			return nil
 		})
@@ -552,8 +563,8 @@ func (s *DmsetupDiskStaller) Cleanup(
 
 	diskStallArgs := args.(DiskStallArgs)
 	if diskStallArgs.RestartNodes {
-		stopOpts := roachprod.DefaultStopOpts()
-		if err := s.StopCluster(ctx, l, stopOpts); err != nil {
+		s.CaptureProcesses(ctx, l, s.c.Nodes)
+		if err := s.StopProcesses(ctx, l); err != nil {
 			return err
 		}
 	}
@@ -563,40 +574,38 @@ func (s *DmsetupDiskStaller) Cleanup(
 		return err
 	}
 
-	if err := s.Run(ctx, l, s.c.Nodes, `sudo dmsetup resume data1`); err != nil {
+	if err = s.Run(ctx, l, s.c.Nodes, `sudo dmsetup resume data1`); err != nil {
 		return err
 	}
-	if err := s.Run(ctx, l, s.c.Nodes, `sudo umount /mnt/data1`); err != nil {
+	if err = s.Run(ctx, l, s.c.Nodes, `sudo umount /mnt/data1`); err != nil {
 		return err
 	}
-	if err := s.Run(ctx, l, s.c.Nodes, `sudo dmsetup remove data1`); err != nil {
+	if err = s.Run(ctx, l, s.c.Nodes, `sudo dmsetup remove data1`); err != nil {
 		return err
 	}
-	if err := s.Run(ctx, l, s.c.Nodes, `sudo tune2fs -O has_journal `+dev); err != nil {
+	if err = s.Run(ctx, l, s.c.Nodes, `sudo tune2fs -O has_journal `+dev); err != nil {
 		return err
 	}
-	if err := s.Run(ctx, l, s.c.Nodes, `sudo mount /mnt/data1`); err != nil {
+	if err = s.Run(ctx, l, s.c.Nodes, `sudo mount /mnt/data1`); err != nil {
 		return err
 	}
 	// Reinstall snapd.
-	if err := s.Run(ctx, l, s.c.Nodes, `sudo apt-get install -y snapd`); err != nil {
+	if err = s.Run(ctx, l, s.c.Nodes, `sudo apt-get install -y snapd`); err != nil {
 		return err
 	}
 
 	// When we unmounted the disk in setup, the cgroups controllers may have been removed, re-add them.
-	if err := s.Run(ctx, l, s.c.Nodes, "sudo", "/bin/bash", "-c",
+	if err = s.Run(ctx, l, s.c.Nodes, "sudo", "/bin/bash", "-c",
 		`'echo "+cpuset +cpu +io +memory +pids" > /sys/fs/cgroup/cgroup.subtree_control'`); err != nil {
 		return err
 	}
-	if err := s.Run(ctx, l, s.c.Nodes, "sudo", "/bin/bash", "-c",
+	if err = s.Run(ctx, l, s.c.Nodes, "sudo", "/bin/bash", "-c",
 		`'echo "+cpuset +cpu +io +memory +pids" > /sys/fs/cgroup/system.slice/cgroup.subtree_control'`); err != nil {
 		return err
 	}
 
 	if diskStallArgs.RestartNodes {
-		if err := s.StartCluster(ctx, l); err != nil {
-			return err
-		}
+		return s.RestartProcesses(ctx, l)
 	}
 	return nil
 }
@@ -612,7 +621,7 @@ func (s *DmsetupDiskStaller) WaitForFailureToPropagate(
 	// Since writes are stalled for dmsetup, we expect the disk stall detection to kick in
 	// and eventually kill the node.
 	return forEachNode(nodes, func(n install.Nodes) error {
-		return s.WaitForSQLUnavailable(ctx, l, n, 3*time.Minute)
+		return s.WaitForSQLUnavailable(ctx, l, n, 3*time.Minute, withSystemCluster())
 	})
 }
 
