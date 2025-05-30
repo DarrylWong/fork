@@ -39,18 +39,6 @@ const (
 // system interface. (a.k.a. "system tenant")
 const SystemInterfaceName = "system"
 
-type ServiceMode string
-
-const (
-	// ServiceModeShared is the service mode for services that are shared on a host process.
-	ServiceModeShared ServiceMode = "shared"
-	// ServiceModeExternal is the service mode for services that are run in a separate process.
-	ServiceModeExternal ServiceMode = "external"
-)
-
-// SharedPriorityClass is the priority class used to indicate when a service is shared.
-const SharedPriorityClass = 1000
-
 // ServiceDesc describes a service running on a node.
 type ServiceDesc struct {
 	// VirtualClusterName is the name of the virtual cluster that owns
@@ -58,8 +46,6 @@ type ServiceDesc struct {
 	VirtualClusterName string
 	// ServiceType is the type of service.
 	ServiceType ServiceType
-	// ServiceMode is the mode of the service.
-	ServiceMode ServiceMode
 	// Node is the node the service is running on.
 	Node Node
 	// Instance is the instance number of the service.
@@ -185,7 +171,7 @@ func (c *SyncedCluster) DiscoverService(
 	// service and for external-process virtual clusters.
 	services, err := c.DiscoverServices(
 		ctx, virtualClusterName, serviceType,
-		ServiceNodePredicate(node), ServiceModePredicate(ServiceModeExternal), ServiceInstancePredicate(sqlInstance),
+		ServiceNodePredicate(node), ServiceInstancePredicate(sqlInstance),
 	)
 	if err != nil {
 		return ServiceDesc{}, err
@@ -312,14 +298,10 @@ func (c *SyncedCluster) RegisterServices(ctx context.Context, services ServiceDe
 			records := make([]vm.DNSRecord, 0)
 			for _, desc := range servicesByDNSProvider[dnsProviderName] {
 				name := serviceDNSName(dnsProvider, desc.VirtualClusterName, desc.ServiceType, c.Name)
-				priority := 0
-				if desc.ServiceMode == ServiceModeShared {
-					priority = SharedPriorityClass
-				}
 				srvData := net.SRV{
 					Target:   c.TargetDNSName(desc.Node),
 					Port:     uint16(desc.Port),
-					Priority: uint16(priority),
+					Priority: uint16(0),
 					Weight:   uint16(desc.Instance),
 				}
 				records = append(records, vm.CreateSRVRecord(name, srvData))
@@ -367,14 +349,6 @@ func ServiceNodePredicate(nodes ...Node) ServicePredicate {
 func ServiceInstancePredicate(instance int) ServicePredicate {
 	return func(descriptor ServiceDesc) bool {
 		return descriptor.Instance == instance
-	}
-}
-
-// ServiceModePredicate returns a ServicePredicate that matches on the
-// provided service mode.
-func ServiceModePredicate(serviceMode ServiceMode) ServicePredicate {
-	return func(descriptor ServiceDesc) bool {
-		return descriptor.ServiceMode == serviceMode
 	}
 }
 
@@ -479,10 +453,6 @@ func (c *SyncedCluster) dnsRecordsToServiceDescriptors(
 		if _, ok := dnsNameToNode[data.Target]; !ok {
 			continue
 		}
-		serviceMode := ServiceModeExternal
-		if data.Priority >= SharedPriorityClass {
-			serviceMode = ServiceModeShared
-		}
 		virtualClusterName, serviceType, err := serviceNameComponents(record.Name)
 		if err != nil {
 			return nil, err
@@ -490,7 +460,6 @@ func (c *SyncedCluster) dnsRecordsToServiceDescriptors(
 		ports = append(ports, ServiceDesc{
 			VirtualClusterName: virtualClusterName,
 			ServiceType:        serviceType,
-			ServiceMode:        serviceMode,
 			Port:               int(data.Port),
 			Instance:           int(data.Weight),
 			Node:               dnsNameToNode[data.Target],
