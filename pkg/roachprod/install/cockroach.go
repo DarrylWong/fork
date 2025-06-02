@@ -458,7 +458,6 @@ func (c *SyncedCluster) ServiceDescriptors(
 ) (ServiceDescriptors, error) {
 	// Not all virtual clusters are registered with DNS, so we must reconstruct our
 	// service descriptor based on the registration rules stated in maybeRegisterServices.
-	// Specifically, we don't record the service mode in the DNS record and must figure it out.
 	//
 	// We first try to discover a service for the virtual cluster name provided on the
 	// requested node. If we find a result, we are done.
@@ -470,16 +469,6 @@ func (c *SyncedCluster) ServiceDescriptors(
 		return ServiceDescriptors{}, err
 	}
 	if len(services) > 0 {
-		for _, service := range services {
-			// SharedProcess secondary tenants are not registered so we know that any
-			// non system tenant must be an external service.
-			service.ServiceMode = ServiceModeExternal
-			if IsSystemInterface(virtualClusterName) {
-				// System interface services are always shared.
-				service.ServiceMode = ServiceModeShared
-			}
-		}
-
 		return services, nil
 	}
 
@@ -505,7 +494,6 @@ func (c *SyncedCluster) ServiceDescriptors(
 	for _, service := range services {
 		service.VirtualClusterName = virtualClusterName
 		service.Instance = sqlInstance
-		service.ServiceMode = ServiceModeShared
 	}
 
 	// If we still have not found a service at this point, it must be a shared process secondary
