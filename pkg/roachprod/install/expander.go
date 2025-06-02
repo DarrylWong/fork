@@ -258,7 +258,7 @@ func (e *expander) maybeExpandPgPort(
 	if e.pgPorts == nil {
 		e.pgPorts = make(map[Node]string, len(c.VMs))
 		for _, node := range allNodes(len(c.VMs)) {
-			desc, err := c.DiscoverService(ctx, node, virtualClusterName, ServiceTypeSQL, sqlInstance)
+			desc, err := c.GetServiceForNode(ctx, node, virtualClusterName, ServiceTypeSQL, sqlInstance)
 			if err != nil {
 				return s, false, err
 			}

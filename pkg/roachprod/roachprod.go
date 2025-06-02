@@ -835,7 +835,7 @@ func updatePrometheusTargets(
 		wg.Add(1)
 		go func(nodeID int, v vm.VM) {
 			defer wg.Done()
-			desc, err := c.DiscoverService(ctx, install.Node(nodeID), "", install.ServiceTypeUI, 0)
+			desc, err := c.GetServiceForNode(ctx, install.Node(nodeID), "", install.ServiceTypeUI, 0)
 			if err != nil {
 				l.Errorf("error getting the port for node %d: %v", nodeID, err)
 				return
@@ -1147,7 +1147,7 @@ func PgURL(
 
 	var urls []string
 	for i, ip := range ips {
-		desc, err := c.DiscoverService(ctx, nodes[i], opts.VirtualClusterName, install.ServiceTypeSQL, opts.SQLInstance)
+		desc, err := c.GetServiceForNode(ctx, nodes[i], opts.VirtualClusterName, install.ServiceTypeSQL, opts.SQLInstance)
 		if err != nil {
 			return nil, err
 		}
@@ -1201,7 +1201,7 @@ func urlGenerator(
 		}
 		port := uConfig.port
 		if port == 0 {
-			desc, err := c.DiscoverService(
+			desc, err := c.GetServiceForNode(
 				ctx, node, uConfig.virtualClusterName, install.ServiceTypeUI, uConfig.sqlInstance,
 			)
 			if err != nil {
