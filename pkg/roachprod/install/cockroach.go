@@ -423,7 +423,7 @@ func DefaultServiceDesc(
 	nodes Nodes,
 	serviceType ServiceType,
 	sqlInstance int,
-) []ServiceDesc {
+) ServiceDescriptors {
 
 	var port int
 	switch serviceType {
@@ -432,7 +432,7 @@ func DefaultServiceDesc(
 	case ServiceTypeUI:
 		port = config.DefaultAdminUIPort
 	}
-	services := make([]ServiceDesc, 0, len(nodes))
+	services := make(ServiceDescriptors, 0, len(nodes))
 	for i, node := range nodes {
 		services[i] = ServiceDesc{
 			VirtualClusterName: virtualClusterName,
@@ -455,7 +455,7 @@ func (c *SyncedCluster) ServiceDescriptors(
 	virtualClusterName string,
 	serviceType ServiceType,
 	sqlInstance int,
-) ([]ServiceDesc, error) {
+) (ServiceDescriptors, error) {
 	// Not all virtual clusters are registered with DNS, so we must reconstruct our
 	// service descriptor based on the registration rules stated in maybeRegisterServices.
 	// Specifically, we don't record the service mode in the DNS record and must figure it out.
@@ -467,7 +467,7 @@ func (c *SyncedCluster) ServiceDescriptors(
 		ServiceNodePredicate(nodes...), ServiceInstancePredicate(sqlInstance),
 	)
 	if err != nil {
-		return []ServiceDesc{}, err
+		return ServiceDescriptors{}, err
 	}
 	if len(services) > 0 {
 		for _, service := range services {
@@ -498,7 +498,7 @@ func (c *SyncedCluster) ServiceDescriptors(
 		ctx, SystemInterfaceName, serviceType, ServiceNodePredicate(nodes...),
 	)
 	if err != nil {
-		return []ServiceDesc{}, err
+		return ServiceDescriptors{}, err
 	}
 
 	// Update the system service to point to the virtual cluster requested.
