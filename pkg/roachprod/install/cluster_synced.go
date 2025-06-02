@@ -246,6 +246,8 @@ func (c *SyncedCluster) localVMDir(n Node) string {
 //	$ roachprod start local          # [1, 2, 3, 4]
 //	$ roachprod start local:2-4      # [2, 3, 4]
 //	$ roachprod start local:2,1,4    # [1, 2, 4]
+//
+// TODO (darryl): remove this as it is redundant
 func (c *SyncedCluster) TargetNodes() Nodes {
 	return append(Nodes{}, c.Nodes...)
 }
@@ -2269,7 +2271,7 @@ func (c *SyncedCluster) pgurls(
 	}
 	m := make(map[Node]string, len(hosts))
 	for node, host := range hosts {
-		desc, err := c.GetServiceForNode(ctx, node, virtualClusterName, ServiceTypeSQL, sqlInstance)
+		desc, err := c.ServiceDescriptor(ctx, node, virtualClusterName, ServiceTypeSQL, sqlInstance)
 		if err != nil {
 			return nil, err
 		}
@@ -2304,24 +2306,15 @@ func (c *SyncedCluster) loadBalancerURL(
 	sqlInstance int,
 	auth PGAuthMode,
 ) (string, error) {
-	services, err := c.DiscoverServices(ctx, virtualClusterName, ServiceTypeSQL)
+	desc, err := c.ServiceDescriptor(ctx, c.Nodes[0], virtualClusterName, ServiceTypeSQL, sqlInstance)
 	if err != nil {
 		return "", err
 	}
-	port := config.DefaultSQLPort
-	serviceMode := ServiceModeExternal
-	for _, service := range services {
-		if service.VirtualClusterName == virtualClusterName && service.Instance == sqlInstance {
-			serviceMode = service.ServiceMode
-			port = service.Port
-			break
-		}
-	}
-	address, err := c.FindLoadBalancer(l, port)
+	address, err := c.FindLoadBalancer(l, desc.Port)
 	if err != nil {
 		return "", err
 	}
-	loadBalancerURL := c.NodeURL(address.IP, address.Port, virtualClusterName, serviceMode, auth, "" /* database */)
+	loadBalancerURL := c.NodeURL(address.IP, address.Port, virtualClusterName, desc.ServiceMode, auth, "" /* database */)
 	return loadBalancerURL, nil
 }
 

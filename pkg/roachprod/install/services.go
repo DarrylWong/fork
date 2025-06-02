@@ -132,13 +132,13 @@ func serviceNameComponents(name string) (string, ServiceType, error) {
 	return serviceName[:splitIndex], serviceType, nil
 }
 
-// DiscoverServices discovers services running on the given nodes.
+// discoverServices discovers services running on the given nodes.
 // Services matching the virtual cluster name and service type are
 // returned and can be filtered by passing predicates. It's possible
 // that multiple services can be returned for the given parameters if
 // instances of the same virtual cluster and type are running on any of the
 // nodes.
-func (c *SyncedCluster) DiscoverServices(
+func (c *SyncedCluster) discoverServices(
 	ctx context.Context,
 	virtualClusterName string,
 	serviceType ServiceType,
@@ -195,11 +195,11 @@ func (c *SyncedCluster) MapServices(
 ) (NodeServiceMap, error) {
 	nodeFilter := ServiceNodePredicate(c.Nodes...)
 	instanceFilter := ServiceInstancePredicate(instance)
-	sqlServices, err := c.DiscoverServices(ctx, virtualClusterName, ServiceTypeSQL, nodeFilter, instanceFilter)
+	sqlServices, err := c.discoverServices(ctx, virtualClusterName, ServiceTypeSQL, nodeFilter, instanceFilter)
 	if err != nil {
 		return nil, err
 	}
-	uiServices, err := c.DiscoverServices(ctx, virtualClusterName, ServiceTypeUI, nodeFilter, instanceFilter)
+	uiServices, err := c.discoverServices(ctx, virtualClusterName, ServiceTypeUI, nodeFilter, instanceFilter)
 	if err != nil {
 		return nil, err
 	}
