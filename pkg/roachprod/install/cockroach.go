@@ -406,7 +406,7 @@ func (c *SyncedCluster) IsExternalService(ctx context.Context, virtualClusterNam
 	return len(services) > 0, nil
 }
 
-// DefaultServiceDesc returns the default ports for a service type. This is
+// defaultServiceDescriptors returns the default ports for a service type. This is
 // required for scenarios where the services were not registered with a DNS
 // provider (Google DNS). Currently, services will not be registered in the
 // following scenarios:
@@ -418,13 +418,15 @@ func (c *SyncedCluster) IsExternalService(ctx context.Context, virtualClusterNam
 // ports as the system interface, so we do not register them with DNS.
 // 2. Clusters not on GCP
 // 3. Clusters that specify a custom project.
-func DefaultServiceDesc(
+//
+// Note that because separate process virtual clusters require service registration,
+// there is no default port and only shared process services should call this.
+func defaultServiceDescriptors(
 	virtualClusterName string,
 	nodes Nodes,
 	serviceType ServiceType,
 	sqlInstance int,
 ) ServiceDescriptors {
-
 	var port int
 	switch serviceType {
 	case ServiceTypeSQL:
@@ -432,7 +434,7 @@ func DefaultServiceDesc(
 	case ServiceTypeUI:
 		port = config.DefaultAdminUIPort
 	}
-	services := make(ServiceDescriptors, 0, len(nodes))
+	services := make(ServiceDescriptors, len(nodes))
 	for i, node := range nodes {
 		services[i] = ServiceDesc{
 			VirtualClusterName: virtualClusterName,
@@ -475,7 +477,7 @@ func (c *SyncedCluster) ServiceDescriptors(
 	// If we are looking for the system interface at this point, we know it must be using the default
 	// ports, or we would have found it above. Return the default fallback case.
 	if IsSystemInterface(virtualClusterName) {
-		return DefaultServiceDesc(
+		return defaultServiceDescriptors(
 			virtualClusterName, nodes, serviceType, 0, /* sqlInstance */
 		), nil
 	}
@@ -491,15 +493,15 @@ func (c *SyncedCluster) ServiceDescriptors(
 	}
 
 	// Update the system service to point to the virtual cluster requested.
-	for _, service := range services {
-		service.VirtualClusterName = virtualClusterName
-		service.Instance = sqlInstance
+	for i := range services {
+		services[i].VirtualClusterName = virtualClusterName
+		services[i].Instance = sqlInstance
 	}
 
 	// If we still have not found a service at this point, it must be a shared process secondary
 	// tenant where the system interface is on the default ports.
 	if len(services) == 0 {
-		return DefaultServiceDesc(
+		return defaultServiceDescriptors(
 			virtualClusterName, nodes, serviceType, sqlInstance,
 		), nil
 	}
