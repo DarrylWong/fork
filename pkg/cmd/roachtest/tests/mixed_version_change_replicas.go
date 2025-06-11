@@ -34,6 +34,7 @@ func registerChangeReplicasMixedVersion(r registry.Registry) {
 		CompatibleClouds: registry.AllClouds.NoAWS().NoIBM(),
 		Suites:           registry.Suites(registry.MixedVersion, registry.Nightly),
 		Randomized:       true,
+		Monitor:          true,
 		Run:              runChangeReplicasMixedVersion,
 		Timeout:          60 * time.Minute,
 	})

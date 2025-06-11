@@ -5,9 +5,14 @@
 
 package test
 
+import (
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
+)
+
 // Monitor is an interface for monitoring cockroach processes during a test.
 type Monitor interface {
-	ExpectDeath()
-	ExpectDeaths(count int32)
-	ResetDeaths()
+	ExpectDeaths(nodes option.NodeListOption)
+	ResetDeaths(nodes option.NodeListOption)
+	ExpectNodeHealth(nodes install.Nodes, event install.MonitorExpectedNodeHealth)
 }

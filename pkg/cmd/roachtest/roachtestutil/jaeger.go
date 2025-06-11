@@ -33,7 +33,7 @@ import (
 // data partition. However, they are symlinked into the logs directory so that
 // they will be retrieved for failed tests.
 func InstallLaunchAndConfigureJaegerAllInOne(
-	ctx context.Context, l *logger.Logger, c cluster.Cluster, m cluster.Monitor,
+	ctx context.Context, l *logger.Logger, c cluster.Cluster, m cluster.DeprecatedMonitor,
 ) error {
 	if c.IsLocal() {
 		// Don't bother getting this right locally; most of us are on darwin.

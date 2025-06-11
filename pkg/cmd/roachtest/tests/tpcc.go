@@ -203,7 +203,7 @@ type tpccOptions struct {
 	ExtraRunArgs       string
 	ExtraSetupArgs     string
 	Chaos              func() Chaos // for late binding of stopper
-	ExpectedDeaths     int
+	ExpectedDeaths     option.NodeListOption
 	During             func(context.Context) error // for running a function during the test
 	Duration           time.Duration               // if zero, TPCC is not invoked
 	SetupType          tpccSetupType
@@ -411,7 +411,7 @@ func runTPCC(
 	}
 	setupTPCC(ctx, t, l, c, opts)
 	m := c.NewMonitor(ctx, c.CRDBNodes())
-	m.ExpectDeaths(int32(opts.ExpectedDeaths))
+	m.ExpectDeaths(opts.ExpectedDeaths)
 	rampDur := rampDuration(c.IsLocal())
 	for i := range workloadInstances {
 		// Make a copy of i for the goroutine.
@@ -738,6 +738,7 @@ func registerTPCC(r registry.Registry) {
 		Suites:            registry.Suites(registry.MixedVersion, registry.Nightly),
 		Cluster:           mixedHeadroomSpec,
 		EncryptionSupport: registry.EncryptionMetamorphic,
+		Monitor:           true,
 		Randomized:        true,
 		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 			runTPCCMixedHeadroom(ctx, t, c)

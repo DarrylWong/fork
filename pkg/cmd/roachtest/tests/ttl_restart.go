@@ -199,7 +199,7 @@ func runTTLRestart(ctx context.Context, t test.Test, c cluster.Cluster, numResta
 					continue
 				}
 			}
-			m.ExpectDeath()
+			m.ExpectDeaths(c.Node(node))
 			t.L().Printf("stopping node %d", node)
 			c.Stop(ctx, t.L(), option.DefaultStopOpts(), c.Nodes(node))
 			stoppedNodes = append(stoppedNodes, node)
@@ -226,7 +226,6 @@ func runTTLRestart(ctx context.Context, t test.Test, c cluster.Cluster, numResta
 			c.Start(ctx, t.L(), startOpts, settings, c.Node(node))
 			nodesRestarted++
 		}
-		m.ResetDeaths()
 
 		// In some cases, the TTL job can complete successfully before a restart is
 		// observed. To handle this, we tolerate either a job restart or successful

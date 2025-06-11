@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sync"
 
+	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 )
@@ -21,6 +22,7 @@ type ClusterOptions struct {
 	// localCertsPath is the path to where the local copy of the cluster
 	// certs are stored, i.e. the ones accessible by the failer.
 	localCertsPath string
+	monitorFunc    func(nodes install.Nodes, health install.MonitorExpectedNodeHealth)
 }
 
 type failureSpec struct {

@@ -102,7 +102,7 @@ func runMultiStoreRemove(ctx context.Context, t test.Test, c cluster.Cluster) {
 	t.Status("removing store from n1")
 	node := c.Node(1)
 	m := c.NewMonitor(ctx, node)
-	m.ExpectDeaths(1)
+	m.ExpectDeaths(node)
 	stopOpts := option.DefaultStopOpts()
 	c.Stop(ctx, t.L(), stopOpts, node)
 

@@ -71,7 +71,7 @@ func registerDiskFull(r registry.Registry) {
 				// Create a manual ballast that fills up the entire disk
 				// (size=100%). The "|| true" is used to ignore the
 				// error returned by `debug ballast`.
-				m.ExpectDeath()
+				m.ExpectDeaths(c.Node(n))
 				c.Run(ctx, option.WithNodes(c.Node(n)), "./cockroach debug ballast {store-dir}/largefile --size=100% || true")
 
 				// Node 1 should forcibly exit due to a full disk.
@@ -99,7 +99,7 @@ func registerDiskFull(r registry.Registry) {
 					// We expect cockroach to die during startup with
 					// exit code 10 (Disk Full). Just in case the
 					// monitor detects the death, expect it.
-					m.ExpectDeath()
+					m.ExpectDeaths(c.Node(n))
 
 					err := c.StartE(ctx, t.L(), startOpts, install.MakeClusterSettings(), c.Node(n))
 					t.L().Printf("starting n%d: error %v", n, err)
@@ -133,12 +133,12 @@ func registerDiskFull(r registry.Registry) {
 				// node is still dead until the node has had its ballast
 				// file removed and has been successfully restarted.
 				t.L().Printf("removing the emergency ballast on n%d\n", n)
-				m.ExpectDeath()
+				m.ExpectDeaths(c.Node(n))
 				c.Run(ctx, option.WithNodes(c.Node(n)), "rm -f {store-dir}/auxiliary/EMERGENCY_BALLAST")
 				if err := c.StartE(ctx, t.L(), startOpts, install.MakeClusterSettings(), c.Node(n)); err != nil {
 					t.Fatal(err)
 				}
-				m.ResetDeaths()
+				m.ResetDeaths(c.Nodes(n))
 
 				// Wait a little while and delete the large file we
 				// added to induce the out-of-disk condition.

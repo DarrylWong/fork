@@ -709,8 +709,9 @@ func runDecommissionBench(
 			time.Sleep(1 * time.Minute)
 		}
 
-		m.ExpectDeath()
-		defer m.ResetDeaths()
+		if benchSpec.decommissionNode != 0 {
+			m.ExpectDeaths(c.Node(benchSpec.decommissionNode))
+		}
 		err := runSingleDecommission(ctx, c, h, pinnedNode, benchSpec.decommissionNode, &targetNodeAtomic, benchSpec.snapshotRate,
 			benchSpec.whileDown, benchSpec.drainFirst, false /* reuse */, benchSpec.whileUpreplicating,
 			true /* estimateDuration */, benchSpec.slowWrites, tickByName,
@@ -838,12 +839,13 @@ func runDecommissionBenchLong(
 		}
 
 		for tBegin := timeutil.Now(); timeutil.Since(tBegin) <= benchSpec.duration; {
-			m.ExpectDeath()
+			if benchSpec.decommissionNode != 0 {
+				m.ExpectDeaths(c.Node(benchSpec.decommissionNode))
+			}
 			err := runSingleDecommission(ctx, c, h, pinnedNode, benchSpec.decommissionNode, &targetNodeAtomic, benchSpec.snapshotRate,
 				benchSpec.whileDown, benchSpec.drainFirst, true /* reuse */, benchSpec.whileUpreplicating,
 				true /* estimateDuration */, benchSpec.slowWrites, tickByName,
 			)
-			m.ResetDeaths()
 			if err != nil {
 				return err
 			}

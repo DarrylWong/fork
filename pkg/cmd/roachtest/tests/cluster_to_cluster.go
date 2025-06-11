@@ -662,9 +662,8 @@ func (rd *replicationDriver) crdbNodes() option.NodeListOption {
 	return rd.setup.src.nodes.Merge(rd.setup.dst.nodes)
 }
 
-func (rd *replicationDriver) newMonitor(ctx context.Context) cluster.Monitor {
+func (rd *replicationDriver) newMonitor(ctx context.Context) cluster.DeprecatedMonitor {
 	m := rd.c.NewMonitor(ctx, rd.crdbNodes())
-	m.ExpectDeaths(rd.rs.expectedNodeDeaths)
 	return m
 }
 
@@ -900,7 +899,7 @@ func (rd *replicationDriver) backupAfterFingerprintMismatch(
 }
 
 func (rd *replicationDriver) maybeRunReaderTenantWorkload(
-	ctx context.Context, workloadMonitor cluster.Monitor,
+	ctx context.Context, workloadMonitor cluster.DeprecatedMonitor,
 ) {
 	if rd.rs.withReaderWorkload != nil {
 		rd.t.Status("running reader tenant workload")
@@ -1644,7 +1643,6 @@ func registerClusterReplicationResilience(r registry.Registry) {
 			timeout:                              20 * time.Minute,
 			additionalDuration:                   6 * time.Minute,
 			cutover:                              3 * time.Minute,
-			expectedNodeDeaths:                   1,
 			sometimesTestFingerprintMismatchCode: true,
 			// The job system can take up to 2 minutes to reclaim a job if the
 			// coordinator dies, so increase the max expected latency to account for

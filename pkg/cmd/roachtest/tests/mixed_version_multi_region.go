@@ -61,6 +61,7 @@ func registerMultiRegionMixedVersion(r registry.Registry) {
 		EncryptionSupport: registry.EncryptionMetamorphic,
 		CompatibleClouds:  registry.OnlyGCE,
 		Suites:            registry.Suites(registry.MixedVersion, registry.Weekly),
+		Monitor:           true,
 		Randomized:        true,
 		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 			partitionConfig := fmt.Sprintf(
@@ -91,7 +92,7 @@ func registerMultiRegionMixedVersion(r registry.Registry) {
 				Warehouses:             len(regions) * backgroundWarehousesPerRegion,
 				ExtraSetupArgs:         partitionConfig,
 				ExtraRunArgs:           "--tolerate-errors " + partitionConfig,
-				ExpectedDeaths:         10000, // we don't want the internal monitor to fail
+				ExpectedDeaths:         c.All(), // we don't want the internal monitor to fail
 				Start:                  func(_ context.Context, t test.Test, c cluster.Cluster) {},
 				SetupType:              usingInit,
 				SkipPostRunCheck:       true,

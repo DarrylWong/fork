@@ -66,7 +66,7 @@ type Cluster interface {
 	Stop(ctx context.Context, l *logger.Logger, stopOpts option.StopOpts, opts ...option.Option)
 	SignalE(ctx context.Context, l *logger.Logger, sig int, opts ...option.Option) error
 	Signal(ctx context.Context, l *logger.Logger, sig int, opts ...option.Option)
-	NewMonitor(context.Context, ...option.Option) Monitor
+	NewMonitor(context.Context, ...option.Option) DeprecatedMonitor
 
 	// Starting virtual clusters.
 

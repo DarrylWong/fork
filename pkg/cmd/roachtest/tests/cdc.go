@@ -107,7 +107,7 @@ var envVars = []string{
 type cdcTester struct {
 	ctx          context.Context
 	t            test.Test
-	mon          cluster.Monitor
+	mon          cluster.DeprecatedMonitor
 	cluster      cluster.Cluster
 	crdbNodes    option.NodeListOption
 	workloadNode option.NodeListOption
@@ -1067,12 +1067,11 @@ func runCDCInitialScanRollingRestart(
 		if err := c.RunE(ctx, option.WithNodes(c.Node(n)), cmd); err != nil {
 			return err
 		}
-		m.ExpectDeath()
+		m.ExpectDeaths(c.Node(n))
 		c.Stop(ctx, t.L(), option.DefaultStopOpts(), c.Node(n))
 		opts := startOpts
 		opts.RoachprodOpts.IsRestart = true
 		c.Start(ctx, t.L(), opts, racks, c.Node(n))
-		m.ResetDeaths()
 		return nil
 	}
 
@@ -2975,7 +2974,7 @@ type kafkaManager struct {
 	t              test.Test
 	c              cluster.Cluster
 	kafkaSinkNodes option.NodeListOption
-	mon            cluster.Monitor
+	mon            cluster.DeprecatedMonitor
 
 	// Our method of requiring OAuth on the broker only works with Kafka 2
 	useKafka2 bool

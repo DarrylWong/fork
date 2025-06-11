@@ -56,6 +56,13 @@ type MonitorError struct {
 	Err error
 }
 
+type MonitorExpectedNodeHealth string
+
+const (
+	ExpectedHealthy MonitorExpectedNodeHealth = "expected node to be healthy"
+	ExpectedDeath   MonitorExpectedNodeHealth = "expected node death"
+)
+
 // MonitorNoCockroachProcessesError is the error returned when the
 // monitor is called on a node that is not running a `cockroach`
 // process by the time the monitor runs.
@@ -121,6 +128,10 @@ func (e MonitorReady) String() string {
 
 func (e MonitorError) String() string {
 	return fmt.Sprintf("error: %s", e.Err.Error())
+}
+
+func (e MonitorExpectedNodeHealth) String() string {
+	return string(e)
 }
 
 func (m *monitorNode) reset() {
@@ -371,7 +382,7 @@ func (c *SyncedCluster) Monitor(
 		})
 		// if the monitor's context is already canceled, do not attempt to
 		// send the error down the channel, as it is most likely *caused*
-		// by the cancelation itself.
+		// by the cancellation itself.
 		if monitorCtx.Err() != nil {
 			return
 		}

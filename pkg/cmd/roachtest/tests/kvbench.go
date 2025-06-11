@@ -205,7 +205,7 @@ func runKVBench(ctx context.Context, t test.Test, c cluster.Cluster, b kvBenchSp
 	searchPredicate := func(maxrate int) (bool, error) {
 		m := c.NewMonitor(ctx, c.CRDBNodes())
 		// Restart
-		m.ExpectDeaths(int32(len(c.CRDBNodes())))
+		m.ExpectDeaths(c.CRDBNodes())
 		// Wipe cluster before starting a new run because factors like load-based
 		// splitting can significantly change the underlying layout of the table and
 		// affect benchmark results.

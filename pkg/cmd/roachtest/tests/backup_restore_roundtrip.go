@@ -186,16 +186,13 @@ func backupRestoreRoundTrip(
 			if _, ok := collection.btype.(*clusterBackup); ok {
 				t.L().Printf("resetting cluster before verifying full cluster backup %d", i+1)
 				stopBackgroundCommands()
-				expectDeathsFn := func(n int) {
-					m.ExpectDeaths(int32(n))
-				}
 
 				// Between each reset grab a debug zip from the cluster.
 				zipPath := fmt.Sprintf("debug-%d.zip", timeutil.Now().Unix())
 				if err := testUtils.cluster.FetchDebugZip(ctx, t.L(), zipPath); err != nil {
 					t.L().Printf("failed to fetch a debug zip: %v", err)
 				}
-				if err := testUtils.resetCluster(ctx, t.L(), clusterupgrade.CurrentVersion(), expectDeathsFn, []install.ClusterSettingOption{}); err != nil {
+				if err := testUtils.resetCluster(ctx, t.L(), clusterupgrade.CurrentVersion(), m.ExpectDeaths, []install.ClusterSettingOption{}); err != nil {
 					return err
 				}
 			}
@@ -229,7 +226,7 @@ func startBackgroundWorkloads(
 	ctx context.Context,
 	l *logger.Logger,
 	c cluster.Cluster,
-	m cluster.Monitor,
+	m cluster.DeprecatedMonitor,
 	testRNG *rand.Rand,
 	roachNodes, workloadNode option.NodeListOption,
 	testUtils *CommonTestUtils,
@@ -363,7 +360,7 @@ func (u *CommonTestUtils) CloseConnections() {
 	}
 }
 
-func workloadWithCancel(m cluster.Monitor, fn func(ctx context.Context) error) func() {
+func workloadWithCancel(m cluster.DeprecatedMonitor, fn func(ctx context.Context) error) func() {
 	cancelWorkload := m.GoWithCancel(func(ctx context.Context) error {
 		err := fn(ctx)
 		if ctx.Err() != nil {
@@ -381,7 +378,7 @@ func setupBackupRestoreTestUtils(
 	ctx context.Context,
 	t test.Test,
 	c cluster.Cluster,
-	m cluster.Monitor,
+	m cluster.DeprecatedMonitor,
 	rng *rand.Rand,
 	testOpts ...commonTestOption,
 ) (*CommonTestUtils, error) {
@@ -415,7 +412,7 @@ func createDriversForBackupRestore(
 	ctx context.Context,
 	t test.Test,
 	c cluster.Cluster,
-	m cluster.Monitor,
+	m cluster.DeprecatedMonitor,
 	rng *rand.Rand,
 	testUtils *CommonTestUtils,
 	dbs []string,
@@ -507,9 +504,6 @@ func testOnlineRestoreRecovery(ctx context.Context, t test.Test, c cluster.Clust
 		if _, ok := collection.btype.(*clusterBackup); ok {
 			t.L().Printf("resetting cluster before restoring full cluster backup")
 			stopBackgroundCommands()
-			expectDeathsFn := func(n int) {
-				m.ExpectDeaths(int32(n))
-			}
 
 			// Between each reset grab a debug zip from the cluster.
 			zipPath := fmt.Sprintf("debug-%d.zip", timeutil.Now().Unix())
@@ -517,7 +511,7 @@ func testOnlineRestoreRecovery(ctx context.Context, t test.Test, c cluster.Clust
 				t.L().Printf("failed to fetch a debug zip: %v", err)
 			}
 			if err := testUtils.resetCluster(
-				ctx, t.L(), clusterupgrade.CurrentVersion(), expectDeathsFn, []install.ClusterSettingOption{},
+				ctx, t.L(), clusterupgrade.CurrentVersion(), m.ExpectDeaths, []install.ClusterSettingOption{},
 			); err != nil {
 				return err
 			}

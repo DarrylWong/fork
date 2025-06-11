@@ -5,9 +5,12 @@
 
 package cluster
 
-import "context"
+import (
+	"context"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
+)
 
-// A Monitor watches the cluster for unexpected node deaths.
+// A DeprecatedMonitor watches the cluster for unexpected node deaths.
 //
 // NB: In a roachtest, it's best practice to spawn a new go routine via a
 // monitor, instead of directly in the testSpec.Run() closure because the
@@ -15,10 +18,9 @@ import "context"
 // t.Fatal() call within monitor.Go() will lead to a graceful roachtest to
 // failure, just like when t.Fatal is called directly in testSpec.Run(). This
 // ensures proper roachprod cluster shutdown, for example.
-type Monitor interface {
-	ExpectDeath()
-	ExpectDeaths(count int32)
-	ResetDeaths()
+type DeprecatedMonitor interface {
+	ExpectDeaths(nodes option.NodeListOption)
+	ResetDeaths(nodes option.NodeListOption)
 
 	// Go spawns a goroutine whose fatal errors will be handled gracefully leading to a
 	// clean roachtest shutdown. To prevent leaky goroutines, the caller must call

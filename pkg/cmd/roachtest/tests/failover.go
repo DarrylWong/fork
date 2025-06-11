@@ -1170,7 +1170,7 @@ var allFailureModes = []failureMode{
 func makeFailer(
 	t test.Test,
 	c cluster.Cluster,
-	m cluster.Monitor,
+	m cluster.DeprecatedMonitor,
 	failureMode failureMode,
 	settings install.ClusterSettings,
 	rng *rand.Rand,
@@ -1188,7 +1188,7 @@ func makeFailer(
 func makeFailerWithoutLocalNoop(
 	t test.Test,
 	c cluster.Cluster,
-	m cluster.Monitor,
+	m cluster.DeprecatedMonitor,
 	failureMode failureMode,
 	settings install.ClusterSettings,
 	rng *rand.Rand,
@@ -1419,7 +1419,7 @@ func (f *blackholeFailer) Recover(ctx context.Context, nodeID int) {
 type crashFailer struct {
 	t             test.Test
 	c             cluster.Cluster
-	m             cluster.Monitor
+	m             cluster.DeprecatedMonitor
 	startSettings install.ClusterSettings
 }
 
@@ -1433,7 +1433,7 @@ func (f *crashFailer) Ready(context.Context, int)  {}
 func (f *crashFailer) Cleanup(context.Context)     {}
 
 func (f *crashFailer) Fail(ctx context.Context, nodeID int) {
-	f.m.ExpectDeath()
+	f.m.ExpectDeaths(f.c.Node(nodeID))
 	f.c.Stop(ctx, f.t.L(), option.DefaultStopOpts(), f.c.Node(nodeID)) // uses SIGKILL
 }
 
@@ -1447,7 +1447,7 @@ func (f *crashFailer) Recover(ctx context.Context, nodeID int) {
 type deadlockFailer struct {
 	t                test.Test
 	c                cluster.Cluster
-	m                cluster.Monitor
+	m                cluster.DeprecatedMonitor
 	rng              *rand.Rand
 	startSettings    install.ClusterSettings
 	onlyLeaseholders bool
@@ -1578,7 +1578,7 @@ func (f *deadlockFailer) Recover(ctx context.Context, nodeID int) {
 	// again, so we fall back to restarting the node.
 	if err != nil {
 		f.t.L().Printf("failed to unlock replicas on n%d, restarting node: %s", nodeID, err)
-		f.m.ExpectDeath()
+		f.m.ExpectDeaths(f.c.Node(nodeID))
 		f.c.Stop(ctx, f.t.L(), option.DefaultStopOpts(), f.c.Node(nodeID))
 		f.c.Start(ctx, f.t.L(), failoverRestartOpts(), f.startSettings, f.c.Node(nodeID))
 	}
@@ -1590,7 +1590,7 @@ func (f *deadlockFailer) Recover(ctx context.Context, nodeID int) {
 type diskStallFailer struct {
 	t             test.Test
 	c             cluster.Cluster
-	m             cluster.Monitor
+	m             cluster.DeprecatedMonitor
 	startSettings install.ClusterSettings
 	staller       diskStaller
 }
@@ -1608,7 +1608,7 @@ func (f *diskStallFailer) Setup(ctx context.Context) {
 func (f *diskStallFailer) Cleanup(ctx context.Context) {
 	f.staller.Unstall(ctx, f.c.All())
 	// We have to stop the cluster before cleaning up the staller.
-	f.m.ExpectDeaths(int32(f.c.Spec().NodeCount))
+	f.m.ExpectDeaths(f.c.All())
 	f.c.Stop(ctx, f.t.L(), option.DefaultStopOpts(), f.c.All())
 	f.staller.Cleanup(ctx)
 }
@@ -1624,7 +1624,7 @@ func (f *diskStallFailer) Ready(ctx context.Context, nodeID int) {
 
 func (f *diskStallFailer) Fail(ctx context.Context, nodeID int) {
 	// Pebble's disk stall detector should crash the node.
-	f.m.ExpectDeath()
+	f.m.ExpectDeaths(f.c.Nodes(nodeID))
 	f.staller.Stall(ctx, f.c.Node(nodeID))
 }
 

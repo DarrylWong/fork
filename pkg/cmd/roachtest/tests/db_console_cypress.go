@@ -207,6 +207,7 @@ func registerDbConsoleCypress(r registry.Registry) {
 		CompatibleClouds: registry.AllClouds.NoIBM(),
 		Suites:           registry.Suites(registry.MixedVersion, registry.Nightly),
 		Randomized:       false,
+		Monitor:          true,
 		Run:              runDbConsoleCypressMixedVersions,
 		Timeout:          2 * time.Hour,
 	})

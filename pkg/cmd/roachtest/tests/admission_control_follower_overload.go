@@ -323,7 +323,7 @@ sudo systemd-run --property=Type=exec \
 	//   human eyes on roachperf.
 }
 
-func wait(m cluster.Monitor, duration time.Duration) {
+func wait(m cluster.DeprecatedMonitor, duration time.Duration) {
 	m.Go(func(ctx context.Context) error {
 		select {
 		case <-ctx.Done():

@@ -33,7 +33,7 @@ func loadTPCHDataset(
 	c cluster.Cluster,
 	db *gosql.DB,
 	sf int,
-	m cluster.Monitor,
+	m cluster.DeprecatedMonitor,
 	roachNodes option.NodeListOption,
 	disableMergeQueue bool,
 ) (retErr error) {
@@ -82,10 +82,9 @@ func loadTPCHDataset(
 
 		// If the scale factor was smaller than the required scale factor, wipe the
 		// cluster and restore.
-		m.ExpectDeaths(int32(c.Spec().NodeCount))
+		m.ExpectDeaths(c.All())
 		c.Wipe(ctx, roachNodes)
 		c.Start(ctx, t.L(), option.DefaultStartOpts(), install.MakeClusterSettings(), roachNodes)
-		m.ResetDeaths()
 	} else if pqErr := (*pq.Error)(nil); !(errors.As(err, &pqErr) &&
 		pgcode.MakeCode(string(pqErr.Code)) == pgcode.InvalidCatalogName) {
 		return err

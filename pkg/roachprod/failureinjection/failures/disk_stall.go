@@ -176,6 +176,7 @@ func (s *CGroupDiskStaller) Inject(ctx context.Context, l *logger.Logger, args F
 	}
 
 	nodes := diskStallArgs.Nodes
+	s.ExpectNodeHealth(nodes, install.ExpectedDeath)
 
 	// Shuffle the order of read and write stall initiation.
 	rand.Shuffle(len(stallTypes), func(i, j int) {
@@ -221,6 +222,7 @@ func (s *CGroupDiskStaller) Recover(ctx context.Context, l *logger.Logger, args 
 			l.Printf("failed to log cgroup bandwidth limits, assuming n%d exited and restarting: %v", n, err)
 			return s.StartNodes(ctx, l, n)
 		}
+		s.ExpectNodeHealth(nodes, install.ExpectedHealthy)
 		return nil
 	})
 }
@@ -421,6 +423,7 @@ func (s *DmsetupDiskStaller) Setup(ctx context.Context, l *logger.Logger, args F
 
 func (s *DmsetupDiskStaller) Inject(ctx context.Context, l *logger.Logger, args FailureArgs) error {
 	nodes := args.(DiskStallArgs).Nodes
+	s.ExpectNodeHealth(nodes, install.ExpectedDeath)
 	l.Printf("stalling disk I/O on nodes %d", nodes)
 	return s.Run(ctx, l, nodes, `sudo dmsetup suspend --noflush --nolockfs data1`)
 }
@@ -441,6 +444,7 @@ func (s *DmsetupDiskStaller) Recover(
 			l.Printf("failed to connect to n%d, assuming node exited and restarting: %v", n, err)
 			return s.StartNodes(ctx, l, n)
 		}
+		s.ExpectNodeHealth(nodes, install.ExpectedHealthy)
 		return nil
 	})
 }

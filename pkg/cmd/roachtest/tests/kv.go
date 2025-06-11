@@ -509,7 +509,7 @@ func registerKVQuiescenceDead(r registry.Registry) {
 				c.Run(ctx, option.WithNodes(c.WorkloadNode()), kv+" --seed 1 {pgurl:1}")
 			})
 			// Graceful shut down third node.
-			m.ExpectDeath()
+			m.ExpectDeaths(c.Node(len(c.CRDBNodes())))
 			c.Stop(
 				ctx, t.L(), option.NewStopOpts(option.Graceful(30)), c.Node(len(c.CRDBNodes())),
 			)
@@ -574,7 +574,6 @@ func registerKVGracefulDraining(r registry.Registry) {
 			c.Run(ctx, option.WithNodes(c.Node(1)), "./cockroach workload init kv --splits 100 {pgurl:1}")
 
 			m := c.NewMonitor(ctx, c.CRDBNodes())
-			m.ExpectDeath()
 
 			// specifiedQPS is going to be the --max-rate for the kv workload.
 			specifiedQPS := 2000
@@ -677,8 +676,7 @@ func registerKVGracefulDraining(r registry.Registry) {
 					case <-time.After(2 * time.Minute):
 					}
 				}
-				drainWithIpTables(ctx, restartNode, c, t)
-				m.ResetDeaths()
+				drainWithIpTables(ctx, restartNode, c, t, m.ExpectDeaths)
 			}
 
 			// Let the test run for nearly the entire duration of the kv command.
@@ -703,8 +701,9 @@ func registerKVGracefulDraining(r registry.Registry) {
 // liveness record is updated at the beginning of the drain process, so by time
 // the drain completes in ~5s all other nodes should "know" it is draining.
 func drainWithIpTables(
-	ctx context.Context, restartNode option.NodeListOption, c cluster.Cluster, t test.Test,
+	ctx context.Context, restartNode option.NodeListOption, c cluster.Cluster, t test.Test, expectDeaths func(option.NodeListOption),
 ) {
+	expectDeaths(restartNode)
 	cmd := fmt.Sprintf("./cockroach node drain --certs-dir=%s --port={pgport%s} --self", install.CockroachNodeCertsDir, restartNode)
 	c.Run(ctx, option.WithNodes(restartNode), cmd)
 
@@ -1054,7 +1053,6 @@ func registerKVRestartImpact(r registry.Registry) {
 
 			// Three goroutines run and we wait for all to complete.
 			m := c.NewMonitor(ctx, c.CRDBNodes())
-			m.ExpectDeath()
 			m.Go(func(ctx context.Context) error {
 				// Don't include the last node when starting the workload since
 				// it will stop in the middle. Write enough data per value to
@@ -1117,6 +1115,7 @@ func registerKVRestartImpact(r registry.Registry) {
 				gracefulOpts := option.DefaultStopOpts()
 				gracefulOpts.RoachprodOpts.Sig = 15 // SIGTERM for clean shutdown
 				gracefulOpts.RoachprodOpts.Wait = true
+				m.ExpectDeaths(c.Nodes(nodes))
 				c.Stop(ctx, t.L(), gracefulOpts, c.Node(nodes))
 				t.Status(fmt.Sprintf("waiting %s after stopping node to allow the node to fall behind", downtimeDuration))
 				select {

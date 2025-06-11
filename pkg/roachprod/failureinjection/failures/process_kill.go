@@ -63,6 +63,8 @@ func (f *ProcessKillFailure) Inject(ctx context.Context, l *logger.Logger, args 
 	killArgs := args.(ProcessKillArgs)
 	nodes := killArgs.Nodes
 
+	f.ExpectNodeHealth(nodes, install.ExpectedDeath)
+
 	signal := unix.SIGKILL
 	if killArgs.GracefulShutdown {
 		signal = unix.SIGTERM
@@ -93,6 +95,7 @@ func (f *ProcessKillFailure) Recover(
 	ctx context.Context, l *logger.Logger, args FailureArgs,
 ) error {
 	nodes := args.(ProcessKillArgs).Nodes
+
 	l.Printf("Restarting cockroach process on nodes: %v", nodes)
 	return f.StartNodes(ctx, l, nodes)
 }

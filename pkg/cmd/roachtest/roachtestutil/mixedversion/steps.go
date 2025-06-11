@@ -201,7 +201,7 @@ func (s restartVirtualClusterStep) Run(
 	l.Printf("restarting node %d (tenant %s) into version %s", s.node, s.virtualCluster, s.version)
 	node := h.runner.cluster.Node(s.node)
 
-	h.ExpectDeath()
+	h.ExpectDeaths(node)
 	stopOpts := option.StopVirtualClusterOpts(s.virtualCluster, node, option.Graceful(maxWait))
 	if err := h.runner.cluster.StopServiceForVirtualClusterE(ctx, l, stopOpts); err != nil {
 		return errors.Wrap(err, "failed to stop cockroach process for tenant")
@@ -324,7 +324,7 @@ func (s restartWithNewBinaryStep) Run(
 		install.TagOption(systemTag),
 	}, s.settings...)
 
-	h.ExpectDeath()
+	h.ExpectDeaths(h.runner.cluster.Node(s.node))
 	if err := clusterupgrade.RestartNodesWithNewBinary(
 		startCtx,
 		s.rt,

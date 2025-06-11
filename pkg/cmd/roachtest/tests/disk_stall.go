@@ -319,9 +319,6 @@ func runDiskStalledDetection(
 	t.L().PrintfCtx(ctx, "%.2f queries completed before stall", totalQueriesPreStall)
 
 	t.Status("inducing write stall")
-	if doStall {
-		m.ExpectDeath()
-	}
 	s.Stall(ctx, c.Node(1))
 
 	// Wait twice the maximum sync duration and check if our SQL connection to

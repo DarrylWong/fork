@@ -217,7 +217,7 @@ func runRecoverLossOfQuorum(ctx context.Context, t test.Test, c cluster.Cluster,
 		c.Run(ctx, option.WithNodes(c.WorkloadNode()), s.wl.runCmd(pgURL, dbName, roachtestutil.IfLocal(c, "10s", "30s"), ""))
 		t.L().Printf("workload finished")
 
-		m.ExpectDeaths(int32(c.Spec().NodeCount - 1))
+		m.ExpectDeaths(c.CRDBNodes())
 		stopOpts := option.DefaultStopOpts()
 		c.Stop(ctx, t.L(), stopOpts, c.CRDBNodes())
 
@@ -255,7 +255,7 @@ func runRecoverLossOfQuorum(ctx context.Context, t test.Test, c cluster.Cluster,
 		// Ignore node failures because they could fail if recovered ranges
 		// generate panics. We don't want test to fail in that case, and we
 		// rely on query and workload failures to expose that.
-		m.ExpectDeaths(int32(len(remaining)))
+		m.ExpectDeaths(remaining)
 		settings.Env = append(settings.Env, "COCKROACH_SCAN_INTERVAL=10s")
 		c.Start(ctx, t.L(), option.NewStartOpts(option.SkipInit), settings, c.Nodes(remaining...))
 
@@ -427,7 +427,7 @@ func runHalfOnlineRecoverLossOfQuorum(
 		c.Run(ctx, option.WithNodes(c.WorkloadNode()), s.wl.runCmd(pgURL, dbName, roachtestutil.IfLocal(c, "10s", "30s"), ""))
 		t.L().Printf("workload finished")
 
-		m.ExpectDeaths(int32(len(killed)))
+		m.ExpectDeaths(killed)
 		stopOpts := option.DefaultStopOpts()
 		c.Stop(ctx, t.L(), stopOpts, killedNodes)
 
@@ -456,7 +456,7 @@ func runHalfOnlineRecoverLossOfQuorum(
 		// Ignore node failures because they could fail if recovered ranges
 		// generate panics. We don't want test to fail in that case, and we
 		// rely on query and workload failures to expose that.
-		m.ExpectDeaths(int32(len(remaining)))
+		m.ExpectDeaths(remaining)
 		settings.Env = append(settings.Env, "COCKROACH_SCAN_INTERVAL=10s")
 
 		t.L().Printf("performing rolling restart of surviving nodes")

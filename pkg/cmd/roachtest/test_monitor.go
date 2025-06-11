@@ -7,7 +7,6 @@ package main
 
 import (
 	"context"
-
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
 )
 
@@ -24,6 +23,7 @@ func newTestMonitor(ctx context.Context, t test.Test, c *clusterImpl) *testMonit
 }
 
 func (m *testMonitorImpl) start() {
+	m.startNodeMonitor()
 	go func() {
 		err := m.WaitForNodeDeath()
 		if err != nil {

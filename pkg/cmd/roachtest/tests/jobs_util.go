@@ -106,7 +106,7 @@ func executeNodeShutdown(
 	}
 
 	m := c.NewMonitor(ctx, cfg.crdbNodes)
-	m.ExpectDeath()
+	m.ExpectDeaths(target)
 	m.Go(func(ctx context.Context) error {
 		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()

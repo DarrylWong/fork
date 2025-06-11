@@ -2652,11 +2652,11 @@ func (u *CommonTestUtils) resetCluster(
 	ctx context.Context,
 	l *logger.Logger,
 	version *clusterupgrade.Version,
-	expectDeathsFn func(int),
+	expectDeathsFn func(option.NodeListOption),
 	settings []install.ClusterSettingOption,
 ) error {
 	l.Printf("resetting cluster using version %q", version.String())
-	expectDeathsFn(len(u.roachNodes))
+	expectDeathsFn(u.roachNodes)
 	if err := u.cluster.WipeE(ctx, l, u.roachNodes); err != nil {
 		return fmt.Errorf("failed to wipe cluster: %w", err)
 	}
@@ -2856,6 +2856,7 @@ func registerBackupMixedVersion(r registry.Registry) {
 		// https://github.com/cockroachdb/cockroach/issues/105968
 		CompatibleClouds:          registry.Clouds(spec.GCE, spec.Local),
 		Suites:                    registry.Suites(registry.MixedVersion, registry.Nightly),
+		Monitor:                   true,
 		TestSelectionOptOutSuites: registry.Suites(registry.Nightly),
 		Randomized:                true,
 		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {

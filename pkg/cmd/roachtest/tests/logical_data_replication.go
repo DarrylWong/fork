@@ -594,7 +594,7 @@ func TestLDROnNodeShutdown(
 	t.L().Printf("Sleeping for %s before shutdown", sleepDuration)
 	time.Sleep(sleepDuration)
 
-	monitor.ExpectDeath()
+	monitor.ExpectDeaths(c.Node(shutdownNode))
 	if err := c.StopE(ctx, t.L(), stopOpts, c.Node(shutdownNode)); err != nil {
 		t.Fatalf("Unable to shutdown node: %s", err)
 	}
@@ -934,7 +934,7 @@ func setupLatencyVerifiers(
 	ctx context.Context,
 	t test.Test,
 	c cluster.Cluster,
-	mon cluster.Monitor,
+	mon cluster.DeprecatedMonitor,
 	leftJobID, rightJobID int,
 	setup multiClusterSetup,
 	workloadDoneCh chan struct{},

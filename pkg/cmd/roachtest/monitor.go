@@ -8,18 +8,39 @@ package main
 import (
 	"context"
 	"fmt"
-	"sync"
-	"sync/atomic"
-
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
 	"github.com/cockroachdb/cockroach/pkg/roachprod"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
+	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/errors"
 	"golang.org/x/sync/errgroup"
+	"sync"
 )
+
+type expectedNodeHealth struct {
+	syncutil.Mutex
+	expHealth map[install.Node]install.MonitorExpectedNodeHealth
+}
+
+func (m *expectedNodeHealth) get(node install.Node) install.MonitorExpectedNodeHealth {
+	m.Lock()
+	defer m.Unlock()
+	if m.expHealth == nil {
+		return install.ExpectedHealthy
+	}
+	return m.expHealth[node]
+}
+
+func (m *expectedNodeHealth) set(nodes install.Nodes, health install.MonitorExpectedNodeHealth) {
+	m.Lock()
+	defer m.Unlock()
+	for _, node := range nodes {
+		m.expHealth[node] = health
+	}
+}
 
 // monitorImpl implements the Monitor interface. A monitor both
 // manages "user tasks" -- goroutines provided by tests -- as well as
@@ -46,17 +67,17 @@ type monitorImpl struct {
 	monitorGroup *errgroup.Group // monitor goroutine
 	monitorOnce  sync.Once       // guarantees monitor goroutine is only started once
 
-	expDeaths int32 // atomically
+	expNodeHealth expectedNodeHealth
 }
 
 func newMonitor(
 	ctx context.Context,
 	t interface {
-		Fatal(...interface{})
-		Failed() bool
-		WorkerStatus(...interface{})
-		L() *logger.Logger
-	},
+	Fatal(...interface{})
+	Failed() bool
+	WorkerStatus(...interface{})
+	L() *logger.Logger
+},
 	c cluster.Cluster,
 	opts ...option.Option,
 ) *monitorImpl {
@@ -64,6 +85,10 @@ func newMonitor(
 		t:     t,
 		l:     t.L(),
 		nodes: c.MakeNodes(opts...),
+		expNodeHealth: expectedNodeHealth{
+			Mutex:     syncutil.Mutex{},
+			expHealth: make(map[install.Node]install.MonitorExpectedNodeHealth),
+		},
 	}
 	m.ctx, m.cancel = context.WithCancel(ctx)
 	m.userGroup, _ = errgroup.WithContext(m.ctx)
@@ -71,20 +96,18 @@ func newMonitor(
 	return m
 }
 
-// ExpectDeath lets the monitor know that a node is about to be killed, and that
-// this should be ignored.
-func (m *monitorImpl) ExpectDeath() {
-	m.ExpectDeaths(1)
+func (m *monitorImpl) ExpectNodeHealth(nodes install.Nodes, health install.MonitorExpectedNodeHealth) {
+	m.expNodeHealth.set(nodes, health)
 }
 
-// ExpectDeaths lets the monitor know that a specific number of nodes are about
-// to be killed, and that they should be ignored.
-func (m *monitorImpl) ExpectDeaths(count int32) {
-	atomic.AddInt32(&m.expDeaths, count)
+// ExpectDeaths lets the monitor know that a set of nodes are about
+// to be killed, and that they should be ignored. Once a node
+func (m *monitorImpl) ExpectDeaths(nodes option.NodeListOption) {
+	m.ExpectNodeHealth(nodes.InstallNodes(), install.ExpectedDeath)
 }
 
-func (m *monitorImpl) ResetDeaths() {
-	atomic.StoreInt32(&m.expDeaths, 0)
+func (m *monitorImpl) ResetDeaths(nodes option.NodeListOption) {
+	m.ExpectNodeHealth(nodes.InstallNodes(), install.ExpectedHealthy)
 }
 
 var errTestFatal = errors.New("t.Fatal() was called")
@@ -153,15 +176,16 @@ func (m *monitorImpl) Wait() {
 // startNodeMonitor will start a background function that monitors
 // unexpected node deaths. To read errors coming from these events,
 // callers are expected to call `Wait` or `WaitForNodeDeath`.
-func (m *monitorImpl) startNodeMonitor() {
+func (m *monitorImpl) startNodeMonitor() chan install.NodeMonitorInfo {
+	// TODO: fix what happens if we call this multiple times
+	eventsCh, err := roachprod.Monitor(m.ctx, m.l, m.nodes, install.MonitorOpts{})
+	if err != nil {
+		m.t.Fatal(errors.Wrap(err, "monitor node command failure"))
+	}
+
 	m.monitorOnce.Do(func() {
 		m.monitorGroup.Go(func() error {
 			defer m.cancel() // stop user-tasks
-
-			eventsCh, err := roachprod.Monitor(m.ctx, m.l, m.nodes, install.MonitorOpts{})
-			if err != nil {
-				return errors.Wrap(err, "monitor node command failure")
-			}
 
 			for info := range eventsCh {
 				var expectedDeathStr string
@@ -190,7 +214,7 @@ func (m *monitorImpl) startNodeMonitor() {
 						)
 					}
 				case install.MonitorProcessDead:
-					isExpectedDeath := atomic.AddInt32(&m.expDeaths, -1) >= 0
+					isExpectedDeath := m.expNodeHealth.get(info.Node) == install.ExpectedDeath
 					if isExpectedDeath {
 						expectedDeathStr = ": expected"
 					}
@@ -209,17 +233,18 @@ func (m *monitorImpl) startNodeMonitor() {
 			return nil
 		})
 	})
+	return eventsCh
 }
 
 // WaitForNodeDeath blocks while the monitor is active. Any errors due
 // to unexpected node deaths are returned.
 func (m *monitorImpl) WaitForNodeDeath() error {
-	m.startNodeMonitor()
+	_ = m.startNodeMonitor()
 	return m.monitorGroup.Wait()
 }
 
 func (m *monitorImpl) wait() error {
-	m.startNodeMonitor()
+	_ = m.startNodeMonitor()
 	userErr := m.userGroup.Wait()
 	m.cancel() // stop monitoring goroutine
 	// By canceling the monitor context above, the goroutines created by

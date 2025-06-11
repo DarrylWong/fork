@@ -5,6 +5,8 @@
 
 package failures
 
+import "github.com/cockroachdb/cockroach/pkg/roachprod/install"
+
 type ClusterOptionFunc func(*ClusterOptions)
 
 func Secure(secure bool) ClusterOptionFunc {
@@ -16,5 +18,13 @@ func Secure(secure bool) ClusterOptionFunc {
 func LocalCertsPath(certs string) ClusterOptionFunc {
 	return func(o *ClusterOptions) {
 		o.localCertsPath = certs
+	}
+}
+
+func ExpectNodeHealthFunc(
+	fn func(nodes install.Nodes, health install.MonitorExpectedNodeHealth),
+) ClusterOptionFunc {
+	return func(o *ClusterOptions) {
+		o.monitorFunc = fn
 	}
 }

@@ -7,12 +7,12 @@ package clusterstats
 import (
 	context "context"
 	sql "database/sql"
+	cluster "github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
 	fs "io/fs"
 	reflect "reflect"
 	time "time"
 
 	grafana "github.com/cockroachdb/cockroach/pkg/cmd/roachprod/grafana"
-	cluster "github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	option "github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	spec "github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	roachprod "github.com/cockroachdb/cockroach/pkg/roachprod"

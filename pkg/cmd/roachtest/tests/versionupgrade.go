@@ -309,6 +309,7 @@ func registerHTTPRestart(r registry.Registry) {
 		// and version upgrade is impossible to test as of 05/2025.
 		CompatibleClouds: registry.AllClouds.NoIBM(),
 		Suites:           registry.Suites(registry.MixedVersion, registry.Nightly),
+		Monitor:          true,
 		Randomized:       true,
 		Run:              runHTTPRestart,
 		Timeout:          1 * time.Hour,

@@ -916,7 +916,8 @@ func registerFISmokeTest(r registry.Registry) {
 		Cluster:          r.MakeClusterSpec(5, spec.WorkloadNode(), spec.CPU(2), spec.WorkloadNodeCPU(2), spec.ReuseNone()),
 		CompatibleClouds: registry.OnlyGCE,
 		// TODO(darryl): When the FI library starts seeing more use through roachtests, CLI, etc. switch this to Nightly.
-		Suites: registry.ManualOnly,
+		Suites:  registry.ManualOnly,
+		Monitor: true,
 		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 			runFailureSmokeTest(ctx, t, c, false /* noopFailer */)
 		},

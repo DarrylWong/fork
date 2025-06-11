@@ -30,6 +30,7 @@ func registerAcceptance(r registry.Registry) {
 		encryptionSupport  registry.EncryptionSupport
 		defaultLeases      bool
 		randomized         bool
+		monitor            bool
 		workloadNode       bool
 		incompatibleClouds registry.CloudSet
 		suites             []string
@@ -76,6 +77,7 @@ func registerAcceptance(r registry.Registry) {
 				timeout:       2 * time.Hour, // actually lower in local runs; see `runVersionUpgrade`
 				defaultLeases: true,
 				randomized:    true,
+				monitor:       true,
 				suites:        []string{registry.MixedVersion},
 				// Disabled on IBM because s390x is only built on master
 				// and version upgrade is impossible to test as of 05/2025.
@@ -104,6 +106,7 @@ func registerAcceptance(r registry.Registry) {
 				timeout:       60 * time.Minute,
 				defaultLeases: true,
 				randomized:    true,
+				monitor:       true,
 				numNodes:      1,
 				suites:        []string{registry.MixedVersion},
 				// Disabled on IBM because s390x is only built on master
@@ -155,6 +158,7 @@ func registerAcceptance(r registry.Registry) {
 				Timeout:           10 * time.Minute,
 				CompatibleClouds:  registry.AllClouds.Remove(tc.incompatibleClouds),
 				Suites:            registry.Suites(suites...),
+				Monitor:           tc.monitor,
 				Randomized:        tc.randomized,
 			}
 

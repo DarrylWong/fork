@@ -78,10 +78,11 @@ type GenericFailure struct {
 	// TODO(Darryl): support specifying virtual clusters
 	c *install.SyncedCluster
 	// runTitle is the title to prefix command output with.
-	runTitle          string
-	networkInterfaces []string
-	diskDevice        diskDevice
-	connCache         []*gosql.DB
+	runTitle                string
+	networkInterfaces       []string
+	diskDevice              diskDevice
+	connCache               []*gosql.DB
+	expectMonitorNodeHealth func(nodes install.Nodes, health install.MonitorExpectedNodeHealth)
 }
 
 func makeGenericFailure(
@@ -92,7 +93,12 @@ func makeGenericFailure(
 		return nil, err
 	}
 
-	genericFailure := GenericFailure{c: c, runTitle: failureModeName, connCache: make([]*gosql.DB, len(c.Nodes))}
+	genericFailure := GenericFailure{
+		c:                       c,
+		runTitle:                failureModeName,
+		connCache:               make([]*gosql.DB, len(c.Nodes)),
+		expectMonitorNodeHealth: options.monitorFunc,
+	}
 	return &genericFailure, nil
 }
 
@@ -287,6 +293,7 @@ func (f *GenericFailure) WaitForProcessDeath(
 func (f *GenericFailure) StopCluster(
 	ctx context.Context, l *logger.Logger, stopOpts roachprod.StopOpts,
 ) error {
+	f.ExpectNodeHealth(f.c.Nodes, install.ExpectedDeath)
 	return f.c.Stop(ctx, l, stopOpts.Sig, stopOpts.Wait, stopOpts.GracePeriod, "" /* VirtualClusterName*/)
 }
 
@@ -297,6 +304,7 @@ func (f *GenericFailure) StartCluster(ctx context.Context, l *logger.Logger) err
 func (f *GenericFailure) StartNodes(
 	ctx context.Context, l *logger.Logger, nodes install.Nodes,
 ) error {
+	defer f.ExpectNodeHealth(nodes, install.ExpectedHealthy)
 	// Invoke the cockroach start script directly so we restart the nodes with the same
 	// arguments as before.
 	return f.Run(ctx, l, nodes, "./cockroach.sh")
@@ -391,4 +399,12 @@ func (f *GenericFailure) WaitForRestartedNodesToStabilize(
 	// Finally, we also have to block until the cluster is done rebalancing replicas.
 	// If replicas were not moved around during the downtime, this will likely be a noop.
 	return f.WaitForBalancedReplicas(ctx, l, nodes)
+}
+
+func (f *GenericFailure) ExpectNodeHealth(
+	nodes install.Nodes, health install.MonitorExpectedNodeHealth,
+) {
+	if f.expectMonitorNodeHealth != nil {
+		f.expectMonitorNodeHealth(nodes, health)
+	}
 }

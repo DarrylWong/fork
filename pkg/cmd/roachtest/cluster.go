@@ -3003,7 +3003,7 @@ func (c *clusterImpl) Extend(ctx context.Context, d time.Duration, l *logger.Log
 // As a general rule, if the user has a workload node, do not monitor it. A
 // monitor's semantics around handling expected node deaths breaks down if it's
 // monitoring a workload node.
-func (c *clusterImpl) NewMonitor(ctx context.Context, opts ...option.Option) cluster.Monitor {
+func (c *clusterImpl) NewMonitor(ctx context.Context, opts ...option.Option) cluster.DeprecatedMonitor {
 	return newMonitor(ctx, c.t, c, opts...)
 }
 
@@ -3310,7 +3310,7 @@ func (c *clusterImpl) GetFailer(
 	opts ...failures.ClusterOptionFunc,
 ) (*failures.Failer, error) {
 	fr := failures.GetFailureRegistry()
-	clusterOpts := append(opts, failures.Secure(c.IsSecure()), failures.LocalCertsPath(c.localCertsDir))
+	clusterOpts := append(opts, failures.Secure(c.IsSecure()), failures.LocalCertsPath(c.localCertsDir), failures.ExpectNodeHealthFunc(c.t.Monitor().ExpectNodeHealth))
 	failer, err := fr.GetFailer(c.MakeNodes(nodes), failureModeName, l, clusterOpts...)
 	if err != nil {
 		return nil, err
