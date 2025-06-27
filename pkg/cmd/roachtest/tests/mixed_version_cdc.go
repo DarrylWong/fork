@@ -26,7 +26,9 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/vm"
+	"github.com/cockroachdb/cockroach/pkg/testutils/release"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
+	"github.com/cockroachdb/cockroach/pkg/util/randutil"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
@@ -598,12 +600,48 @@ func runCDCMixedVersions(ctx context.Context, t test.Test, c cluster.Cluster) {
 func runCDCMixedVersionCheckpointing(ctx context.Context, t test.Test, c cluster.Cluster) {
 	tester := newCDCMixedVersionTester(ctx, c)
 
+	cdcVersion := clusterupgrade.MustParseVersion("v25.3.0")
+	// TODO: properly get an rng source
+	predecessor, err := release.RandomPredecessor(randutil.NewTestRandWithSeed(1234), &cdcVersion.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buggyReleases := []string{
+		"v25.2.0",
+		"v25.2.1",
+		"v25.2.2",
+	}
+	var enableEnvVar bool
+	for _, r := range buggyReleases {
+		if predecessor == r {
+			enableEnvVar = true
+		}
+	}
+
+	predFunc := func(rng *rand.Rand, v, minSupported *clusterupgrade.Version) (*clusterupgrade.Version, error) {
+		majorReleases, err := release.MajorReleasesBetween(&v.Version, &cdcVersion.Version)
+		if err != nil {
+			return nil, err
+		}
+		// If we are trying to find the predecessors for 25.3
+		if majorReleases == 1 {
+			return clusterupgrade.MustParseVersion(predecessor), nil
+		}
+		//
+		return mixedversion.RandomPredecessor(rng, v, minSupported)
+	}
+
+	if enableEnvVar {
+		// Run export ... on all VMs in the cluster
+	}
+
 	mvt := mixedversion.NewTest(
 		ctx, t, t.L(), c, tester.crdbNodes,
 		// We're only concerned with mixed-version compatibility starting at
 		// versions that can upgrade to 25.2 (only 24.3 and 25.1), since that's
 		// the first version with the new span-level checkpoint format.
 		mixedversion.MinimumSupportedVersion("v24.3.0"),
+		mixedversion.WithCustomPredecessorFunc(predFunc),
 	)
 
 	cleanupKafka := tester.StartKafka(t, c)

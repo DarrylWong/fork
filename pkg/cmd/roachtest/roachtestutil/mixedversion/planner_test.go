@@ -400,7 +400,7 @@ func newTest(options ...CustomOption) *Test {
 	}
 
 	// N.B. by setting this, we override the framework defaults that force
-	// separate process to use latestPredecessor. This is intentional as it
+	// separate process to use LatestPredecessor. This is intentional as it
 	// prevents flaking whenever new versions are added.
 	testOptions.predecessorFunc = testPredecessorFunc
 

@@ -49,7 +49,7 @@ var rawTestReleaseData []byte
 
 // testReleaseData contains a mapping like the one in
 // `cockroach_releases.yaml`, but hardcoded in these tests so that we
-// are able to test the `randomPredecessor` function.
+// are able to test the `RandomPredecessor` function.
 var testReleaseData = func() map[string]release.Series {
 	var result map[string]release.Series
 	err := yaml.UnmarshalStrict(rawTestReleaseData, &result)
@@ -374,7 +374,7 @@ func Test_randomPredecessor(t *testing.T) {
 			var pred *clusterupgrade.Version
 			var err error
 			_ = release.WithReleaseData(testReleaseData, func() error {
-				pred, err = randomPredecessor(
+				pred, err = RandomPredecessor(
 					newRand(),
 					clusterupgrade.MustParseVersion(tc.v),
 					clusterupgrade.MustParseVersion(tc.minSupported),

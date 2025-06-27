@@ -506,7 +506,13 @@ func EnabledDeploymentModes(modes ...DeploymentMode) CustomOption {
 // avoided, but it might be necessary in certain cases to reduce noise
 // in case the test is more susceptible to fail due to known bugs.
 func AlwaysUseLatestPredecessors(opts *testOptions) {
-	opts.predecessorFunc = latestPredecessor
+	opts.predecessorFunc = LatestPredecessor
+}
+
+func WithCustomPredecessorFunc(f predecessorFunc) CustomOption {
+	return func(opts *testOptions) {
+		opts.predecessorFunc = f
+	}
 }
 
 // WithMutatorProbability allows tests to override the default
@@ -1106,10 +1112,10 @@ func (t *Test) deploymentMode() DeploymentMode {
 	return deploymentMode
 }
 
-// latestPredecessor is an implementation of `predecessorFunc` that
+// LatestPredecessor is an implementation of `predecessorFunc` that
 // always picks the latest predecessor for the given release version,
 // ignoring the minimum supported version declared by the test.
-func latestPredecessor(
+func LatestPredecessor(
 	_ *rand.Rand, v, minSupported *clusterupgrade.Version,
 ) (*clusterupgrade.Version, error) {
 	predecessor, err := release.LatestPredecessor(&v.Version)
@@ -1120,12 +1126,12 @@ func latestPredecessor(
 	return clusterupgrade.MustParseVersion(predecessor), nil
 }
 
-// randomPredecessor is an implementation of `predecessorFunc` that
+// RandomPredecessor is an implementation of `predecessorFunc` that
 // picks a random predecessor for the given release version. If we are
 // choosing a predecessor in the same series as the minimum supported
 // version, special care is taken to select a random predecessor that
 // is more recent that the minimum supported version.
-func randomPredecessor(
+func RandomPredecessor(
 	rng *rand.Rand, v, minSupported *clusterupgrade.Version,
 ) (*clusterupgrade.Version, error) {
 	predecessor, err := release.RandomPredecessor(rng, &v.Version)
@@ -1158,7 +1164,7 @@ func randomPredecessor(
 		return predV, nil
 	}
 
-	latestPred, err := latestPredecessor(rng, v, minSupported)
+	latestPred, err := LatestPredecessor(rng, v, minSupported)
 	if err != nil {
 		return nil, err
 	}
@@ -1197,9 +1203,9 @@ func (t *Test) updateOptionsForDeploymentMode(mode DeploymentMode) {
 			// addition, production separate-process deployments (Serverless) run in much more
 			// controlled environments than self-hosted and are generally running the latest
 			// patch releases.
-			t.options.predecessorFunc = latestPredecessor
+			t.options.predecessorFunc = LatestPredecessor
 		default:
-			t.options.predecessorFunc = randomPredecessor
+			t.options.predecessorFunc = RandomPredecessor
 		}
 	}
 }
