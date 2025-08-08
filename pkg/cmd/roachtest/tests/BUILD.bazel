@@ -189,6 +189,7 @@ go_library(
         "sqlalchemy.go",
         "sqlalchemy_blocklist.go",
         "sqlsmith.go",
+        "start.go",
         "status_server.go",
         "stop_and_copy.go",
         "sysbench.go",
