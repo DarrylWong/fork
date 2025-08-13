@@ -6,6 +6,7 @@ go_library(
         "cluster_interface.go",
         "dynamic_cluster_interface.go",
         "err_command_details.go",
+        "mock_cluster_generated.go",
         "monitor_interface.go",
     ],
     importpath = "github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster",
@@ -21,5 +22,6 @@ go_library(
         "//pkg/roachprod/prometheus",
         "//pkg/roachprod/vm",
         "@com_github_cockroachdb_errors//:errors",
+        "@com_github_golang_mock//gomock",
     ],
 )
