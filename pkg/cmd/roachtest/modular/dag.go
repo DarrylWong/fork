@@ -27,7 +27,7 @@ const (
 	horizontalNodeSpacing  = 5
 	nodeWidth              = 21
 	nodeHeight             = 5
-	stageTransitionSpacing = 7
+	stageTransitionSpacing = 8
 )
 
 func GenerateDAG(stages []Stage) string {
@@ -55,7 +55,6 @@ func GenerateDAG(stages []Stage) string {
 				currentY = point[1]
 			}
 		}
-		currentY += 1
 	}
 
 	return grid.render()
@@ -86,7 +85,7 @@ func gridDimensions(stages []Stage) (int, int) {
 			}
 		}
 		// Each chain requires one node's height plus spacing, except the last one.
-		height += longestChainLength*(nodeHeight*verticalNodeSpacing) - verticalNodeSpacing
+		height += longestChainLength*(nodeHeight+verticalNodeSpacing) - verticalNodeSpacing
 	}
 	// Grid width is based on the maximum number of concurrent step chains at any point of the plan.
 	// Each chain requires one node's width plus spacing, except the last one.
@@ -199,53 +198,35 @@ func (g *dagGrid) drawStage(stage Stage, startY int) [][2]int {
 
 func (g *dagGrid) drawBox(x, y, width, height int, text string) {
 	// Draw top border
-	if y < g.height && x < g.width {
-		g.runes[y][x] = '┌'
-	}
+	g.runes[y][x] = '┌'
 	for i := 1; i < width-1; i++ {
-		if y < g.height && x+i < g.width {
-			g.runes[y][x+i] = '─'
-		}
+		g.runes[y][x+i] = '─'
 	}
-	if y < g.height && x+width-1 < g.width {
-		g.runes[y][x+width-1] = '┐'
-	}
+	g.runes[y][x+width-1] = '┐'
 
 	// Draw sides and content
 	lines := wrapText(text, width-2)
 	for i := 1; i < height-1; i++ {
 		if y+i < g.height {
-			if x < g.width {
-				g.runes[y+i][x] = '│'
-			}
-			if x+width-1 < g.width {
-				g.runes[y+i][x+width-1] = '│'
-			}
+			g.runes[y+i][x] = '│'
+			g.runes[y+i][x+width-1] = '│'
 
 			// Add text content
 			if i-1 < len(lines) {
 				line := lines[i-1]
 				for j, char := range line {
-					if x+1+j < g.width {
-						g.runes[y+i][x+1+j] = char
-					}
+					g.runes[y+i][x+1+j] = char
 				}
 			}
 		}
 	}
 
 	// Draw bottom border
-	if y+height-1 < g.height && x < g.width {
-		g.runes[y+height-1][x] = '└'
-	}
+	g.runes[y+height-1][x] = '└'
 	for i := 1; i < width-1; i++ {
-		if y+height-1 < g.height && x+i < g.width {
-			g.runes[y+height-1][x+i] = '─'
-		}
+		g.runes[y+height-1][x+i] = '─'
 	}
-	if y+height-1 < g.height && x+width-1 < g.width {
-		g.runes[y+height-1][x+width-1] = '┘'
-	}
+	g.runes[y+height-1][x+width-1] = '┘'
 }
 
 // drawStageTransition draws connections from the previous stage to the current stage.
