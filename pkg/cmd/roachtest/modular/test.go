@@ -3,12 +3,9 @@ package modular
 import (
 	"context"
 	"fmt"
-	"math/rand"
-	"strings"
-	"time"
-
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
+	"math/rand"
 )
 
 // stepFunc is the signature for user-provided test steps.
@@ -31,6 +28,38 @@ type Helper struct {
 	rng              *rand.Rand
 }
 
+// StepBuilder allows method chaining for building step sequences.
+type StepBuilder struct {
+	test  *Test
+	stage *Stage
+}
+
+// Then adds another step that runs after this one in sequence.
+func (sb *StepBuilder) Then(stepName string, fn stepFunc, opts ...StepOption) *StepBuilder {
+	nextStep := &singleStep{
+		description: stepName,
+		fn:          fn,
+		background:  nil,
+	}
+
+	// Apply step options
+	for _, opt := range opts {
+		opt(nextStep)
+	}
+
+	// Find the last chain in the stage and append to it
+	if len(sb.stage.chains) == 0 {
+		// Create a new chain if none exists
+		sb.stage.chains = append(sb.stage.chains, chain{nextStep})
+	} else {
+		// Append to the last chain
+		lastChainIndex := len(sb.stage.chains) - 1
+		sb.stage.chains[lastChainIndex] = append(sb.stage.chains[lastChainIndex], nextStep)
+	}
+
+	return sb
+}
+
 // Test represents a modular test definition.
 type Test struct {
 	name              string
@@ -39,12 +68,37 @@ type Test struct {
 	clusters          []cluster.Cluster
 	clusterSpecs      []ClusterSpec
 	workloadSpecs     []WorkloadSpec
-	setupSteps        []testStep
+	setupStage        *Stage
 	stages            []*Stage
-	afterTestSteps    []testStep
+	afterTestStage    *Stage
 	currentStageIndex int
 	isLocal           bool
 	testingKnobs      *TestingKnobs
+}
+
+// ExecutionStrategy defines how steps should be executed within a stage.
+type ExecutionStrategy int
+
+const (
+	ConcurrentExecution  ExecutionStrategy = iota // All steps run concurrently
+	InterleavedExecution                          // Steps are randomly interleaved
+)
+
+// ExecutionStep represents a single step with a unique ID in the execution plan.
+type ExecutionStep struct {
+	ID          int
+	Step        testStep
+	ChainID     int   // Which step chain this belongs to (-1 for individual steps)
+	ChainIndex  int   // Position within the step chain
+	CanRunAfter []int // Step IDs that must complete before this step can run
+}
+
+// StageExecutionPlan contains the detailed execution plan for a stage.
+type StageExecutionPlan struct {
+	Stage            *Stage
+	Strategy         ExecutionStrategy
+	ExecutionSteps   []*ExecutionStep
+	ConcurrentGroups [][]int // Groups of step IDs that can run concurrently
 }
 
 // NewTest creates a new modular test.
@@ -56,14 +110,17 @@ func NewTest(name string, seed int64) *Test {
 		clusters:          make([]cluster.Cluster, 0),
 		clusterSpecs:      make([]ClusterSpec, 0),
 		workloadSpecs:     make([]WorkloadSpec, 0),
-		setupSteps:        make([]testStep, 0),
+		setupStage:        nil, // Created lazily when first setup step is added
 		stages:            make([]*Stage, 0),
-		afterTestSteps:    make([]testStep, 0),
+		afterTestStage:    nil, // Created lazily when first after-test step is added
 		currentStageIndex: 0,
 	}
 }
 
 func (t *Test) WithCreateClusterFn(fn func() cluster.Cluster) {
+	if t.testingKnobs == nil {
+		t.testingKnobs = &TestingKnobs{}
+	}
 	t.testingKnobs.CreateClusterFn = fn
 }
 
@@ -133,7 +190,7 @@ func (t *Test) AddCluster(opts ...ClusterOption) cluster.Cluster {
 
 	spec.DeploymentMode = t.selectDeploymentMode(spec.DisabledDeploymentModes)
 
-	clusterInstance := t.createCluster(spec.Name, spec.ActualNodes, spec.DeploymentMode)
+	clusterInstance := t.createCluster(spec.Name, spec.ActualNodes)
 
 	// Store the spec and cluster
 	t.clusterSpecs = append(t.clusterSpecs, *spec)
@@ -157,23 +214,35 @@ func (t *Test) AddWorkloadCluster(opts ...WorkloadOption) cluster.Cluster {
 }
 
 // Setup adds a setup step that runs before the test begins.
-func (t *Test) Setup(fn stepFunc) {
+func (t *Test) Setup(stepName string, fn stepFunc, opts ...StepOption) {
 	step := &singleStep{
-		description: "setup step",
+		description: stepName,
 		fn:          fn,
 		background:  nil,
 	}
-	t.setupSteps = append(t.setupSteps, step)
+
+	// Apply step options
+	for _, opt := range opts {
+		opt(step)
+	}
+
+	// Create setup stage if it doesn't exist
+	if t.setupStage == nil {
+		t.setupStage = &Stage{
+			name:   "setup",
+			chains: make([]chain, 1),
+		}
+	}
+
+	t.setupStage.chains[0] = append(t.setupStage.chains[0], step)
 }
 
 // NewStage creates a new stage for organizing test steps.
 func (t *Test) NewStage(name string, opts ...StageOption) *Stage {
 	stage := &Stage{
-		name:        name,
-		index:       t.currentStageIndex,
-		steps:       make([]testStep, 0),
-		repeatCount: 1,
-		delay:       0,
+		name:   name,
+		index:  t.currentStageIndex,
+		chains: make([]chain, 0),
 	}
 
 	for _, opt := range opts {
@@ -186,9 +255,9 @@ func (t *Test) NewStage(name string, opts ...StageOption) *Stage {
 }
 
 // InStage adds a step to be executed in the specified stage.
-func (t *Test) InStage(stage *Stage, fn stepFunc, opts ...StepOption) {
+func (t *Test) InStage(stepName string, stage *Stage, fn stepFunc, opts ...StepOption) *StepBuilder {
 	step := &singleStep{
-		description: fmt.Sprintf("stage %s step", stage.name),
+		description: stepName,
 		fn:          fn,
 		background:  nil,
 	}
@@ -197,192 +266,56 @@ func (t *Test) InStage(stage *Stage, fn stepFunc, opts ...StepOption) {
 		opt(step)
 	}
 
-	stage.steps = append(stage.steps, step)
+	// Add step as a new chain to the stage
+	stage.chains = append(stage.chains, chain{step})
+
+	return &StepBuilder{
+		test:  t,
+		stage: stage,
+	}
 }
 
 // AfterTest adds a step that runs after all test stages are complete.
-func (t *Test) AfterTest(fn stepFunc) {
+func (t *Test) AfterTest(stepName string, fn stepFunc, opts ...StepOption) {
 	step := &singleStep{
-		description: "after test step",
+		description: stepName,
 		fn:          fn,
 		background:  nil,
 	}
-	t.afterTestSteps = append(t.afterTestSteps, step)
-}
 
-// TestPlan represents the execution plan for a modular test.
-type TestPlan struct {
-	name          string
-	seed          int64
-	clusterSpecs  []ClusterSpec
-	workloadSpecs []WorkloadSpec
-	setup         []testStep
-	stages        []*Stage
-	afterTest     []testStep
-	isLocal       bool
-}
-
-// String pretty prints the plan, with the test name, seed listed at the top,
-// along with each step in order.
-func (tp *TestPlan) String() string {
-	var b strings.Builder
-
-	// Header with test name and seed
-	b.WriteString(fmt.Sprintf("Modular Test Plan: %s (seed: %d)\n", tp.name, tp.seed))
-	b.WriteString(strings.Repeat("=", 50) + "\n\n")
-
-	// Cluster specifications
-	if len(tp.clusterSpecs) > 0 {
-		b.WriteString("Cluster Specifications:\n")
-		for i, spec := range tp.clusterSpecs {
-			b.WriteString(fmt.Sprintf("  %d. %s: %d nodes (%d-%d range)", i+1, spec.Name, spec.ActualNodes, spec.MinNodes, spec.MaxNodes))
-			b.WriteString(fmt.Sprintf(" [mode: %s]", spec.DeploymentMode))
-			if len(spec.DisabledDeploymentModes) > 0 {
-				b.WriteString(fmt.Sprintf(" (disabled: %v)", spec.DisabledDeploymentModes))
-			}
-			b.WriteString("\n")
-		}
-		b.WriteString("\n")
+	// Apply step options
+	for _, opt := range opts {
+		opt(step)
 	}
 
-	// Workload specifications
-	if len(tp.workloadSpecs) > 0 {
-		b.WriteString("Workload Specifications:\n")
-		for i, spec := range tp.workloadSpecs {
-			b.WriteString(fmt.Sprintf("  %d. %s: %d nodes\n", i+1, spec.name, spec.numNodes))
-		}
-		b.WriteString("\n")
-	}
-
-	// Setup steps
-	if len(tp.setup) > 0 {
-		b.WriteString("Setup Steps:\n")
-		for i, step := range tp.setup {
-			b.WriteString(fmt.Sprintf("  %d. %s", i+1, step.Description()))
-			if step.Background() != nil {
-				b.WriteString(" (background)")
-			}
-			if step.ConcurrencyDisabled() {
-				b.WriteString(" (sequential)")
-			}
-			b.WriteString("\n")
-		}
-		b.WriteString("\n")
-	}
-
-	// Test stages
-	if len(tp.stages) > 0 {
-		b.WriteString("Test Stages:\n")
-		for _, stage := range tp.stages {
-			// Stage header
-			b.WriteString(fmt.Sprintf("  Stage %d: %s", stage.index+1, stage.name))
-			if stage.repeatCount > 1 {
-				b.WriteString(fmt.Sprintf(" (repeat %d times", stage.repeatCount))
-				if stage.delay > 0 {
-					b.WriteString(fmt.Sprintf(", delay: %v", stage.delay))
-				}
-				b.WriteString(")")
-			}
-			b.WriteString("\n")
-
-			// Stage steps
-			for i, step := range stage.steps {
-				b.WriteString(fmt.Sprintf("    %d. %s", i+1, step.Description()))
-				if step.Background() != nil {
-					b.WriteString(" (background)")
-				}
-				if step.ConcurrencyDisabled() {
-					b.WriteString(" (sequential)")
-				}
-				b.WriteString("\n")
-			}
-			b.WriteString("\n")
+	// Create after-test stage if it doesn't exist
+	if t.afterTestStage == nil {
+		t.afterTestStage = &Stage{
+			name:   "after-test",
+			chains: make([]chain, 1),
 		}
 	}
 
-	// After-test steps
-	if len(tp.afterTest) > 0 {
-		b.WriteString("After-Test Steps:\n")
-		for i, step := range tp.afterTest {
-			b.WriteString(fmt.Sprintf("  %d. %s", i+1, step.Description()))
-			if step.Background() != nil {
-				b.WriteString(" (background)")
-			}
-			if step.ConcurrencyDisabled() {
-				b.WriteString(" (sequential)")
-			}
-			b.WriteString("\n")
-		}
-		b.WriteString("\n")
+	// Add step as a new chain to the after-test stage
+	t.afterTestStage.chains[0] = append(t.afterTestStage.chains[0], step)
+}
+
+// DAG generates a directed acyclic graph representation of all test steps and their dependencies.
+func (t *Test) DAG() string {
+	var stages []Stage
+
+	if t.setupStage != nil {
+		stages = append(stages, *t.setupStage)
 	}
 
-	// Footer
-	if tp.isLocal {
-		b.WriteString("Mode: Local\n")
-	} else {
-		b.WriteString("Mode: Distributed\n")
+	for _, stage := range t.stages {
+		stages = append(stages, *stage)
 	}
 
-	return b.String()
-}
-
-// Stage represents a group of test steps that can be executed concurrently.
-type Stage struct {
-	name        string
-	index       int
-	steps       []testStep
-	repeatCount int
-	delay       time.Duration
-}
-
-// Steps returns the steps in this stage.
-func (s *Stage) Steps() []testStep {
-	return s.steps
-}
-
-// GeneratePlan creates a TestPlan from the test definition.
-func (t *Test) GeneratePlan() *TestPlan {
-	return &TestPlan{
-		name:          t.name,
-		seed:          t.seed,
-		clusterSpecs:  t.clusterSpecs,
-		workloadSpecs: t.workloadSpecs,
-		setup:         t.setupSteps,
-		stages:        t.stages,
-		afterTest:     t.afterTestSteps,
-		isLocal:       t.isLocal,
+	// Add after-test stage
+	if t.afterTestStage != nil {
+		stages = append(stages, *t.afterTestStage)
 	}
-}
 
-// TestPlan accessor methods for testing
-func (tp *TestPlan) Name() string {
-	return tp.name
-}
-
-func (tp *TestPlan) Seed() int64 {
-	return tp.seed
-}
-
-func (tp *TestPlan) ClusterSpecs() []ClusterSpec {
-	return tp.clusterSpecs
-}
-
-func (tp *TestPlan) WorkloadSpecs() []WorkloadSpec {
-	return tp.workloadSpecs
-}
-
-func (tp *TestPlan) Setup() []testStep {
-	return tp.setup
-}
-
-func (tp *TestPlan) Stages() []*Stage {
-	return tp.stages
-}
-
-func (tp *TestPlan) AfterTest() []testStep {
-	return tp.afterTest
-}
-
-func (tp *TestPlan) IsLocal() bool {
-	return tp.isLocal
+	return GenerateDAG(stages)
 }

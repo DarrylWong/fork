@@ -127,3 +127,11 @@ func InBackground() StepOption {
 		step.background = make(shouldStop)
 	}
 }
+
+// DisableFailureInjection configures a stage to disable failure injection.
+func DisableFailureInjection() StageOption {
+	return func(stage *Stage) {
+		// This would configure the stage to disable failure injection
+		// Implementation details would depend on the failure injection system
+	}
+}

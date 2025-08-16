@@ -2,6 +2,7 @@ package modular
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 )
@@ -63,4 +64,46 @@ func (s *singleStep) Run(ctx context.Context, l *logger.Logger, h *Helper) error
 // ConcurrencyDisabled returns whether this step disables concurrency.
 func (s *singleStep) ConcurrencyDisabled() bool {
 	return s.concurrencyDisabled
+}
+
+// stepChain represents a sequence of steps that must run in order, but the entire
+// chain can be interleaved with other chains or individual steps in the same stage.
+type stepChain struct {
+	steps []testStep
+}
+
+// Description returns a description of the step chain.
+func (sc *stepChain) Description() string {
+	if len(sc.steps) == 0 {
+		return "empty step chain"
+	}
+	if len(sc.steps) == 1 {
+		return sc.steps[0].Description()
+	}
+	return sc.steps[0].Description() + " (+ " + fmt.Sprintf("%d more", len(sc.steps)-1) + ")"
+}
+
+// Background returns nil since step chains don't run in background.
+func (sc *stepChain) Background() shouldStop {
+	return nil
+}
+
+// Run executes all steps in the chain sequentially.
+func (sc *stepChain) Run(ctx context.Context, l *logger.Logger, h *Helper) error {
+	for _, step := range sc.steps {
+		if err := step.Run(ctx, l, h); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ConcurrencyDisabled returns true if any step in the chain disables concurrency.
+func (sc *stepChain) ConcurrencyDisabled() bool {
+	for _, step := range sc.steps {
+		if step.ConcurrencyDisabled() {
+			return true
+		}
+	}
+	return false
 }
