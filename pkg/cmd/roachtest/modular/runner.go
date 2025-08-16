@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/rand"
 	"sync"
-	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
@@ -45,8 +44,11 @@ func (r *TestRunner) Run(ctx context.Context) error {
 	}
 
 	// Run setup steps
-	if err := r.runSteps(ctx, "setup", r.plan.setup); err != nil {
-		return fmt.Errorf("setup failed: %w", err)
+	setupSteps := r.plan.Setup()
+	if setupSteps != nil {
+		if err := r.runSteps(ctx, "setup", setupSteps); err != nil {
+			return fmt.Errorf("setup failed: %w", err)
+		}
 	}
 
 	// Run test stages
@@ -60,8 +62,11 @@ func (r *TestRunner) Run(ctx context.Context) error {
 	r.stopAllBackground()
 
 	// Run after-test steps
-	if err := r.runSteps(ctx, "after-test", r.plan.afterTest); err != nil {
-		return fmt.Errorf("after-test failed: %w", err)
+	afterTestSteps := r.plan.AfterTest()
+	if afterTestSteps != nil {
+		if err := r.runSteps(ctx, "after-test", afterTestSteps); err != nil {
+			return fmt.Errorf("after-test failed: %w", err)
+		}
 	}
 
 	if r.logger != nil {
@@ -70,28 +75,12 @@ func (r *TestRunner) Run(ctx context.Context) error {
 	return nil
 }
 
-// runStage executes all steps in a stage, potentially with repetition.
+// runStage executes all steps in a stage.
 func (r *TestRunner) runStage(ctx context.Context, stage *Stage) error {
-	for i := 0; i < stage.repeatCount; i++ {
-		if i > 0 && stage.delay > 0 {
-			if r.logger != nil {
-				r.logger.Printf("Delaying %v before stage %s repetition %d", stage.delay, stage.name, i+1)
-			}
-			select {
-			case <-time.After(stage.delay):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-
-		if r.logger != nil {
-			r.logger.Printf("Running stage %s (iteration %d/%d)", stage.name, i+1, stage.repeatCount)
-		}
-		if err := r.runSteps(ctx, stage.name, stage.steps); err != nil {
-			return err
-		}
+	if r.logger != nil {
+		r.logger.Printf("Running stage %s", stage.name)
 	}
-	return nil
+	return r.runSteps(ctx, stage.name, stage.Steps())
 }
 
 // runSteps executes a list of test steps, respecting concurrency settings.
