@@ -103,7 +103,7 @@ func TestPlanner(t *testing.T) {
 
 // TestBasicDAG tests the DAG generation using an echo test.
 func TestBasicDAG(t *testing.T) {
-	mod := NewTest("basic plan", 12345)
+	mod := NewTest("basic plan", 123456)
 
 	baselineStage := mod.NewStage("baseline", DisableFailureInjection())
 	chaosStage := mod.NewStage("chaos")
@@ -141,7 +141,7 @@ func TestBasicDAG(t *testing.T) {
 			return nil
 		})
 
-		// TODO: the framework itself should add this automatically
+		// TODO: the framework itself should add this automatically when chaos is enabled.
 		if stage == chaosStage {
 			mod.InStage("inject network partition" /* step name */, stage, func(ctx context.Context, l *logger.Logger, h *Helper) error {
 				return nil
@@ -149,12 +149,26 @@ func TestBasicDAG(t *testing.T) {
 				return nil
 			})
 		}
+
 	}
 
 	// Add after-test step, which is run after prometheus scraping is turned off.
 	mod.AfterTest("TPCC consistency checks", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 		return nil
 	})
+
+	// Use the planner to generate the plan with randomized execution strategies
+	planner := NewSimplePlanner(mod, PlannerConfig{
+		IsLocal:           true,
+		ConcurrencyChance: 0.25,
+	})
+
+	plan, err := planner.Plan()
+	if err != nil {
+		t.Fatalf("Failed to generate plan: %v", err)
+	}
+
+	t.Log(plan)
 
 	echotest.Require(t, mod.DAG(), filepath.Join("testdata", "basic_dag"))
 }
@@ -170,6 +184,43 @@ func TestSetupOnlyDAG(t *testing.T) {
 		return nil
 	}, InBackground())
 	mod.Setup("importing tpcc workload" /* step name */, func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+
+	echotest.Require(t, mod.DAG(), filepath.Join("testdata", "setup_only_dag"))
+}
+
+func TestMVTDAG(t *testing.T) {
+	mod := NewTest("mixed version plan", 12345)
+
+	// Cluster init steps are done sequentially.
+	mod.Setup("install fixtures for version \"v24.2.2\"" /* step name */, func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+	mod.Setup("start cluster at version \"v24.2.2\"" /* step name */, func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}, InBackground())
+	mod.Setup("wait for all nodes (:1-4) to acknowledge cluster version '24.2' on system tenant" /* step name */, func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+
+	upgradeStage := mod.NewStage("upgrade cluster from \"v24.2.2\" to \"master\"", DisableFailureInjection())
+	mod.InStage("restart system server on node 1 with binary version master", upgradeStage, func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+	mod.InStage("restart system server on node 2 with binary version master", upgradeStage, func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+	mod.InStage("restart system server on node 3 with binary version master", upgradeStage, func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+	mod.InStage("restart system server on node 4 with binary version master", upgradeStage, func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+	mod.InStage("run backup", upgradeStage, func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+	mod.InStage("test features", upgradeStage, func(ctx context.Context, l *logger.Logger, h *Helper) error {
 		return nil
 	})
 

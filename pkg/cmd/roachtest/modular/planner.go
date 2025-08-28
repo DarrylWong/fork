@@ -100,23 +100,32 @@ func (p *SimplePlanner) generateStageExecutionPlans(stages []*Stage) []*StageExe
 	return plans
 }
 
-// extractExecutionSteps extracts all individual steps from stage steps (including step chains).
+// extractExecutionSteps extracts all individual steps from stage chains.
 func (p *SimplePlanner) extractExecutionSteps(stage *Stage, startID int) ([]*ExecutionStep, int) {
 	var executionSteps []*ExecutionStep
 	currentID := startID
 
-	for _, stageStep := range stage.Steps() {
-		if chain, ok := stageStep.(*stepChain); ok {
-			// This is a step chain - extract individual steps
-			chainID := len(executionSteps) // Use position as chain ID
+	// Work with the original chain structure instead of flattened steps
+	for chainIndex, stageChain := range stage.Chains() {
+		if len(stageChain) == 1 {
+			// Single step - treat as independent
+			execStep := &ExecutionStep{
+				ID:      currentID,
+				Step:    stageChain[0],
+				ChainID: -1, // Not part of a chain
+			}
+			executionSteps = append(executionSteps, execStep)
+			currentID++
+		} else {
+			// Multi-step chain - set up dependencies
 			var prevStepID int = -1
 
-			for chainIndex, step := range chain.steps {
+			for stepIndex, step := range stageChain {
 				execStep := &ExecutionStep{
 					ID:         currentID,
 					Step:       step,
-					ChainID:    chainID,
-					ChainIndex: chainIndex,
+					ChainID:    chainIndex,
+					ChainIndex: stepIndex,
 				}
 
 				// Steps within a chain must run sequentially
@@ -128,16 +137,6 @@ func (p *SimplePlanner) extractExecutionSteps(stage *Stage, startID int) ([]*Exe
 				prevStepID = currentID
 				currentID++
 			}
-		} else {
-			// This is a single step
-			execStep := &ExecutionStep{
-				ID:      currentID,
-				Step:    stageStep,
-				ChainID: -1, // Not part of a chain
-			}
-
-			executionSteps = append(executionSteps, execStep)
-			currentID++
 		}
 	}
 
@@ -257,21 +256,23 @@ func (p *SimplePlanner) createDependencyAwareSchedule(steps []*ExecutionStep, co
 
 			// Randomly select steps for the concurrent group
 			indices := p.rng.Perm(len(readySteps))
+			var selectedSteps []*ExecutionStep
 			for i := 0; i < groupSize && i < len(indices); i++ {
 				step := readySteps[indices[i]]
 				concurrentGroup = append(concurrentGroup, step.ID)
 				completedSteps[step.ID] = true
+				selectedSteps = append(selectedSteps, step)
 			}
 
-			// Remove selected steps from ready steps (in reverse order to maintain indices)
+			// Remove selected steps from ready steps
 			var newReadySteps []*ExecutionStep
 			selectedSet := make(map[int]bool)
-			for i := 0; i < groupSize && i < len(indices); i++ {
-				selectedSet[indices[i]] = true
+			for _, step := range selectedSteps {
+				selectedSet[step.ID] = true
 			}
 
-			for i, step := range readySteps {
-				if !selectedSet[i] {
+			for _, step := range readySteps {
+				if !selectedSet[step.ID] {
 					newReadySteps = append(newReadySteps, step)
 				}
 			}
