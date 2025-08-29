@@ -47,15 +47,45 @@ func (sb *StepBuilder) Then(stepName string, fn stepFunc, opts ...StepOption) *S
 		opt(nextStep)
 	}
 
-	// Find the last chain in the stage and append to it
+	// Add the step as a new stepGroup in the chain
 	if len(sb.stage.chains) == 0 {
 		// Create a new chain if none exists
-		sb.stage.chains = append(sb.stage.chains, chain{nextStep})
+		sb.stage.chains = append(sb.stage.chains, chain{stepGroup{nextStep}})
 	} else {
-		// Append to the last chain
+		// Append to the last chain as a new stepGroup
 		lastChainIndex := len(sb.stage.chains) - 1
-		sb.stage.chains[lastChainIndex] = append(sb.stage.chains[lastChainIndex], nextStep)
+		sb.stage.chains[lastChainIndex] = append(sb.stage.chains[lastChainIndex], stepGroup{nextStep})
 	}
+
+	return sb
+}
+
+// And adds a step that can run in parallel with the previous step.
+// All steps added via .And() will run in parallel within the same stepGroup.
+func (sb *StepBuilder) And(stepName string, fn stepFunc, opts ...StepOption) *StepBuilder {
+	newStep := &singleStep{
+		description: stepName,
+		fn:          fn,
+		background:  nil,
+	}
+
+	// Apply step options
+	for _, opt := range opts {
+		opt(newStep)
+	}
+
+	if len(sb.stage.chains) == 0 {
+		panic("no chain found to add an And() step to")
+	}
+
+	lastChainIndex := len(sb.stage.chains) - 1
+	lastChain := sb.stage.chains[lastChainIndex]
+	if len(lastChain) == 0 {
+		panic("no step group found to add an And() step to")
+	}
+	// Add to the last stepGroup
+	lastStepGroupIndex := len(lastChain) - 1
+	sb.stage.chains[lastChainIndex][lastStepGroupIndex] = append(lastChain[lastStepGroupIndex], newStep)
 
 	return sb
 }
@@ -232,9 +262,12 @@ func (t *Test) Setup(stepName string, fn stepFunc, opts ...StepOption) {
 			name:   "setup",
 			chains: make([]chain, 1),
 		}
+		// Start with an empty chain
+		t.setupStage.chains[0] = chain{}
 	}
 
-	t.setupStage.chains[0] = append(t.setupStage.chains[0], step)
+	// Add each setup step as a new stepGroup (sequential execution)
+	t.setupStage.chains[0] = append(t.setupStage.chains[0], stepGroup{step})
 }
 
 // NewStage creates a new stage for organizing test steps.
@@ -255,7 +288,7 @@ func (t *Test) NewStage(name string, opts ...StageOption) *Stage {
 }
 
 // InStage adds a step to be executed in the specified stage.
-func (t *Test) InStage(stepName string, stage *Stage, fn stepFunc, opts ...StepOption) *StepBuilder {
+func (t *Test) InStage(stage *Stage, stepName string, fn stepFunc, opts ...StepOption) *StepBuilder {
 	step := &singleStep{
 		description: stepName,
 		fn:          fn,
@@ -266,8 +299,8 @@ func (t *Test) InStage(stepName string, stage *Stage, fn stepFunc, opts ...StepO
 		opt(step)
 	}
 
-	// Add step as a new chain to the stage
-	stage.chains = append(stage.chains, chain{step})
+	// Add step as a new chain with a single stepGroup to the stage
+	stage.chains = append(stage.chains, chain{stepGroup{step}})
 
 	return &StepBuilder{
 		test:  t,
@@ -294,10 +327,12 @@ func (t *Test) AfterTest(stepName string, fn stepFunc, opts ...StepOption) {
 			name:   "after-test",
 			chains: make([]chain, 1),
 		}
+		// Start with an empty chain
+		t.afterTestStage.chains[0] = chain{}
 	}
 
-	// Add step as a new chain to the after-test stage
-	t.afterTestStage.chains[0] = append(t.afterTestStage.chains[0], step)
+	// Add each after-test step as a new stepGroup (sequential execution)
+	t.afterTestStage.chains[0] = append(t.afterTestStage.chains[0], stepGroup{step})
 }
 
 // DAG generates a directed acyclic graph representation of all test steps and their dependencies.

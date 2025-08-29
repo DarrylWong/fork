@@ -2,6 +2,7 @@ package modular
 
 import (
 	"fmt"
+	"iter"
 	"strings"
 )
 
@@ -23,7 +24,7 @@ func (g *dagGrid) init(width, height int) {
 }
 
 const (
-	verticalNodeSpacing    = 3
+	verticalNodeSpacing    = 5
 	horizontalNodeSpacing  = 5
 	nodeWidth              = 21
 	nodeHeight             = 5
@@ -49,7 +50,7 @@ func GenerateDAG(stages []Stage) string {
 			grid.drawStageTransition(stage, connectionPoints, gridXMidpoint)
 			currentY += stageTransitionSpacing
 		}
-		connectionPoints = grid.drawStage(stage, currentY)
+		connectionPoints = grid.drawStage(stage, currentY, i == len(stages)-1 /* last stage */)
 		for _, point := range connectionPoints {
 			if point[1] > currentY {
 				currentY = point[1]
@@ -62,7 +63,7 @@ func GenerateDAG(stages []Stage) string {
 
 // gridWidth calculates the required g.
 func gridDimensions(stages []Stage) (int, int) {
-	var maxConcurrentChains int
+	var maxTotalWidth int
 	var width, height int
 	for i, stage := range stages {
 		// We need to transition from the last stage's to this stage, unless it
@@ -71,26 +72,23 @@ func gridDimensions(stages []Stage) (int, int) {
 		if i == 0 {
 			height += 1
 		} else {
-			height += stageTransitionSpacing
+			// Add spacing for a potential group transition at the end of each stage.
+			height += stageTransitionSpacing + 2
 		}
-		if len(stage.chains) > maxConcurrentChains {
-			maxConcurrentChains = len(stage.chains)
+
+		// Calculate the total width needed for this stage, accounting for parallel steps
+		maxConcurrentSteps := stage.MaxConcurrentSteps()
+		stageWidth := maxConcurrentSteps * (nodeWidth + horizontalNodeSpacing)
+		if stageWidth > maxTotalWidth {
+			maxTotalWidth = stageWidth
 		}
 
 		// The height of a stage is determined by the longest chain in that stage.
-		var longestChainLength int
-		for _, c := range stage.chains {
-			if len(c) > longestChainLength {
-				longestChainLength = len(c)
-			}
-		}
 		// Each chain requires one node's height plus spacing, except the last one.
-		height += longestChainLength*(nodeHeight+verticalNodeSpacing) - verticalNodeSpacing
+		height += stage.LongestChain()*(nodeHeight+verticalNodeSpacing) - verticalNodeSpacing
 	}
-	// Grid width is based on the maximum number of concurrent step chains at any point of the plan.
-	// Each chain requires one node's width plus spacing, except the last one.
-	width = maxConcurrentChains*(nodeWidth+horizontalNodeSpacing) - horizontalNodeSpacing
 
+	width = maxTotalWidth
 	return width, height
 }
 
@@ -159,41 +157,147 @@ func (g *dagGrid) drawStageLabel(stageName string, x, y int) {
 
 // drawStage draws all steps in a stage starting at startY.
 // It returns the x, y connection points for the next stage transition.
-func (g *dagGrid) drawStage(stage Stage, startY int) [][2]int {
+func (g *dagGrid) drawStage(stage Stage, startY int, lastStage bool) [][2]int {
 	// Calculate the total width needed for all chains
-	totalChainsWidth := len(stage.chains)*(nodeWidth+horizontalNodeSpacing) - horizontalNodeSpacing
+	stageWidth := stage.MaxConcurrentSteps()*(nodeWidth+horizontalNodeSpacing) - horizontalNodeSpacing
 
 	// Calculate starting X to center all chains on the grid width wise.
 	xMidpoint := g.width / 2
-	startX := xMidpoint - totalChainsWidth/2
+	startX := xMidpoint - stageWidth/2
 
 	connectionPoints := make([][2]int, len(stage.chains))
 
-	for chainIdx, stageChain := range stage.chains {
-		for stepIdx, step := range stageChain {
-			// Connect the previous step in the chain to this step.
-			if stepIdx > 0 {
-				xConnection := connectionPoints[chainIdx][0]
-				yConnection := connectionPoints[chainIdx][1]
-
-				// Draw vertical line down from previous step to current step
-				for i := range verticalNodeSpacing - 1 {
-					g.runes[yConnection+i][xConnection] = '│'
-				}
-				g.runes[yConnection+verticalNodeSpacing-1][xConnection] = '▼'
+	for rowIdx, row := range DAGRows(&stage) {
+		for _, group := range row.Groups {
+			// Connect the previous group in the chain to this group
+			xConnection := connectionPoints[group.ChainID][0]
+			if xConnection == 0 {
+				xConnection = startX + row.Offset(group)*(nodeWidth+horizontalNodeSpacing) + (group.MaxChainConcurrentSteps*(nodeWidth+horizontalNodeSpacing)-horizontalNodeSpacing)/2
 			}
+			yConnection := connectionPoints[group.ChainID][1]
+			groupStartingX := xConnection - (len(group.Steps)*(nodeWidth+horizontalNodeSpacing)-horizontalNodeSpacing)/2
+			groupStartingY := startY + rowIdx*(nodeHeight+verticalNodeSpacing)
 
-			// Calculate the top left position of the node.
-			nodeX := startX + chainIdx*(nodeWidth+horizontalNodeSpacing)
-			nodeY := startY + stepIdx*(nodeHeight+verticalNodeSpacing)
-
-			// Draw the box for the step
-			g.drawBox(nodeX, nodeY, nodeWidth, nodeHeight, step.Description())
-			connectionPoints[chainIdx] = [2]int{nodeX + nodeWidth/2, nodeY + nodeHeight}
+			if rowIdx > 0 {
+				if len(group.Steps) == 1 && g.runes[yConnection-1][groupStartingX+(nodeWidth/2)] == '─' {
+					fmt.Println("case 1")
+					// If we are connecting from one node to one node,
+					// we can draw a simple vertical line down.
+					g.runes[yConnection][groupStartingX+(nodeWidth/2)] = '│'
+					g.runes[yConnection+1][groupStartingX+(nodeWidth/2)] = '│'
+					g.runes[yConnection+2][groupStartingX+(nodeWidth/2)] = '│'
+					g.runes[yConnection+3][groupStartingX+(nodeWidth/2)] = '│'
+					g.runes[yConnection+4][groupStartingX+(nodeWidth/2)] = '▼'
+				} else if len(group.Steps) == 1 {
+					fmt.Println("case 2")
+					// If we are connecting from multiple nodes to one node,
+					// we already have convergence lines drawn, so we draw less
+					// vertical lines.
+					g.runes[yConnection][groupStartingX+(nodeWidth/2)] = '│'
+					g.runes[yConnection+1][groupStartingX+(nodeWidth/2)] = '│'
+					g.runes[yConnection+2][groupStartingX+(nodeWidth/2)] = '▼'
+				} else if len(group.Steps) > 1 && g.runes[yConnection-1][xConnection] == '─' {
+					fmt.Println("case 3")
+					// If we are connecting from one node to multiple nodes,
+					// we have no convergence lines drawn, so need to draw them here.
+					g.runes[yConnection][xConnection] = '│'
+					g.runes[yConnection+1][xConnection] = '│'
+					nodeXMidpoints := make([]int, len(group.Steps))
+					for stepIdx := range group.Steps {
+						nodeXMidpoints[stepIdx] = groupStartingX + stepIdx*(nodeWidth+horizontalNodeSpacing) + (nodeWidth / 2)
+						g.runes[yConnection+2][nodeXMidpoints[stepIdx]] = '┼'
+					}
+					groupWidth := len(group.Steps)*(nodeWidth+horizontalNodeSpacing) - horizontalNodeSpacing
+					for x := groupStartingX + (nodeWidth / 2); x < groupStartingX+groupWidth-(nodeWidth/2); x++ {
+						if g.runes[yConnection+2][x] == ' ' {
+							g.runes[yConnection+2][x] = '─'
+						}
+					}
+					for _, x := range nodeXMidpoints {
+						g.runes[yConnection+3][x] = '│'
+						g.runes[yConnection+4][x] = '▼'
+					}
+				} else {
+					fmt.Println("case 4")
+					// If we are connecting from multiple nodes to multiple nodes,
+					// we already have convergence lines drawn, so we draw less
+					// vertical lines.
+					g.runes[yConnection][xConnection] = '│'
+					nodeXMidpoints := make([]int, len(group.Steps))
+					for stepIdx := range group.Steps {
+						nodeXMidpoints[stepIdx] = groupStartingX + stepIdx*(nodeWidth+horizontalNodeSpacing) + (nodeWidth / 2)
+						g.runes[yConnection+1][nodeXMidpoints[stepIdx]] = '┼'
+					}
+					groupWidth := len(group.Steps)*(nodeWidth+horizontalNodeSpacing) - horizontalNodeSpacing
+					for x := groupStartingX + (nodeWidth / 2); x < groupStartingX+groupWidth-(nodeWidth/2); x++ {
+						if g.runes[yConnection+1][x] == ' ' {
+							g.runes[yConnection+1][x] = '─'
+						}
+					}
+					for _, x := range nodeXMidpoints {
+						g.runes[yConnection+2][x] = '▼'
+					}
+				}
+			}
+			if len(group.Steps) == 1 {
+				connectionPoints[group.ChainID] = g.drawSingleStep(group.Steps[0], groupStartingX, groupStartingY)
+			} else {
+				// Don't draw transition lines for the last stage if this is the last group in the chain.
+				drawTransition := !(lastStage && len(stage.chains[group.ChainID]) == rowIdx+1)
+				connectionPoints[group.ChainID] = g.drawParallelSteps(group.Steps, groupStartingX, groupStartingY, drawTransition)
+			}
 		}
 	}
 
 	return connectionPoints
+}
+
+// drawSingleStep draws a single step and returns its connection point
+func (g *dagGrid) drawSingleStep(step testStep, startX, startY int) [2]int {
+	g.drawBox(startX, startY, nodeWidth, nodeHeight, step.Description())
+	return [2]int{startX + nodeWidth/2, startY + nodeHeight}
+}
+
+// drawParallelSteps draws multiple parallel steps with convergence lines and returns the connection point
+func (g *dagGrid) drawParallelSteps(group stepGroup, startX, startY int, shouldDrawTransition bool) [2]int {
+	numSteps := len(group)
+	// Draw a box for each step and record their center positions.
+	stepCenters := make([]int, numSteps)
+	for i, step := range group {
+		nodeX := startX + i*(nodeWidth+horizontalNodeSpacing)
+		g.drawBox(nodeX, startY, nodeWidth, nodeHeight, step.Description())
+		stepCenters[i] = nodeX + nodeWidth/2
+	}
+
+	chainMidpointX := startX + (numSteps*(nodeWidth+horizontalNodeSpacing)-horizontalNodeSpacing)/2
+
+	if !shouldDrawTransition {
+		return [2]int{chainMidpointX, startY + nodeHeight}
+	}
+	return g.drawGroupTransition(stepCenters, chainMidpointX, startY+nodeHeight)
+}
+
+// drawGroupTransition draws the lines between parallel steps in a group.
+func (g *dagGrid) drawGroupTransition(stepCenters []int, midpointX, startY int) [2]int {
+	// Draw vertical lines down from each step
+	for _, centerX := range stepCenters {
+		g.runes[startY][centerX] = '│'
+		g.runes[startY+1][centerX] = '┼'
+	}
+
+	// Draw horizontal line connecting all steps
+	if len(stepCenters) >= 2 {
+		leftmostX := stepCenters[0]
+		rightmostX := stepCenters[len(stepCenters)-1]
+		for x := leftmostX; x <= rightmostX; x++ {
+			if g.runes[startY+1][x] == ' ' {
+				g.runes[startY+1][x] = '─'
+			}
+		}
+	}
+	g.runes[startY+1][midpointX] = '┼'
+
+	return [2]int{midpointX, startY + 2}
 }
 
 func (g *dagGrid) drawBox(x, y, width, height int, text string) {
@@ -264,31 +368,34 @@ func (g *dagGrid) drawStageTransition(currentStage Stage, connectionPoints [][2]
 	g.drawStageLabel(currentStage.name, xMidpoint, lowestConnectionY+4)
 	g.runes[lowestConnectionY+5][xMidpoint] = '│'
 
-	numConcurrentChains := len(currentStage.chains)
-	if numConcurrentChains == 1 {
+	totalChainsWidth := currentStage.MaxConcurrentSteps()*(nodeWidth+horizontalNodeSpacing) - horizontalNodeSpacing
+	startingX := xMidpoint - totalChainsWidth/2
+
+	var nodeXMidpoints []int
+	DAGRows(&currentStage)(func(idx int, row DAGRowIter) bool {
+		for _, group := range row.Groups {
+			groupXMidpoint := startingX + row.Offset(group)*(nodeWidth+horizontalNodeSpacing) + (group.MaxChainConcurrentSteps*(nodeWidth+horizontalNodeSpacing)-horizontalNodeSpacing)/2
+			groupStartingX := groupXMidpoint - (len(group.Steps)*(nodeWidth+horizontalNodeSpacing)-horizontalNodeSpacing)/2
+			for stepIdx := range group.Steps {
+				nodeXMidpoints = append(nodeXMidpoints, groupStartingX+stepIdx*(nodeWidth+horizontalNodeSpacing)+(nodeWidth/2))
+			}
+		}
+		return false
+	})
+
+	if len(nodeXMidpoints) == 1 {
 		g.runes[lowestConnectionY+6][xMidpoint] = '│'
 		g.runes[lowestConnectionY+7][xMidpoint] = '▼'
 		return
 	}
-
-	totalChainsWidth := numConcurrentChains*(nodeWidth+horizontalNodeSpacing) - horizontalNodeSpacing
-	startingX := xMidpoint - totalChainsWidth/2
-
-	nodeXMidpoints := make([]int, numConcurrentChains)
-	for chainIdx := range currentStage.chains {
-		// The starting x offset plus
-		if chainIdx == 0 {
-			nodeXMidpoints[chainIdx] = startingX + (nodeWidth / 2)
-		} else {
-			nodeXMidpoints[chainIdx] = nodeXMidpoints[chainIdx-1] + nodeWidth + horizontalNodeSpacing
-		}
-	}
-
+	midpointSet := make(map[int]struct{})
 	for _, x := range nodeXMidpoints {
-		g.runes[lowestConnectionY+6][x] = '┼'
+		midpointSet[x] = struct{}{}
 	}
-	for x := startingX + (nodeWidth / 2); x < startingX+totalChainsWidth-(nodeWidth/2); x++ {
-		if g.runes[lowestConnectionY+6][x] == ' ' {
+	for x := nodeXMidpoints[0]; x <= nodeXMidpoints[len(nodeXMidpoints)-1]; x++ {
+		if _, ok := midpointSet[x]; ok {
+			g.runes[lowestConnectionY+6][x] = '┼'
+		} else {
 			g.runes[lowestConnectionY+6][x] = '─'
 		}
 	}
@@ -310,4 +417,59 @@ func (g *dagGrid) render() string {
 	}
 
 	return result.String()
+}
+
+type DAGGroup struct {
+	ChainID                 int
+	MaxChainConcurrentSteps int
+	Steps                   []testStep
+}
+type DAGRowIter struct {
+	Groups []DAGGroup
+}
+
+func (r *DAGRowIter) Offset(gr DAGGroup) int {
+	offset := 0
+	for _, g := range r.Groups {
+		if g.ChainID == gr.ChainID {
+			break
+		}
+		offset += g.MaxChainConcurrentSteps
+	}
+	return offset
+}
+
+func DAGRows(s *Stage) iter.Seq2[int, DAGRowIter] {
+	return func(yield func(int, DAGRowIter) bool) {
+		numRows := 0
+		for _, ch := range s.chains {
+			if n := len(ch); n > numRows {
+				numRows = n
+			}
+		}
+
+		for rowIdx := 0; rowIdx < numRows; rowIdx++ {
+			var row DAGRowIter
+
+			for chainID, ch := range s.chains {
+				if rowIdx >= len(ch) {
+					continue
+				}
+				grp := ch[rowIdx]
+
+				steps := make([]testStep, len(grp))
+				copy(steps, grp)
+
+				row.Groups = append(row.Groups, DAGGroup{
+					ChainID:                 chainID,
+					MaxChainConcurrentSteps: ch.MaxConcurrentSteps(),
+					Steps:                   steps,
+				})
+			}
+
+			if !yield(rowIdx, row) {
+				return
+			}
+		}
+	}
 }

@@ -100,43 +100,54 @@ func (p *SimplePlanner) generateStageExecutionPlans(stages []*Stage) []*StageExe
 	return plans
 }
 
-// extractExecutionSteps extracts all individual steps from stage chains.
+// extractExecutionSteps extracts all individual steps from stage chains with stepGroups.
 func (p *SimplePlanner) extractExecutionSteps(stage *Stage, startID int) ([]*ExecutionStep, int) {
 	var executionSteps []*ExecutionStep
 	currentID := startID
 
-	// Work with the original chain structure instead of flattened steps
+	// Work with the new stepGroup-based chain structure
 	for chainIndex, stageChain := range stage.Chains() {
-		if len(stageChain) == 1 {
-			// Single step - treat as independent
-			execStep := &ExecutionStep{
-				ID:      currentID,
-				Step:    stageChain[0],
-				ChainID: -1, // Not part of a chain
-			}
-			executionSteps = append(executionSteps, execStep)
-			currentID++
-		} else {
-			// Multi-step chain - set up dependencies
-			var prevStepID int = -1
+		var prevGroupStepIDs []int // IDs of all steps in the previous stepGroup
 
-			for stepIndex, step := range stageChain {
+		for stepGroupIndex, stepGroup := range stageChain {
+			var currentGroupStepIDs []int // IDs of all steps in the current stepGroup
+
+			if len(stepGroup) == 1 {
+				// Single step in this stepGroup
 				execStep := &ExecutionStep{
 					ID:         currentID,
-					Step:       step,
+					Step:       stepGroup[0],
 					ChainID:    chainIndex,
-					ChainIndex: stepIndex,
+					ChainIndex: stepGroupIndex,
 				}
 
-				// Steps within a chain must run sequentially
-				if prevStepID != -1 {
-					execStep.CanRunAfter = []int{prevStepID}
-				}
+				// Depend on all steps from the previous stepGroup
+				execStep.CanRunAfter = prevGroupStepIDs
 
 				executionSteps = append(executionSteps, execStep)
-				prevStepID = currentID
+				currentGroupStepIDs = append(currentGroupStepIDs, currentID)
 				currentID++
+			} else {
+				// Multiple steps in this stepGroup - they can run in parallel
+				for _, step := range stepGroup {
+					execStep := &ExecutionStep{
+						ID:         currentID,
+						Step:       step,
+						ChainID:    chainIndex,
+						ChainIndex: stepGroupIndex,
+					}
+
+					// All steps in this group depend on all steps from the previous stepGroup
+					execStep.CanRunAfter = prevGroupStepIDs
+
+					executionSteps = append(executionSteps, execStep)
+					currentGroupStepIDs = append(currentGroupStepIDs, currentID)
+					currentID++
+				}
 			}
+
+			// Update prevGroupStepIDs for the next iteration
+			prevGroupStepIDs = currentGroupStepIDs
 		}
 	}
 
@@ -480,8 +491,31 @@ func (tp *TestPlan) String() string {
 	return b.String()
 }
 
-// chain represents a sequence of test steps that must be executed in order
-type chain []testStep
+// stepGroup represents a group of test steps that must complete before the next
+// stepGroup in a given chain can start.
+type stepGroup []testStep
+
+// Description returns a description for this stepGroup.
+func (sg stepGroup) Description() string {
+	if len(sg) == 1 {
+		return sg[0].Description()
+	}
+	return fmt.Sprintf("parallel group with\n%d steps", len(sg))
+}
+
+// chain represents a sequence of step groups that must be executed in order
+type chain []stepGroup
+
+// MaxConcurrentSteps returns the maximum number of steps that can be run concurrently in this chain.
+func (ch *chain) MaxConcurrentSteps() int {
+	maxSteps := 0
+	for _, gr := range *ch {
+		if len(gr) > maxSteps {
+			maxSteps = len(gr)
+		}
+	}
+	return maxSteps
+}
 
 // Stage represents a group of test step chains that can be executed concurrently.
 type Stage struct {
@@ -490,13 +524,41 @@ type Stage struct {
 	chains []chain
 }
 
-// Steps returns all the steps in this stage (flattened from all chains).
+// MaxConcurrentSteps returns the maximum number of steps that can be run concurrently in this stage.
+func (s *Stage) MaxConcurrentSteps() int {
+	maxSteps := 0
+	for _, ch := range s.chains {
+		maxGroupSize := 0
+		for _, gr := range ch {
+			if len(gr) > maxGroupSize {
+				maxGroupSize = len(gr)
+			}
+		}
+		maxSteps = maxSteps + maxGroupSize
+	}
+
+	return maxSteps
+}
+
+// Steps returns all the steps in this stage (flattened from all chains and stepGroups).
 func (s *Stage) Steps() []testStep {
 	var allSteps []testStep
 	for _, chain := range s.chains {
-		allSteps = append(allSteps, chain...)
+		for _, stepGroup := range chain {
+			allSteps = append(allSteps, stepGroup...)
+		}
 	}
 	return allSteps
+}
+
+func (s *Stage) LongestChain() int {
+	var longestChainLength int
+	for _, c := range s.chains {
+		if len(c) > longestChainLength {
+			longestChainLength = len(c)
+		}
+	}
+	return longestChainLength
 }
 
 // Chains returns the chains in this stage.
