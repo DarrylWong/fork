@@ -107,3 +107,4 @@ func (sc *stepChain) ConcurrencyDisabled() bool {
 	}
 	return false
 }
+

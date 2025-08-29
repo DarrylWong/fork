@@ -53,7 +53,7 @@ func TestPlanner(t *testing.T) {
 
 	for _, stage := range []*Stage{baselineStage, chaosStage} {
 		// Run TPCC workload
-		mod.InStage("running TPCC workload for 1 hour" /* step name */, stage, func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		mod.InStage(stage, "running TPCC workload for 1 hour" /* step name */, func(ctx context.Context, l *logger.Logger, h *Helper) error {
 			l.Printf("running TPCC workload for 1 hour")
 			return nil
 		}).Then("dropping TPCC tables" /* step name */, func(ctx context.Context, l *logger.Logger, h *Helper) error {
@@ -61,7 +61,7 @@ func TestPlanner(t *testing.T) {
 			return nil
 		})
 
-		mod.InStage("increasing replication factor to 5" /* step name */, stage, func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		mod.InStage(stage, "increasing replication factor to 5" /* step name */, func(ctx context.Context, l *logger.Logger, h *Helper) error {
 			l.Printf("increasing replication factor to 5")
 			return nil
 		}).Then("waiting for replication" /* step name */, func(ctx context.Context, l *logger.Logger, h *Helper) error {
@@ -75,7 +75,7 @@ func TestPlanner(t *testing.T) {
 			return nil
 		})
 
-		mod.InStage("copy bank table" /* step name */, stage, func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		mod.InStage(stage, "copy bank table" /* step name */, func(ctx context.Context, l *logger.Logger, h *Helper) error {
 			l.Printf("copy bank table")
 			return nil
 		})
@@ -121,13 +121,13 @@ func TestBasicDAG(t *testing.T) {
 
 	for _, stage := range []*Stage{baselineStage, chaosStage} {
 		// Run TPCC workload
-		mod.InStage("running TPCC workload for 1 hour" /* step name */, stage, func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		mod.InStage(stage, "running TPCC workload for 1 hour" /* step name */, func(ctx context.Context, l *logger.Logger, h *Helper) error {
 			return nil
 		}).Then("dropping TPCC tables" /* step name */, func(ctx context.Context, l *logger.Logger, h *Helper) error {
 			return nil
 		})
 
-		mod.InStage("increasing replication factor to 5" /* step name */, stage, func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		mod.InStage(stage, "increasing replication factor to 5" /* step name */, func(ctx context.Context, l *logger.Logger, h *Helper) error {
 			return nil
 		}).Then("waiting for replication" /* step name */, func(ctx context.Context, l *logger.Logger, h *Helper) error {
 			return nil
@@ -137,13 +137,13 @@ func TestBasicDAG(t *testing.T) {
 			return nil
 		})
 
-		mod.InStage("copy bank table" /* step name */, stage, func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		mod.InStage(stage, "copy bank table" /* step name */, func(ctx context.Context, l *logger.Logger, h *Helper) error {
 			return nil
 		})
 
 		// TODO: the framework itself should add this automatically when chaos is enabled.
 		if stage == chaosStage {
-			mod.InStage("inject network partition" /* step name */, stage, func(ctx context.Context, l *logger.Logger, h *Helper) error {
+			mod.InStage(stage, "inject network partition" /* step name */, func(ctx context.Context, l *logger.Logger, h *Helper) error {
 				return nil
 			}).Then("recover from network partition" /* step name */, func(ctx context.Context, l *logger.Logger, h *Helper) error {
 				return nil
@@ -170,7 +170,7 @@ func TestBasicDAG(t *testing.T) {
 
 	t.Log(plan)
 
-	echotest.Require(t, mod.DAG(), filepath.Join("testdata", "basic_dag"))
+	echotest.Require(t, mod.DAG(), filepath.Join("testdata", "basic_dag.txt"))
 }
 
 func TestSetupOnlyDAG(t *testing.T) {
@@ -187,7 +187,7 @@ func TestSetupOnlyDAG(t *testing.T) {
 		return nil
 	})
 
-	echotest.Require(t, mod.DAG(), filepath.Join("testdata", "setup_only_dag"))
+	echotest.Require(t, mod.DAG(), filepath.Join("testdata", "setup_only_dag.txt"))
 }
 
 func TestMVTDAG(t *testing.T) {
@@ -205,26 +205,145 @@ func TestMVTDAG(t *testing.T) {
 	})
 
 	upgradeStage := mod.NewStage("upgrade cluster from \"v24.2.2\" to \"master\"", DisableFailureInjection())
-	mod.InStage("restart system server on node 1 with binary version master", upgradeStage, func(ctx context.Context, l *logger.Logger, h *Helper) error {
+	mod.InStage(upgradeStage, "restart system server on node 1 with binary version master", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 		return nil
 	})
-	mod.InStage("restart system server on node 2 with binary version master", upgradeStage, func(ctx context.Context, l *logger.Logger, h *Helper) error {
+	mod.InStage(upgradeStage, "restart system server on node 2 with binary version master", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 		return nil
 	})
-	mod.InStage("restart system server on node 3 with binary version master", upgradeStage, func(ctx context.Context, l *logger.Logger, h *Helper) error {
+	mod.InStage(upgradeStage, "restart system server on node 3 with binary version master", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 		return nil
 	})
-	mod.InStage("restart system server on node 4 with binary version master", upgradeStage, func(ctx context.Context, l *logger.Logger, h *Helper) error {
-		return nil
-	})
-	mod.InStage("run backup", upgradeStage, func(ctx context.Context, l *logger.Logger, h *Helper) error {
-		return nil
-	})
-	mod.InStage("test features", upgradeStage, func(ctx context.Context, l *logger.Logger, h *Helper) error {
+	mod.InStage(upgradeStage, "restart system server on node 4 with binary version master", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 		return nil
 	})
 
-	echotest.Require(t, mod.DAG(), filepath.Join("testdata", "setup_only_dag"))
+	mod.InStage(upgradeStage, "run backup", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+	mod.InStage(upgradeStage, "test features", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+
+	rollbackStage := mod.NewStage("downgrade nodes :1-4 from \"master\" to \"v24.2.2\"", DisableFailureInjection())
+	mod.InStage(rollbackStage, "restart system server on node 1 with binary version v24.2.2", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+	mod.InStage(rollbackStage, "restart system server on node 2 with binary version v24.2.2", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+	mod.InStage(rollbackStage, "restart system server on node 3 with binary version v24.2.2", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+	mod.InStage(rollbackStage, "restart system server on node 4 with binary version v24.2.2", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+
+	mod.InStage(rollbackStage, "run backup", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+	mod.InStage(rollbackStage, "test features", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+
+	finalizeStage := mod.NewStage("upgrade cluster from \"v24.2.2\" to \"master\"", DisableFailureInjection())
+	mod.InStage(finalizeStage, "restart system server on node 1 with binary version master", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).And("restart system server on node 2 with binary version master", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).And("restart system server on node 3 with binary version master", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).And("restart system server on node 4 with binary version master", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).Then("wait for all nodes (:1-4) to acknowledge cluster version <current> on system tenant", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+
+	mod.InStage(finalizeStage, "run backup", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+	mod.InStage(finalizeStage, "test features", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+
+	echotest.Require(t, mod.DAG(), filepath.Join("testdata", "mvt_dag.txt"))
+}
+
+func TestAndDAG(t *testing.T) {
+	mod := NewTest("and synchronization test", 54321)
+
+	stage := mod.NewStage("stage 1", DisableFailureInjection())
+	stage2 := mod.NewStage("stage 2", DisableFailureInjection())
+
+	// Setup some initial steps
+	mod.Setup("cluster setup", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+
+	mod.InStage(stage, "step A", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).And("step B", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).Then("step C", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).Then("step D", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).And("step E", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+
+	// Add another independent step chain
+	mod.InStage(stage, "step 1", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).Then("step 2", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+
+	// Add another independent step chain
+	mod.InStage(stage2, "step A", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).Then("step B", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).Then("step C", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).Then("step D", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).Then("step E", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+
+	mod.InStage(stage2, "step 1", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).And("step 2", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).Then("step 3", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).Then("step 4", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).And("step 5", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).Then("step 6", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).And("step 7", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).And("step 8", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+
+	// Use the planner to generate the plan
+	planner := NewSimplePlanner(mod, PlannerConfig{
+		IsLocal:           true,
+		ConcurrencyChance: 0.25,
+	})
+
+	plan, err := planner.Plan()
+	if err != nil {
+		t.Fatalf("Failed to generate plan: %v", err)
+	}
+
+	t.Log(plan)
+
+	echotest.Require(t, mod.DAG(), filepath.Join("testdata", "and_dag.txt"))
 }
 
 func TestAfterTestOnlyDAG(t *testing.T) {
@@ -234,5 +353,5 @@ func TestAfterTestOnlyDAG(t *testing.T) {
 		return nil
 	})
 
-	echotest.Require(t, mod.DAG(), filepath.Join("testdata", "after_test_only_dag"))
+	echotest.Require(t, mod.DAG(), filepath.Join("testdata", "after_test_only_dag.txt"))
 }
