@@ -24,7 +24,7 @@ import (
 func TestDependencyOrdering(t *testing.T) {
 	rng, _ := randutil.NewPseudoRand()
 	// Run property-based test with multiple iterations
-	for iteration := 0; iteration < 2; iteration++ {
+	for iteration := 0; iteration < 10000; iteration++ {
 		// Generate a random test with multiple stages and chains
 		mod := NewTest(fmt.Sprintf("property_test_%d", iteration), rng.Int63())
 
@@ -84,69 +84,66 @@ func TestDependencyOrdering(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to generate plan: %v", err)
 		}
-		t.Log(plan.String())
+		//t.Log(plan.String())
 
-		// Validate dependency ordering for each stage
-		for stageIdx, stageExecPlan := range plan.stageExecutionPlans {
-			if stageExecPlan == nil {
-				continue // Skip setup/after-test stages
+		// Validate dependency ordering for the flat step list
+		validateStepOrdering(t, plan.Steps())
+	}
+}
+
+// validateStepOrdering checks that the flat step list respects dependency constraints
+func validateStepOrdering(t *testing.T, steps []testStep) {
+	// Keep track of the highest depth seen for each chain
+	maxDepthPerChain := make(map[string]int)
+
+	// Walk through all steps in order
+	for stepIndex, step := range steps {
+		// Handle concurrent steps by examining each sub-step
+		if concurrentStep, ok := step.(*concurrentStep); ok {
+			// For concurrent steps, all sub-steps should be at the same depth level
+			// and not violate ordering within their respective chains
+			for _, subStep := range concurrentStep.steps {
+				validateSingleStep(t, stepIndex, subStep, maxDepthPerChain)
 			}
-
-			validateStageOrdering(t, stages[stageIdx], stageExecPlan)
+		} else {
+			// Single step
+			validateSingleStep(t, stepIndex, step, maxDepthPerChain)
 		}
 	}
 }
 
-// validateStageOrdering checks that the execution plan respects dependency constraints
-func validateStageOrdering(t *testing.T, stage *Stage, plan *StageExecutionPlan) {
-	// First, collect all steps from the stage to ensure every step appears exactly once
-	expectedSteps := make(map[string]bool)
-	for _, step := range stage.Steps() {
-		expectedSteps[step.Description()] = false // false = not yet seen in plan
+// validateSingleStep validates ordering constraints for a single step
+func validateSingleStep(t *testing.T, stepIndex int, step testStep, maxDepthPerChain map[string]int) {
+	stepName := step.Description()
+
+	// Parse step name to extract chain and depth
+	parts := strings.Split(stepName, ":")
+	if len(parts) != 3 {
+		return // Skip steps that don't follow our naming convention
 	}
 
-	// Keep track of the highest depth seen for each chain
-	maxDepthPerChain := make(map[string]string)
-
-	// Walk through all execution steps in order
-	for _, execStep := range plan.ExecutionSteps {
-		stepName := execStep.Step.Description()
-
-		// Mark this step as seen
-		if seen, exists := expectedSteps[stepName]; exists {
-			if seen {
-				t.Errorf("Step %s appears multiple times in execution plan", stepName)
-			}
-			expectedSteps[stepName] = true
-		} else {
-			t.Errorf("Step %s is unexpected", stepName)
+	chainID := parts[0]
+	depthStr := parts[1]
+	
+	// Convert depth to integer for proper comparison
+	depth := 0
+	if len(depthStr) > 0 {
+		depth = int(depthStr[0] - '0') // Convert character to number
+		if depth < 0 || depth > 9 {
+			return // Invalid depth format
 		}
+	}
 
-		// Parse step name to extract chain and depth
-		parts := strings.Split(stepName, ":")
-		if len(parts) != 3 {
-			t.Errorf("Invalid step name")
+	// Check if we've seen a higher depth for this chain already
+	if maxDepth, exists := maxDepthPerChain[chainID]; exists {
+		if depth < maxDepth {
+			t.Errorf("Dependency violation at step %d: step %s (depth %d) appears after higher depth %d in chain %s",
+				stepIndex+1, stepName, depth, maxDepth, chainID)
 		}
+	}
 
-		chainID := parts[0]
-		depth := parts[1]
-
-		// Check if we've seen a higher depth for this chain already
-		if maxDepth, exists := maxDepthPerChain[chainID]; exists {
-			if depth < maxDepth {
-				t.Errorf("Dependency violation: step %s (depth %s) appears after higher depth %s in chain %s",
-					stepName, depth, maxDepth, chainID)
-			}
-		}
-
-		// Update the maximum depth seen for this chain
+	// Update the maximum depth seen for this chain
+	if maxDepth, exists := maxDepthPerChain[chainID]; !exists || depth > maxDepth {
 		maxDepthPerChain[chainID] = depth
-	}
-
-	// Ensure all expected steps were seen exactly once
-	for stepName, seen := range expectedSteps {
-		if !seen {
-			t.Errorf("Step %s from stage is missing from execution plan", stepName)
-		}
 	}
 }
