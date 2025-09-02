@@ -43,29 +43,14 @@ func (r *TestRunner) Run(ctx context.Context) error {
 		r.logger.Printf("Starting modular test: %s", r.plan.name)
 	}
 
-	// Run setup steps
-	setupSteps := r.plan.Setup()
-	if setupSteps != nil {
-		if err := r.runSteps(ctx, "setup", setupSteps); err != nil {
-			return fmt.Errorf("setup failed: %w", err)
+	// Run all steps in order - they are already organized with concurrent steps as meta-steps
+	for i, step := range r.plan.Steps() {
+		if r.logger != nil {
+			r.logger.Printf("Running step %d: %s", i+1, step.Description())
 		}
-	}
 
-	// Run test stages
-	for _, stage := range r.plan.stages {
-		if err := r.runStage(ctx, stage); err != nil {
-			return fmt.Errorf("stage %s failed: %w", stage.name, err)
-		}
-	}
-
-	// Stop all background tasks
-	r.stopAllBackground()
-
-	// Run after-test steps
-	afterTestSteps := r.plan.AfterTest()
-	if afterTestSteps != nil {
-		if err := r.runSteps(ctx, "after-test", afterTestSteps); err != nil {
-			return fmt.Errorf("after-test failed: %w", err)
+		if err := step.Run(ctx, r.logger, r.helper); err != nil {
+			return fmt.Errorf("step %d (%s) failed: %w", i+1, step.Description(), err)
 		}
 	}
 

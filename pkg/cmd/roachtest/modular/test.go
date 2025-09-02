@@ -106,14 +106,6 @@ type Test struct {
 	testingKnobs      *TestingKnobs
 }
 
-// ExecutionStrategy defines how steps should be executed within a stage.
-type ExecutionStrategy int
-
-const (
-	ConcurrentExecution  ExecutionStrategy = iota // All steps run concurrently
-	InterleavedExecution                          // Steps are randomly interleaved
-)
-
 // ExecutionStep represents a single step with a unique ID in the execution plan.
 type ExecutionStep struct {
 	ID          int
@@ -126,7 +118,6 @@ type ExecutionStep struct {
 // StageExecutionPlan contains the detailed execution plan for a stage.
 type StageExecutionPlan struct {
 	Stage            *Stage
-	Strategy         ExecutionStrategy
 	ExecutionSteps   []*ExecutionStep
 	ConcurrentGroups [][]int // Groups of step IDs that can run concurrently
 }

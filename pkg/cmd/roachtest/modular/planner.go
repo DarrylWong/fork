@@ -25,7 +25,7 @@ type SimplePlanner struct {
 // PlannerConfig configures the test planner.
 type PlannerConfig struct {
 	IsLocal           bool
-	ConcurrencyChance float64 // Probability of choosing concurrent execution (default 0.25)
+	ConcurrencyChance float64 // Probability that each eligible step runs concurrently (default 0.25)
 }
 
 // NewSimplePlanner creates a new simple planner.
@@ -39,16 +39,84 @@ func NewSimplePlanner(test *Test, config PlannerConfig) *SimplePlanner {
 
 // Plan generates a test plan from the test definition.
 func (p *SimplePlanner) Plan() (*TestPlan, error) {
-	plan := p.test.GeneratePlan()
-	plan.isLocal = p.config.IsLocal
+	basePlan := p.test.GeneratePlan()
+	
+	// Generate flat list of steps from all stages
+	steps := p.generateFlatStepList(basePlan.stages)
+	
+	return &TestPlan{
+		name:          basePlan.name,
+		seed:          basePlan.seed,
+		clusterSpecs:  basePlan.clusterSpecs,
+		workloadSpecs: basePlan.workloadSpecs,
+		steps:         steps,
+		isLocal:       p.config.IsLocal,
+	}, nil
+}
 
-	// Generate randomized execution plans for each stage
-	plan.stageExecutionPlans = p.generateStageExecutionPlans(plan.stages)
+// generateFlatStepList creates a flat list of testStep from all stages using step-level randomization.
+func (p *SimplePlanner) generateFlatStepList(stages []*Stage) []testStep {
+	var allSteps []testStep
+	concurrencyChance := p.config.ConcurrencyChance
+	if concurrencyChance == 0 {
+		concurrencyChance = 0.25 // Default 25% chance
+	}
 
-	return plan, nil
+	for _, stage := range stages {
+		// Extract all individual steps from stage chains and single steps
+		executionSteps, _ := p.extractExecutionSteps(stage, 1)
+
+		if len(executionSteps) == 0 {
+			continue
+		}
+
+		// Generate execution plan using step-level randomization
+		concurrentGroups := p.generateStepLevelRandomizedPlan(executionSteps, concurrencyChance)
+
+		// Convert concurrent groups to testStep slice
+		stageSteps := p.convertConcurrentGroupsToSteps(concurrentGroups, executionSteps)
+		allSteps = append(allSteps, stageSteps...)
+	}
+
+	return allSteps
+}
+
+// convertConcurrentGroupsToSteps converts concurrent groups back to a flat slice of testStep.
+func (p *SimplePlanner) convertConcurrentGroupsToSteps(concurrentGroups [][]int, executionSteps []*ExecutionStep) []testStep {
+	var result []testStep
+	
+	// Create a map for quick lookup of execution steps by ID
+	stepMap := make(map[int]*ExecutionStep)
+	for _, execStep := range executionSteps {
+		stepMap[execStep.ID] = execStep
+	}
+
+	for _, group := range concurrentGroups {
+		if len(group) == 1 {
+			// Single step
+			if execStep, exists := stepMap[group[0]]; exists {
+				result = append(result, execStep.Step)
+			}
+		} else {
+			// Multiple steps - create concurrent step
+			var steps []testStep
+			for _, stepID := range group {
+				if execStep, exists := stepMap[stepID]; exists {
+					steps = append(steps, execStep.Step)
+				}
+			}
+			if len(steps) > 0 {
+				concurrentStep := newConcurrentStep(fmt.Sprintf("concurrent_group_%d_steps", len(steps)), steps)
+				result = append(result, concurrentStep)
+			}
+		}
+	}
+
+	return result
 }
 
 // generateStageExecutionPlans creates randomized execution plans for stages.
+// This method is deprecated and will be removed.
 func (p *SimplePlanner) generateStageExecutionPlans(stages []*Stage) []*StageExecutionPlan {
 	plans := make([]*StageExecutionPlan, len(stages))
 	concurrencyChance := p.config.ConcurrencyChance
@@ -74,20 +142,8 @@ func (p *SimplePlanner) generateStageExecutionPlans(stages []*Stage) []*StageExe
 		// Extract all individual steps from step chains and single steps
 		plan.ExecutionSteps, globalStepID = p.extractExecutionSteps(stage, globalStepID)
 
-		// Skip stages with no steps or stages with sequential-only steps
-		if len(plan.ExecutionSteps) == 0 || p.hasSequentialOnlyExecutionSteps(plan.ExecutionSteps) {
-			plan.Strategy = InterleavedExecution
-			plan.ConcurrentGroups = p.generateSequentialGroups(plan.ExecutionSteps)
-		} else {
-			// Randomly choose between concurrent and interleaved execution
-			if p.rng.Float64() < concurrencyChance {
-				plan.Strategy = ConcurrentExecution
-				plan.ConcurrentGroups = p.generateConcurrentGroups(plan.ExecutionSteps)
-			} else {
-				plan.Strategy = InterleavedExecution
-				plan.ConcurrentGroups = p.generateInterleavedGroups(plan.ExecutionSteps, concurrencyChance)
-			}
-		}
+		// Generate execution plan using step-level randomization
+		plan.ConcurrentGroups = p.generateStepLevelRandomizedPlan(plan.ExecutionSteps, concurrencyChance)
 
 		// Validate that dependencies are satisfied
 		if err := p.validateDependencies(plan); err != nil {
@@ -214,129 +270,149 @@ func (p *SimplePlanner) generateConcurrentGroups(steps []*ExecutionStep) [][]int
 }
 
 // generateInterleavedGroups creates a random interleaving with some concurrent groups.
+// This method is deprecated in favor of generateStepLevelRandomizedPlan.
 func (p *SimplePlanner) generateInterleavedGroups(steps []*ExecutionStep, concurrencyChance float64) [][]int {
 	if len(steps) == 0 {
 		return nil
 	}
 
-	// Use dependency-aware scheduling to create an interleaved execution plan
-	return p.createDependencyAwareSchedule(steps, concurrencyChance)
+	// Use the new step-level randomization approach
+	return p.generateStepLevelRandomizedPlan(steps, concurrencyChance)
 }
 
-// createDependencyAwareSchedule creates an interleaved schedule that respects dependencies.
-func (p *SimplePlanner) createDependencyAwareSchedule(steps []*ExecutionStep, concurrencyChance float64) [][]int {
-	// Create a dependency graph
+// generateStepLevelRandomizedPlan creates an execution plan with step-level randomization.
+// This ensures even distribution of all valid permutations by:
+// 1. Using randomized topological sort for fair ordering
+// 2. Giving each eligible step a chance to be concurrent
+// 3. Avoiding execution strategy bias
+func (p *SimplePlanner) generateStepLevelRandomizedPlan(steps []*ExecutionStep, concurrencyChance float64) [][]int {
+	if len(steps) == 0 {
+		return nil
+	}
+
+	// Create a dependency-aware random ordering using topological sort
+	ordering := p.randomizedTopologicalSort(steps)
+
+	// Now decide concurrency for each step independently
+	return p.assignConcurrencyToOrdering(ordering, concurrencyChance)
+}
+
+// randomizedTopologicalSort performs a randomized topological sort to ensure
+// even distribution of valid permutations.
+func (p *SimplePlanner) randomizedTopologicalSort(steps []*ExecutionStep) []*ExecutionStep {
+	// Build dependency graph
 	stepMap := make(map[int]*ExecutionStep)
+	inDegree := make(map[int]int)
+	dependents := make(map[int][]int) // Map from step ID to list of steps that depend on it
+	
 	for _, step := range steps {
 		stepMap[step.ID] = step
+		inDegree[step.ID] = len(step.CanRunAfter)
+		
+		// Build reverse dependency map
+		for _, depID := range step.CanRunAfter {
+			dependents[depID] = append(dependents[depID], step.ID)
+		}
 	}
 
-	// Track which steps are ready to run (no pending dependencies)
-	readySteps := make([]*ExecutionStep, 0)
-	blockedSteps := make([]*ExecutionStep, 0)
-	completedSteps := make(map[int]bool)
-
-	// Initialize ready steps (those with no dependencies)
+	// Find all steps with no dependencies (in-degree 0)
+	var ready []*ExecutionStep
 	for _, step := range steps {
-		if len(step.CanRunAfter) == 0 {
-			readySteps = append(readySteps, step)
-		} else {
-			blockedSteps = append(blockedSteps, step)
+		if inDegree[step.ID] == 0 {
+			ready = append(ready, step)
 		}
 	}
 
-	var schedule [][]int
-
-	// Continue until all steps are scheduled
-	for len(completedSteps) < len(steps) {
-		if len(readySteps) == 0 {
-			// This shouldn't happen if dependencies are valid
-			break
-		}
-
-		// Decide whether to run steps concurrently or sequentially
-		if len(readySteps) > 1 && p.rng.Float64() < concurrencyChance {
-			// Create a concurrent group with 2-min(3, len(readySteps)) ready steps
-			maxGroupSize := min(3, len(readySteps))
-			groupSize := 2
-			if maxGroupSize > 2 {
-				groupSize = 2 + p.rng.Intn(maxGroupSize-1)
-			}
-
-			concurrentGroup := make([]int, 0, groupSize)
-
-			// Randomly select steps for the concurrent group
-			indices := p.rng.Perm(len(readySteps))
-			var selectedSteps []*ExecutionStep
-			for i := 0; i < groupSize && i < len(indices); i++ {
-				step := readySteps[indices[i]]
-				concurrentGroup = append(concurrentGroup, step.ID)
-				completedSteps[step.ID] = true
-				selectedSteps = append(selectedSteps, step)
-			}
-
-			// Remove selected steps from ready steps
-			var newReadySteps []*ExecutionStep
-			selectedSet := make(map[int]bool)
-			for _, step := range selectedSteps {
-				selectedSet[step.ID] = true
-			}
-
-			for _, step := range readySteps {
-				if !selectedSet[step.ID] {
-					newReadySteps = append(newReadySteps, step)
+	var result []*ExecutionStep
+	completed := make(map[int]bool)
+	
+	for len(ready) > 0 {
+		// Randomly pick one of the ready steps for fair distribution
+		idx := p.rng.Intn(len(ready))
+		current := ready[idx]
+		
+		// Remove from ready list
+		ready = append(ready[:idx], ready[idx+1:]...)
+		result = append(result, current)
+		completed[current.ID] = true
+		
+		// Update in-degrees for steps that depend on this completed step
+		for _, dependentID := range dependents[current.ID] {
+			if !completed[dependentID] {
+				inDegree[dependentID]--
+				if inDegree[dependentID] == 0 {
+					ready = append(ready, stepMap[dependentID])
 				}
 			}
-			readySteps = newReadySteps
+		}
+	}
+	
+	return result
+}
 
-			schedule = append(schedule, concurrentGroup)
+// assignConcurrencyToOrdering takes a valid ordering and decides which steps
+// can run concurrently based on individual step concurrency chances.
+func (p *SimplePlanner) assignConcurrencyToOrdering(orderedSteps []*ExecutionStep, concurrencyChance float64) [][]int {
+	if len(orderedSteps) == 0 {
+		return nil
+	}
+
+	var groups [][]int
+	currentGroup := []int{orderedSteps[0].ID}
+	
+	for i := 1; i < len(orderedSteps); i++ {
+		step := orderedSteps[i]
+		
+		// Check if this step can be concurrent with the current group
+		canBeConcurrent := p.canStepBeConcurrentWithGroup(step, currentGroup, orderedSteps[:i])
+		
+		// Decide randomly if this step should be concurrent (if eligible)
+		shouldBeConcurrent := canBeConcurrent && p.rng.Float64() < concurrencyChance
+		
+		if shouldBeConcurrent && !step.Step.ConcurrencyDisabled() {
+			// Add to current group
+			currentGroup = append(currentGroup, step.ID)
 		} else {
-			// Run one step sequentially
-			// Randomly select a ready step
-			idx := p.rng.Intn(len(readySteps))
-			step := readySteps[idx]
-
-			schedule = append(schedule, []int{step.ID})
-			completedSteps[step.ID] = true
-
-			// Remove from ready steps
-			readySteps = append(readySteps[:idx], readySteps[idx+1:]...)
+			// Start a new group
+			groups = append(groups, currentGroup)
+			currentGroup = []int{step.ID}
 		}
-
-		// Check if any blocked steps are now ready
-		newReadySteps := make([]*ExecutionStep, 0)
-		remainingBlockedSteps := make([]*ExecutionStep, 0)
-
-		for _, blockedStep := range blockedSteps {
-			allDepsCompleted := true
-			for _, depID := range blockedStep.CanRunAfter {
-				if !completedSteps[depID] {
-					allDepsCompleted = false
-					break
-				}
-			}
-
-			if allDepsCompleted {
-				newReadySteps = append(newReadySteps, blockedStep)
-			} else {
-				remainingBlockedSteps = append(remainingBlockedSteps, blockedStep)
-			}
-		}
-
-		readySteps = append(readySteps, newReadySteps...)
-		blockedSteps = remainingBlockedSteps
 	}
-
-	return schedule
+	
+	// Add the last group
+	groups = append(groups, currentGroup)
+	
+	return groups
 }
 
-// min returns the minimum of two integers
-func min(a, b int) int {
-	if a < b {
-		return a
+// canStepBeConcurrentWithGroup checks if a step can run concurrently with
+// the current group based on dependencies.
+func (p *SimplePlanner) canStepBeConcurrentWithGroup(step *ExecutionStep, currentGroup []int, previousSteps []*ExecutionStep) bool {
+	// Check if any step in the current group is a dependency of this step
+	for _, depID := range step.CanRunAfter {
+		for _, groupStepID := range currentGroup {
+			if depID == groupStepID {
+				return false // Direct dependency on current group
+			}
+		}
 	}
-	return b
+	
+	// Check if this step has any dependencies that aren't completed yet
+	// (they should all be in previousSteps since we're using topological order)
+	completedSteps := make(map[int]bool)
+	for _, prevStep := range previousSteps {
+		completedSteps[prevStep.ID] = true
+	}
+	
+	for _, depID := range step.CanRunAfter {
+		if !completedSteps[depID] {
+			return false // Has unmet dependencies
+		}
+	}
+	
+	return true
 }
+
 
 // createConcurrentGroupsFromSequential takes a sequential plan and creates some concurrent groups
 func (p *SimplePlanner) createConcurrentGroupsFromSequential(groups [][]int, steps []*ExecutionStep, concurrencyChance float64) [][]int {
@@ -439,13 +515,12 @@ func Execute(ctx context.Context, t test.Test, c cluster.Cluster, testDef *Test)
 
 // TestPlan represents the execution plan for a modular test.
 type TestPlan struct {
-	name                string
-	seed                int64
-	clusterSpecs        []ClusterSpec
-	workloadSpecs       []WorkloadSpec
-	stages              []*Stage // All stages including setup and after-test
-	isLocal             bool
-	stageExecutionPlans []*StageExecutionPlan // Randomized execution plans for stages
+	name          string
+	seed          int64
+	clusterSpecs  []ClusterSpec
+	workloadSpecs []WorkloadSpec
+	steps         []testStep // Flat list of steps to execute in order
+	isLocal       bool
 }
 
 // String pretty prints the plan, with the test name, seed listed at the top,
@@ -485,8 +560,10 @@ func (tp *TestPlan) String() string {
 		b.WriteString("\n")
 	}
 
-	// All stages (setup, user stages, after-test) with unified formatting
-	tp.formatStagesWithTree(&b)
+	// List all steps in execution order
+	for i, step := range tp.steps {
+		b.WriteString(fmt.Sprintf("%d. %s\n", i+1, step.Description()))
+	}
 
 	return b.String()
 }
@@ -566,8 +643,18 @@ func (s *Stage) Chains() []chain {
 	return s.chains
 }
 
-// GeneratePlan creates a TestPlan from the test definition.
-func (t *Test) GeneratePlan() *TestPlan {
+// BasePlan represents the raw test definition before step-level planning.
+type BasePlan struct {
+	name          string
+	seed          int64
+	clusterSpecs  []ClusterSpec
+	workloadSpecs []WorkloadSpec
+	stages        []*Stage // All stages including setup and after-test
+	isLocal       bool
+}
+
+// GeneratePlan creates a BasePlan from the test definition.
+func (t *Test) GeneratePlan() *BasePlan {
 	// Build unified stage list: setup + user stages + after-test
 	allStages := make([]*Stage, 0)
 
@@ -584,7 +671,7 @@ func (t *Test) GeneratePlan() *TestPlan {
 		allStages = append(allStages, t.afterTestStage)
 	}
 
-	return &TestPlan{
+	return &BasePlan{
 		name:          t.name,
 		seed:          t.seed,
 		clusterSpecs:  t.clusterSpecs,
@@ -611,28 +698,8 @@ func (tp *TestPlan) WorkloadSpecs() []WorkloadSpec {
 	return tp.workloadSpecs
 }
 
-func (tp *TestPlan) Setup() []testStep {
-	// Find setup stage and return its steps
-	for _, stage := range tp.stages {
-		if stage.name == "setup" {
-			return stage.Steps()
-		}
-	}
-	return nil
-}
-
-func (tp *TestPlan) Stages() []*Stage {
-	return tp.stages
-}
-
-func (tp *TestPlan) AfterTest() []testStep {
-	// Find after-test stage and return its steps
-	for _, stage := range tp.stages {
-		if stage.name == "after-test" {
-			return stage.Steps()
-		}
-	}
-	return nil
+func (tp *TestPlan) Steps() []testStep {
+	return tp.steps
 }
 
 func (tp *TestPlan) IsLocal() bool {
