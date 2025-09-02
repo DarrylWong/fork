@@ -81,7 +81,7 @@ func (cs *concurrentStep) Run(ctx context.Context, l *logger.Logger, h *Helper) 
 
 	// Multiple steps, run them concurrently
 	errCh := make(chan error, len(cs.steps))
-	
+
 	for i, step := range cs.steps {
 		go func(stepIndex int, s testStep) {
 			stepLogger, err := l.ChildLogger(fmt.Sprintf("step_%d_%s", stepIndex, sanitizeStepName(s.Description())))
@@ -89,7 +89,7 @@ func (cs *concurrentStep) Run(ctx context.Context, l *logger.Logger, h *Helper) 
 				errCh <- fmt.Errorf("failed to create logger for step %d: %w", stepIndex, err)
 				return
 			}
-			
+
 			err = s.Run(ctx, stepLogger, h)
 			if err != nil {
 				errCh <- fmt.Errorf("step %d (%s) failed: %w", stepIndex, s.Description(), err)
@@ -110,7 +110,7 @@ func (cs *concurrentStep) Run(ctx context.Context, l *logger.Logger, h *Helper) 
 	if len(errors) > 0 {
 		return fmt.Errorf("concurrent step failed with %d errors: %v", len(errors), errors)
 	}
-	
+
 	return nil
 }
 
@@ -150,45 +150,12 @@ func (s *singleStep) ConcurrencyDisabled() bool {
 	return s.concurrencyDisabled
 }
 
-// stepChain represents a sequence of steps that must run in order, but the entire
-// chain can be interleaved with other chains or individual steps in the same stage.
-type stepChain struct {
+// sequentialRunStep is a "meta-step" that indicates that a sequence
+// of steps are to be executed sequentially. The default test runner
+// already runs steps sequentially. This meta-step exists primarily as
+// a way to group related steps so that a test plan is easier to
+// understand for a human.
+type sequentialRunStep struct {
+	label string
 	steps []testStep
 }
-
-// Description returns a description of the step chain.
-func (sc *stepChain) Description() string {
-	if len(sc.steps) == 0 {
-		return "empty step chain"
-	}
-	if len(sc.steps) == 1 {
-		return sc.steps[0].Description()
-	}
-	return sc.steps[0].Description() + " (+ " + fmt.Sprintf("%d more", len(sc.steps)-1) + ")"
-}
-
-// Background returns nil since step chains don't run in background.
-func (sc *stepChain) Background() shouldStop {
-	return nil
-}
-
-// Run executes all steps in the chain sequentially.
-func (sc *stepChain) Run(ctx context.Context, l *logger.Logger, h *Helper) error {
-	for _, step := range sc.steps {
-		if err := step.Run(ctx, l, h); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// ConcurrencyDisabled returns true if any step in the chain disables concurrency.
-func (sc *stepChain) ConcurrencyDisabled() bool {
-	for _, step := range sc.steps {
-		if step.ConcurrencyDisabled() {
-			return true
-		}
-	}
-	return false
-}
-
