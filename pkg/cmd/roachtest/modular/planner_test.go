@@ -28,47 +28,40 @@ func TestDependencyOrdering(t *testing.T) {
 		// Generate a random test with multiple stages and chains
 		mod := NewTest(fmt.Sprintf("property_test_%d", iteration), rng.Int63())
 
-		// Generate 1-3 stages
-		numStages := 1 + rng.Intn(3)
-		stages := make([]*Stage, numStages)
+		stageName := fmt.Sprintf("stage")
+		stage := mod.NewStage(stageName, DisableFailureInjection())
 
-		for i := 0; i < numStages; i++ {
-			stageName := fmt.Sprintf("stage_%d", i)
-			stage := mod.NewStage(stageName, DisableFailureInjection())
-			stages[i] = stage
+		// Generate 1-5 chains per stage
+		numChains := 1 + rng.Intn(5)
 
-			// Generate 1-5 chains per stage
-			numChains := 1 + rng.Intn(5)
+		for chainIdx := 0; chainIdx < numChains; chainIdx++ {
+			chainLetter := string(rune('A' + chainIdx))
 
-			for chainIdx := 0; chainIdx < numChains; chainIdx++ {
-				chainLetter := string(rune('A' + chainIdx))
+			// Generate 2-4 step groups per chain
+			numStepGroups := 2 + rng.Intn(3)
 
-				// Generate 2-4 step groups per chain
-				numStepGroups := 2 + rng.Intn(3)
+			var builder *StepBuilder
 
-				var builder *StepBuilder
+			for stepGroupIdx := 0; stepGroupIdx < numStepGroups; stepGroupIdx++ {
+				// Generate 1-3 steps per step group.
+				numStepsInGroup := 1 + rng.Intn(3)
 
-				for stepGroupIdx := 0; stepGroupIdx < numStepGroups; stepGroupIdx++ {
-					// Generate 1-3 steps per step group.
-					numStepsInGroup := 1 + rng.Intn(3)
+				for stepIdx := 0; stepIdx < numStepsInGroup; stepIdx++ {
+					stepName := fmt.Sprintf("%s:%d:%d", chainLetter, stepGroupIdx, stepIdx)
 
-					for stepIdx := 0; stepIdx < numStepsInGroup; stepIdx++ {
-						stepName := fmt.Sprintf("%s:%d:%d", chainLetter, stepGroupIdx, stepIdx)
+					noopFunc := func(ctx context.Context, l *logger.Logger, h *Helper) error {
+						return nil
+					}
 
-						noopFunc := func(ctx context.Context, l *logger.Logger, h *Helper) error {
-							return nil
-						}
-
-						if builder == nil {
-							// First step in the chain
-							builder = mod.InStage(stage, stepName, noopFunc)
-						} else if stepIdx == 0 {
-							// First step in a new step group (sequential)
-							builder = builder.Then(stepName, noopFunc)
-						} else {
-							// Additional step in the same step group (concurrent)
-							builder = builder.And(stepName, noopFunc)
-						}
+					if builder == nil {
+						// First step in the chain
+						builder = mod.InStage(stage, stepName, noopFunc)
+					} else if stepIdx == 0 {
+						// First step in a new step group (sequential)
+						builder = builder.Then(stepName, noopFunc)
+					} else {
+						// Additional step in the same step group (concurrent)
+						builder = builder.And(stepName, noopFunc)
 					}
 				}
 			}
@@ -84,7 +77,7 @@ func TestDependencyOrdering(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to generate plan: %v", err)
 		}
-		//t.Log(plan.String())
+		t.Log(plan.String())
 
 		// Validate dependency ordering for the flat step list
 		validateStepOrdering(t, plan.Steps())
@@ -124,7 +117,7 @@ func validateSingleStep(t *testing.T, stepIndex int, step testStep, maxDepthPerC
 
 	chainID := parts[0]
 	depthStr := parts[1]
-	
+
 	// Convert depth to integer for proper comparison
 	depth := 0
 	if len(depthStr) > 0 {
@@ -137,7 +130,7 @@ func validateSingleStep(t *testing.T, stepIndex int, step testStep, maxDepthPerC
 	// Check if we've seen a higher depth for this chain already
 	if maxDepth, exists := maxDepthPerChain[chainID]; exists {
 		if depth < maxDepth {
-			t.Errorf("Dependency violation at step %d: step %s (depth %d) appears after higher depth %d in chain %s",
+			t.Fatalf("Dependency violation at step %d: step %s (depth %d) appears after higher depth %d in chain %s",
 				stepIndex+1, stepName, depth, maxDepth, chainID)
 		}
 	}
@@ -145,5 +138,41 @@ func validateSingleStep(t *testing.T, stepIndex int, step testStep, maxDepthPerC
 	// Update the maximum depth seen for this chain
 	if maxDepth, exists := maxDepthPerChain[chainID]; !exists || depth > maxDepth {
 		maxDepthPerChain[chainID] = depth
+	}
+}
+
+// TestPlanRandomization generates 5 plans from the same test and logs them
+func TestPlanRandomization(t *testing.T) {
+	for i := 0; i < 5; i++ {
+		mod := NewTest("randomization test", int64(12345+i))
+
+		stage := mod.NewStage("test stage ", DisableFailureInjection())
+
+		// Create a simple test with a few chains
+		mod.InStage(stage, "step A", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+			return nil
+		}).Then("step B1", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+			return nil
+		}).And("step B2", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+			return nil
+		})
+
+		mod.InStage(stage, "step 1", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+			return nil
+		}).Then("step 2", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+			return nil
+		})
+
+		planner := NewSimplePlanner(mod, PlannerConfig{
+			IsLocal:           true,
+			ConcurrencyChance: 0.25,
+		})
+
+		plan, err := planner.Plan()
+		if err != nil {
+			t.Fatalf("Failed to generate plan: %v", err)
+		}
+
+		t.Logf("Plan %d:\n%s", i+1, plan.String())
 	}
 }
