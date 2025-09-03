@@ -140,6 +140,7 @@ func (t *Test) Stages() []*Stage {
 	return allStages
 }
 
+// generateStagePlan generates a random legal permutation of
 func (t *Test) generateStagePlan(s *Stage) sequentialRunStep {
 	// Start with a known valid ordering of steps: All the steps in the first chain
 	// sequentially, followed by all the steps in the second chain and so on.
@@ -150,17 +151,16 @@ func (t *Test) generateStagePlan(s *Stage) sequentialRunStep {
 		return index, index + 1
 	}
 
-	var successfulSwaps int
 	// Our randomization mixes in n^3*log(n) iterations.
-	iterations := int(math.Ceil(10 * math.Pow(float64(numSteps), 3) * math.Log(float64(numSteps))))
-	for successfulSwaps < iterations {
+	iterations := int(math.Ceil(math.Pow(float64(numSteps), 3) * math.Log(float64(numSteps))))
+	for proposedSwaps := 0; proposedSwaps < iterations; proposedSwaps++ {
 		first, second := randomPairIndices()
 		// We can swap the two steps if they are in different chains,
 		// or if they are in the same stepGroup.
-		if steps[first].dependency.ValidSwap(steps[second].dependency) {
-			steps[first], steps[second] = steps[second], steps[first]
-			successfulSwaps++
+		if !steps[first].ValidSwap(steps[second]) {
+			continue
 		}
+		steps[first], steps[second] = steps[second], steps[first]
 	}
 
 	testSteps := make([]testStep, 0, numSteps)
@@ -254,14 +254,14 @@ type stepDependency struct {
 	depth   int
 }
 
-func (s stepDependency) ValidSwap(o stepDependency) bool {
+func (s orderedStep) ValidSwap(o orderedStep) bool {
 	// We can swap the two steps if they are in different chains.
-	if s.chainID != o.chainID {
+	if s.dependency.chainID != o.dependency.chainID {
 		return true
 	}
 	// We can swap the two steps if they are part of the same
 	// step group.
-	return s.depth == o.depth
+	return s.dependency.depth == o.dependency.depth
 }
 
 type orderedStep struct {

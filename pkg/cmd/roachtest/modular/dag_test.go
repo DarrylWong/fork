@@ -2,8 +2,8 @@ package modular
 
 import (
 	"context"
-	"testing"
 	"path/filepath"
+	"testing"
 
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/testutils/echotest"
@@ -64,20 +64,6 @@ func TestBasicDAG(t *testing.T) {
 	mod.AfterTest("TPCC consistency checks", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 		return nil
 	})
-
-	// Use the planner to generate the plan with randomized execution strategies
-	planner := NewSimplePlanner(mod, PlannerConfig{
-		IsLocal:           true,
-		ConcurrencyChance: 0.25,
-	})
-
-	plan, err := planner.Plan()
-	if err != nil {
-		t.Fatalf("Failed to generate plan: %v", err)
-	}
-
-	t.Log(plan)
-
 	echotest.Require(t, mod.DAG(), filepath.Join("testdata", "basic_dag.txt"))
 }
 
@@ -237,19 +223,6 @@ func TestAndDAG(t *testing.T) {
 	}).And("step 8", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 		return nil
 	})
-
-	// Use the planner to generate the plan
-	planner := NewSimplePlanner(mod, PlannerConfig{
-		IsLocal:           true,
-		ConcurrencyChance: 0.25,
-	})
-
-	plan, err := planner.Plan()
-	if err != nil {
-		t.Fatalf("Failed to generate plan: %v", err)
-	}
-
-	t.Log(plan)
 
 	echotest.Require(t, mod.DAG(), filepath.Join("testdata", "and_dag.txt"))
 }
