@@ -8,24 +8,24 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/util/randutil"
+	"github.com/stretchr/testify/require"
+	"math"
 )
 
 // TestDependencyOrdering is a property based test that constructs stages
-// with randomized chains. Each step is named as {A-Z}:{A-Z}:{A-Z} where the
-// first letter represents the chain, all steps in a chain should have the same first
-// letter. The second letter represents the depth of the step in the chain, all steps
+// with randomized chains. Each step is named as {A-Z}:{1-9}:{1-9} where the
+// first letter represents the chain; all steps in a chain should have the same first
+// letter. The second letter represents the depth of the step in the chain; all steps
 // with a higher letter are dependent on the steps with smaller letters. Finally,
 // the third letter represents steps that are part of the same step group, these are
 // steps that can run concurrently with each other.
 //
 // From this, we can generate random plans, then assert that our plan never attempts to run
-// steps out of order. e.g. It should never run AB before/concurrently AA, but BA before AB is
+// steps out of order. e.g. It should never run A2 before/concurrently A1, but B1 before A2 is
 // allowed.
 func TestDependencyOrdering(t *testing.T) {
 	rng, _ := randutil.NewPseudoRand()
-	// Run property-based test with multiple iterations
 	for iteration := 0; iteration < 10000; iteration++ {
-		// Generate a random test with multiple stages and chains
 		mod := NewTest(fmt.Sprintf("property_test_%d", iteration), rng.Int63())
 
 		stageName := fmt.Sprintf("stage")
@@ -77,7 +77,6 @@ func TestDependencyOrdering(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to generate plan: %v", err)
 		}
-		t.Log(plan.String())
 
 		// Validate dependency ordering for the flat step list
 		validateStepOrdering(t, plan.Steps())
@@ -141,25 +140,28 @@ func validateSingleStep(t *testing.T, stepIndex int, step testStep, maxDepthPerC
 	}
 }
 
-// TestPlanRandomization generates 5 plans from the same test and logs them
-func TestPlanRandomization(t *testing.T) {
-	for i := 0; i < 5; i++ {
+// TestPlanDistribution generates many plans with the same DAG to
+// test our plan generation is uniformly distributed for every legal
+// permutation of steps.
+func TestPlanDistribution(t *testing.T) {
+	planOcurrences := make(map[string]int)
+	for i := 0; i < 10000; i++ {
 		mod := NewTest("randomization test", int64(12345+i))
 
 		stage := mod.NewStage("test stage ", DisableFailureInjection())
 
 		// Create a simple test with a few chains
-		mod.InStage(stage, "step A", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		mod.InStage(stage, "A", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 			return nil
-		}).Then("step B1", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		}).Then("B1", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 			return nil
-		}).And("step B2", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		}).And("B2", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 			return nil
 		})
 
-		mod.InStage(stage, "step 1", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		mod.InStage(stage, "1", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 			return nil
-		}).Then("step 2", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		}).Then("2", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 			return nil
 		})
 
@@ -173,6 +175,45 @@ func TestPlanRandomization(t *testing.T) {
 			t.Fatalf("Failed to generate plan: %v", err)
 		}
 
-		t.Logf("Plan %d:\n%s", i+1, plan.String())
+		var planKey string
+		for _, step := range plan.Steps() {
+			planKey += step.Description()
+		}
+		planOcurrences[planKey]++
 	}
+
+	// 20 possible plan permutations that are legal.
+	require.Equal(t, 20, len(planOcurrences))
+	CheckUniformity(t, planOcurrences)
+}
+
+// Chi square test to check uniform distribution.
+func CheckUniformity(t *testing.T, sample map[string]int) {
+	expectedFreq := float64(10000) / float64(len(sample))
+	chiSquare := 0.0
+
+	for _, observed := range sample {
+		diff := float64(observed) - expectedFreq
+		chiSquare += (diff * diff) / expectedFreq
+	}
+
+	// Degrees of freedom = number of categories - 1
+	degreesOfFreedom := len(sample) - 1
+
+	// Approximate the critical value: χ² ≈ df + sqrt(2*df) * z_α
+	zValue := 1.96 // for p = 0.05 (95% confidence)
+	criticalValue := float64(degreesOfFreedom) + math.Sqrt(2*float64(degreesOfFreedom))*zValue
+
+	t.Logf("Chi-square statistic: %.2f", chiSquare)
+	t.Logf("Degrees of freedom: %d", degreesOfFreedom)
+	t.Logf("Critical value (p=0.05): %.2f", criticalValue)
+	t.Logf("Expected frequency per plan: %.2f", expectedFreq)
+
+	// Print frequency distribution for debugging
+	t.Logf("Plan frequency distribution:")
+	for plan, freq := range sample {
+		t.Logf("  %s: %d", plan, freq)
+	}
+
+	require.Less(t, chiSquare, criticalValue)
 }

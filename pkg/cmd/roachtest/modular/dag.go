@@ -180,7 +180,6 @@ func (g *dagGrid) drawStage(stage Stage, startY int, lastStage bool) [][2]int {
 
 			if rowIdx > 0 {
 				if len(group.Steps) == 1 && g.runes[yConnection-1][groupStartingX+(nodeWidth/2)] == '─' {
-					fmt.Println("case 1")
 					// If we are connecting from one node to one node,
 					// we can draw a simple vertical line down.
 					g.runes[yConnection][groupStartingX+(nodeWidth/2)] = '│'
@@ -189,7 +188,6 @@ func (g *dagGrid) drawStage(stage Stage, startY int, lastStage bool) [][2]int {
 					g.runes[yConnection+3][groupStartingX+(nodeWidth/2)] = '│'
 					g.runes[yConnection+4][groupStartingX+(nodeWidth/2)] = '▼'
 				} else if len(group.Steps) == 1 {
-					fmt.Println("case 2")
 					// If we are connecting from multiple nodes to one node,
 					// we already have convergence lines drawn, so we draw less
 					// vertical lines.
@@ -197,7 +195,6 @@ func (g *dagGrid) drawStage(stage Stage, startY int, lastStage bool) [][2]int {
 					g.runes[yConnection+1][groupStartingX+(nodeWidth/2)] = '│'
 					g.runes[yConnection+2][groupStartingX+(nodeWidth/2)] = '▼'
 				} else if len(group.Steps) > 1 && g.runes[yConnection-1][xConnection] == '─' {
-					fmt.Println("case 3")
 					// If we are connecting from one node to multiple nodes,
 					// we have no convergence lines drawn, so need to draw them here.
 					g.runes[yConnection][xConnection] = '│'
@@ -218,7 +215,6 @@ func (g *dagGrid) drawStage(stage Stage, startY int, lastStage bool) [][2]int {
 						g.runes[yConnection+4][x] = '▼'
 					}
 				} else {
-					fmt.Println("case 4")
 					// If we are connecting from multiple nodes to multiple nodes,
 					// we already have convergence lines drawn, so we draw less
 					// vertical lines.
