@@ -29,7 +29,7 @@ func TestDependencyOrdering(t *testing.T) {
 		mod := NewTest(fmt.Sprintf("property_test_%d", iteration), rng.Int63())
 
 		stageName := fmt.Sprintf("stage")
-		stage := mod.NewStage(stageName, DisableFailureInjection())
+		stage := mod.NewStage(stageName)
 
 		// Generate 1-5 chains per stage
 		numChains := 1 + rng.Intn(5)
@@ -68,10 +68,7 @@ func TestDependencyOrdering(t *testing.T) {
 		}
 
 		// Generate a plan using the planner
-		planner := NewSimplePlanner(mod, PlannerConfig{
-			IsLocal:           true,
-			ConcurrencyChance: 0.5, // 50% chance for more randomization
-		})
+		planner := mod.NewPlanner()
 
 		plan, err := planner.Plan()
 		if err != nil {
@@ -91,7 +88,7 @@ func validateStepOrdering(t *testing.T, steps []testStep) {
 	// Walk through all steps in order
 	for stepIndex, step := range steps {
 		// Handle concurrent steps by examining each sub-step
-		if concurrentStep, ok := step.(*concurrentStep); ok {
+		if concurrentStep, ok := step.StepProtocol.(*concurrentStep); ok {
 			// For concurrent steps, all sub-steps should be at the same depth level
 			// and not violate ordering within their respective chains
 			for _, subStep := range concurrentStep.steps {
@@ -144,11 +141,12 @@ func validateSingleStep(t *testing.T, stepIndex int, step testStep, maxDepthPerC
 // test our plan generation is uniformly distributed for every legal
 // permutation of steps.
 func TestPlanDistribution(t *testing.T) {
-	planOcurrences := make(map[string]int)
+	rng, _ := randutil.NewPseudoRand()
+	planOccurrences := make(map[string]int)
 	for i := 0; i < 10000; i++ {
-		mod := NewTest("randomization test", int64(12345+i))
+		mod := NewTest("randomization test", rng.Int63())
 
-		stage := mod.NewStage("test stage ", DisableFailureInjection())
+		stage := mod.NewStage("test stage ")
 
 		// Create a simple test with a few chains
 		mod.InStage(stage, "A", func(ctx context.Context, l *logger.Logger, h *Helper) error {
@@ -165,10 +163,7 @@ func TestPlanDistribution(t *testing.T) {
 			return nil
 		})
 
-		planner := NewSimplePlanner(mod, PlannerConfig{
-			IsLocal:           true,
-			ConcurrencyChance: 0.25,
-		})
+		planner := mod.NewPlanner()
 
 		plan, err := planner.Plan()
 		if err != nil {
@@ -179,12 +174,12 @@ func TestPlanDistribution(t *testing.T) {
 		for _, step := range plan.Steps() {
 			planKey += step.Description()
 		}
-		planOcurrences[planKey]++
+		planOccurrences[planKey]++
 	}
 
 	// 20 possible plan permutations that are legal.
-	require.Equal(t, 20, len(planOcurrences))
-	CheckUniformity(t, planOcurrences)
+	require.Equal(t, 20, len(planOccurrences))
+	CheckUniformity(t, planOccurrences)
 }
 
 // Chi square test to check uniform distribution.

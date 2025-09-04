@@ -13,7 +13,7 @@ import (
 func TestBasicDAG(t *testing.T) {
 	mod := NewTest("basic plan", 123456)
 
-	baselineStage := mod.NewStage("baseline", DisableFailureInjection())
+	baselineStage := mod.NewStage("baseline")
 	chaosStage := mod.NewStage("chaos")
 
 	// Install prometheus and grafana, then after that is done, start a background loop to scrape metrics.
@@ -64,7 +64,8 @@ func TestBasicDAG(t *testing.T) {
 	mod.AfterTest("TPCC consistency checks", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 		return nil
 	})
-	echotest.Require(t, mod.DAG(), filepath.Join("testdata", "basic_dag.txt"))
+	planner := mod.NewPlanner()
+	echotest.Require(t, planner.DAG(), filepath.Join("testdata", "basic_dag.txt"))
 }
 
 func TestSetupOnlyDAG(t *testing.T) {
@@ -81,7 +82,8 @@ func TestSetupOnlyDAG(t *testing.T) {
 		return nil
 	})
 
-	echotest.Require(t, mod.DAG(), filepath.Join("testdata", "setup_only_dag.txt"))
+	planner := mod.NewPlanner()
+	echotest.Require(t, planner.DAG(), filepath.Join("testdata", "setup_only_dag.txt"))
 }
 
 func TestMVTDAG(t *testing.T) {
@@ -98,7 +100,7 @@ func TestMVTDAG(t *testing.T) {
 		return nil
 	})
 
-	upgradeStage := mod.NewStage("upgrade cluster from \"v24.2.2\" to \"master\"", DisableFailureInjection())
+	upgradeStage := mod.NewStage("upgrade cluster from \"v24.2.2\" to \"master\"")
 	mod.InStage(upgradeStage, "restart system server on node 1 with binary version master", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 		return nil
 	})
@@ -119,7 +121,7 @@ func TestMVTDAG(t *testing.T) {
 		return nil
 	})
 
-	rollbackStage := mod.NewStage("downgrade nodes :1-4 from \"master\" to \"v24.2.2\"", DisableFailureInjection())
+	rollbackStage := mod.NewStage("downgrade nodes :1-4 from \"master\" to \"v24.2.2\"")
 	mod.InStage(rollbackStage, "restart system server on node 1 with binary version v24.2.2", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 		return nil
 	})
@@ -140,7 +142,7 @@ func TestMVTDAG(t *testing.T) {
 		return nil
 	})
 
-	finalizeStage := mod.NewStage("upgrade cluster from \"v24.2.2\" to \"master\"", DisableFailureInjection())
+	finalizeStage := mod.NewStage("upgrade cluster from \"v24.2.2\" to \"master\"")
 	mod.InStage(finalizeStage, "restart system server on node 1 with binary version master", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 		return nil
 	}).And("restart system server on node 2 with binary version master", func(ctx context.Context, l *logger.Logger, h *Helper) error {
@@ -160,14 +162,15 @@ func TestMVTDAG(t *testing.T) {
 		return nil
 	})
 
-	echotest.Require(t, mod.DAG(), filepath.Join("testdata", "mvt_dag.txt"))
+	planner := mod.NewPlanner()
+	echotest.Require(t, planner.DAG(), filepath.Join("testdata", "mvt_dag.txt"))
 }
 
 func TestAndDAG(t *testing.T) {
 	mod := NewTest("and synchronization test", 54321)
 
-	stage := mod.NewStage("stage 1", DisableFailureInjection())
-	stage2 := mod.NewStage("stage 2", DisableFailureInjection())
+	stage := mod.NewStage("stage 1")
+	stage2 := mod.NewStage("stage 2")
 
 	// Setup some initial steps
 	mod.Setup("cluster setup", func(ctx context.Context, l *logger.Logger, h *Helper) error {
@@ -224,7 +227,8 @@ func TestAndDAG(t *testing.T) {
 		return nil
 	})
 
-	echotest.Require(t, mod.DAG(), filepath.Join("testdata", "and_dag.txt"))
+	planner := mod.NewPlanner()
+	echotest.Require(t, planner.DAG(), filepath.Join("testdata", "and_dag.txt"))
 }
 
 func TestAfterTestOnlyDAG(t *testing.T) {
@@ -233,6 +237,6 @@ func TestAfterTestOnlyDAG(t *testing.T) {
 	mod.AfterTest("TPCC consistency checks", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 		return nil
 	})
-
-	echotest.Require(t, mod.DAG(), filepath.Join("testdata", "after_test_only_dag.txt"))
+	planner := mod.NewPlanner()
+	echotest.Require(t, planner.DAG(), filepath.Join("testdata", "after_test_only_dag.txt"))
 }
