@@ -66,6 +66,11 @@ func TestBasicDAG(t *testing.T) {
 	})
 	planner := mod.NewPlanner()
 	echotest.Require(t, planner.DAG(), filepath.Join("testdata", "basic_dag.txt"))
+	plan, err := planner.Plan()
+	if err != nil {
+		t.Fatalf("Failed to generate plan: %v", err)
+	}
+	t.Log(plan.String())
 }
 
 func TestSetupOnlyDAG(t *testing.T) {
