@@ -63,7 +63,7 @@ func (cs *concurrentStep) Description() string {
 	if len(cs.steps) == 1 {
 		return cs.steps[0].Description()
 	}
-	return fmt.Sprintf("run %d steps concurrently: %s", len(cs.steps), cs.label)
+	return cs.label
 }
 
 func (cs *concurrentStep) Run(ctx context.Context, l *logger.Logger, h *Helper) error {

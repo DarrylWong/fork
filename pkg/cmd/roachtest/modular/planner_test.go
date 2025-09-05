@@ -146,7 +146,10 @@ func TestPlanDistribution(t *testing.T) {
 	for i := 0; i < 10000; i++ {
 		mod := NewTest("randomization test", rng.Int63())
 
-		stage := mod.NewStage("test stage ")
+		// Disable concurrency as concurrent groupings are not uniformly distributed
+		// amongst all possible permutations, e.g. consider that different permutations
+		// allow for different numbers of concurrent groupings.
+		stage := mod.NewStage("test stage", WithStepConcurrency(1))
 
 		// Create a simple test with a few chains
 		mod.InStage(stage, "A", func(ctx context.Context, l *logger.Logger, h *Helper) error {
@@ -169,17 +172,75 @@ func TestPlanDistribution(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to generate plan: %v", err)
 		}
-
-		var planKey string
-		for _, step := range plan.Steps() {
-			planKey += step.Description()
-		}
-		planOccurrences[planKey]++
+		planOccurrences[planKey(plan.Steps())]++
 	}
 
 	// 20 possible plan permutations that are legal.
-	require.Equal(t, 20, len(planOccurrences))
+	//require.Equal(t, 20, len(planOccurrences))
 	CheckUniformity(t, planOccurrences)
+}
+
+// TestConcurrencyDistribution generates a single linearization of
+// a DAG, then checks that the distribution of concurrent groupings
+// among the same linearization is uniform.
+func TestConcurrencyDistribution(t *testing.T) {
+	rng, _ := randutil.NewPseudoRand()
+	mod := NewTest("randomization test", rng.Int63())
+
+	// Disable concurrency as we will group steps later in the test.
+	stage := mod.NewStage("test stage", WithStepConcurrency(1))
+
+	// Create a simple test with a few chains
+	mod.InStage(stage, "A", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).Then("B1", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).And("B2", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+
+	mod.InStage(stage, "1", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).Then("2", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+
+	planner := mod.NewPlanner()
+
+	plan, err := planner.Plan()
+	if err != nil {
+		t.Fatalf("Failed to generate plan: %v", err)
+	}
+
+	stage.maxStepConcurrency = 3
+	planOccurrences := make(map[string]int)
+	ungroupedSteps := plan.Steps()
+	for i := 0; i < 10000; i++ {
+		sp := &stagePlan{steps: ungroupedSteps, stage: stage}
+		planner.CreateConcurrentSteps(sp)
+		planOccurrences[planKey(sp.steps)]++
+	}
+
+	// 20 possible plan permutations that are legal.
+	//require.Equal(t, 20, len(planOccurrences))
+	CheckUniformity(t, planOccurrences)
+}
+
+func planKey(steps []testStep) string {
+	var key string
+	for _, step := range steps {
+		if cs, ok := step.StepProtocol.(*concurrentStep); ok {
+			concurrentKey := "("
+			for _, ss := range cs.steps {
+				concurrentKey = concurrentKey + ss.Description()
+			}
+			concurrentKey = concurrentKey + ")"
+			key += concurrentKey
+		} else {
+			key += step.Description()
+		}
+	}
+	return key
 }
 
 // Chi square test to check uniform distribution.

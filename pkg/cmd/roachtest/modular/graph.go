@@ -16,6 +16,8 @@ type Stage struct {
 
 	// Stage options
 	failureInjectionDisabled bool
+	// The maximum number of steps that can be run concurrently in this stage.
+	maxStepConcurrency int
 }
 
 // chain represents a sequence of step groups that must be executed in order.

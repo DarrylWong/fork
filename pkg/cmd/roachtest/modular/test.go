@@ -17,7 +17,8 @@ type Test struct {
 }
 
 type TestOptions struct {
-	isLocal bool
+	defaultStepConcurrency int
+	isLocal                bool
 }
 
 // NewTest creates a new modular test.
@@ -29,10 +30,13 @@ func NewTest(name string, seed int64) *Test {
 		setupStage:     nil,
 		stages:         make([]*Stage, 0),
 		afterTestStage: nil,
+		options: TestOptions{
+			defaultStepConcurrency: 3,
+		},
 	}
 }
 
-// NewPlanner finalizes the DAG (i.e. randomly selects compatible failure injection
+// NewPlanner finalizes the DAG (start.e. randomly selects compatible failure injection
 // operations to run for each stage) and returns a test planner.
 func (t *Test) NewPlanner() TestPlanner {
 	for stageIdx := range t.stages {

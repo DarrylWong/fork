@@ -61,8 +61,9 @@ func (t *Test) AfterTest(stepName string, fn stepFunc, opts ...StepOption) {
 // NewStage creates a new stage for organizing test steps.
 func (t *Test) NewStage(name string, opts ...StageOption) *Stage {
 	stage := &Stage{
-		name:   name,
-		chains: make([]chain, 0),
+		name:               name,
+		chains:             make([]chain, 0),
+		maxStepConcurrency: t.options.defaultStepConcurrency,
 	}
 
 	for _, opt := range opts {
