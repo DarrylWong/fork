@@ -28,8 +28,21 @@ func sanitizeStepName(name string) string {
 	return result
 }
 
-// singleStep implements a basic test step.
-type singleStep struct {
+func NewSingleStep(description string, fn stepFunc, opts ...StepOption) *SingleStep {
+	ss := &SingleStep{
+		description: description,
+		fn:          fn,
+	}
+
+	// Apply step options
+	for _, opt := range opts {
+		opt(ss)
+	}
+	return ss
+}
+
+// SingleStep implements a basic test step.
+type SingleStep struct {
 	description         string
 	fn                  stepFunc
 	background          shouldStop
@@ -37,12 +50,12 @@ type singleStep struct {
 }
 
 // Description returns a human-readable description of the step.
-func (s *singleStep) Description() string {
+func (s *SingleStep) Description() string {
 	return s.description
 }
 
 // Run executes the step function.
-func (s *singleStep) Run(ctx context.Context, l *logger.Logger, h *Helper) error {
+func (s *SingleStep) Run(ctx context.Context, l *logger.Logger, h *Helper) error {
 	return s.fn(ctx, l, h)
 }
 

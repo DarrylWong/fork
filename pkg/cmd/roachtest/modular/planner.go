@@ -25,6 +25,7 @@ func (p *TestPlanner) Plan() (*TestPlan, error) {
 		p.CreateConcurrentSteps(&plan)
 		stagePlans = append(stagePlans, plan)
 	}
+	p.assignStepIDs(stagePlans)
 
 	return &TestPlan{
 		seed:       p.seed,
@@ -52,12 +53,12 @@ func (p *TestPlanner) generateStagePlan(s Stage) stagePlan {
 	}
 	isValidSwap := func(i, j testStep) bool {
 		// We can swap the two steps if they are in different chains.
-		if i.order.chainID != j.order.chainID {
+		if i.position.chainID != j.position.chainID {
 			return true
 		}
 		// We can swap the two steps if they are part of the same
 		// step group.
-		return i.order.depth == j.order.depth
+		return i.position.depth == j.position.depth
 	}
 
 	// Our randomization mixes in n^3*log(n) iterations.
@@ -88,19 +89,15 @@ func (p *TestPlanner) generateStagePlan(s Stage) stagePlan {
 // not necessarily uniform over all valid permutations of the DAG.
 // The latter is more difficult to achieve as different linearizations
 // may have different numbers of valid concurrent groupings, which would
-// require computing all possible linearizations in order to weight groupings.
+// require computing all possible linearizations in position to weight groupings.
 func (p *TestPlanner) CreateConcurrentSteps(stagePlan *stagePlan) {
 	maxConc := stagePlan.stage.maxStepConcurrency
 	if maxConc <= 1 || len(stagePlan.steps) <= 1 {
 		return
 	}
 
-	// Use a local RNG so the caller’s RNG state isn’t perturbed by this routine.
-	rng := rand.New(rand.NewSource(p.rng.Int63()))
-	n := len(stagePlan.steps)
-
 	for {
-		spans, valid := randomSpans(rng, n, maxConc)
+		spans, valid := randomSpans(p.rng, len(stagePlan.steps), maxConc)
 		if !valid {
 			// Generated spans were invalid (i.e. one was too large), try again.
 			continue
@@ -162,15 +159,15 @@ func (p *TestPlanner) isValidConcurrentGroups(steps []testStep, spans []stepSpan
 		}
 		for idx := sp.start; idx <= sp.end; idx++ {
 			step := steps[idx]
-			if ss, ok := step.StepProtocol.(*singleStep); ok {
+			if ss, ok := step.StepProtocol.(*SingleStep); ok {
 				if ss.concurrencyDisabled {
 					return false
 				}
 			}
-			if d, ok := chains[step.order.chainID]; ok && d != step.order.depth {
+			if d, ok := chains[step.position.chainID]; ok && d != step.position.depth {
 				return false
 			}
-			chains[step.order.chainID] = step.order.depth
+			chains[step.position.chainID] = step.position.depth
 		}
 	}
 	return true
@@ -198,6 +195,24 @@ func (p *TestPlanner) buildConcurrentSteps(originalSteps []testStep, spans []ste
 	return result
 }
 
+func (p *TestPlanner) assignStepIDs(stagePlans []stagePlan) {
+	stepID := 1
+	for _, sp := range stagePlans {
+		for stepIdx := range sp.steps {
+			step := &sp.steps[stepIdx]
+			if _, ok := step.StepProtocol.(*concurrentStep); ok {
+				for i := range step.StepProtocol.(*concurrentStep).steps {
+					step.StepProtocol.(*concurrentStep).steps[i].id = stepID
+					stepID++
+				}
+			} else {
+				sp.steps[stepIdx].id = stepID
+				stepID++
+			}
+		}
+	}
+}
+
 // sequentialRunStep is a "meta-step" that indicates that a sequence
 // of steps are to be executed sequentially. The default test runner
 // already runs steps sequentially. This meta-step exists primarily as
@@ -209,7 +224,6 @@ type stagePlan struct {
 }
 
 type TestPlan struct {
-	name       string
 	seed       int64
 	rng        *rand.Rand
 	stagePlans []stagePlan
@@ -258,9 +272,7 @@ func (p *TestPlan) String() string {
 		lines = append(lines, fmt.Sprintf("%-20s%v", titleWithColon, val))
 	}
 
-	addLine("Test Plan", p.name)
 	addLine("Seed", p.seed)
-	addLine("Stages", len(p.stagePlans))
 
 	return fmt.Sprintf(
 		"%s\nPlan:\n%s",
@@ -279,15 +291,15 @@ func (p *TestPlan) prettyPrintStep(out *strings.Builder, step testStep, prefix s
 		}
 	}
 
-	writeSingle := func(description string) {
-		out.WriteString(fmt.Sprintf("%s %s\n", prefix, description))
+	writeSingle := func(description string, id int) {
+		out.WriteString(fmt.Sprintf("%s %s (%d)\n", prefix, description, id))
 	}
 
 	// Handle different step types
 	if concurrentStep, ok := step.StepProtocol.(*concurrentStep); ok {
 		writeNested(concurrentStep.Description(), concurrentStep.steps)
 	} else {
-		writeSingle(step.Description())
+		writeSingle(step.Description(), step.id)
 	}
 }
 

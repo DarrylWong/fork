@@ -12,18 +12,18 @@ func WithStepConcurrency(concurrency int) StageOption {
 	}
 }
 
-// StepOption configures a singleStep.
-type StepOption func(*singleStep)
+// StepOption configures a SingleStep.
+type StepOption func(*SingleStep)
 
 // InBackground configures a step to run in the background.
 func InBackground() StepOption {
-	return func(step *singleStep) {
+	return func(step *SingleStep) {
 		step.background = make(shouldStop)
 	}
 }
 
 func DisableConcurrency() StepOption {
-	return func(step *singleStep) {
+	return func(step *SingleStep) {
 		step.concurrencyDisabled = true
 	}
 }

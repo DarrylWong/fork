@@ -44,7 +44,7 @@ func newModTest(options ...TestOption) *Test {
 // steps that can run concurrently with each other.
 //
 // From this, we can generate random plans, then assert that our plan never attempts to run
-// steps out of order. e.g. It should never run A2 before/concurrently A1, but B1 before A2 is
+// steps out of position. e.g. It should never run A2 before/concurrently A1, but B1 before A2 is
 // allowed.
 func TestDependencyOrdering(t *testing.T) {
 	rng, _ := randutil.NewPseudoRand()
@@ -108,7 +108,7 @@ func validateStepOrdering(t *testing.T, steps []testStep) {
 	// Keep track of the highest depth seen for each chain
 	maxDepthPerChain := make(map[string]int)
 
-	// Walk through all steps in order
+	// Walk through all steps in position
 	for stepIndex, step := range steps {
 		// Handle concurrent steps by examining each sub-step
 		if concurrentStep, ok := step.StepProtocol.(*concurrentStep); ok {
