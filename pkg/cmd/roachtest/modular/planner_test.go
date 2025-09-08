@@ -107,9 +107,6 @@ func validateSingleStep(t *testing.T, stepIndex int, step testStep, maxDepthPerC
 
 	// Parse step name to extract chain and depth
 	parts := strings.Split(stepName, ":")
-	if len(parts) != 3 {
-		return // Skip steps that don't follow our naming convention
-	}
 
 	chainID := parts[0]
 	depthStr := parts[1]
@@ -117,10 +114,7 @@ func validateSingleStep(t *testing.T, stepIndex int, step testStep, maxDepthPerC
 	// Convert depth to integer for proper comparison
 	depth := 0
 	if len(depthStr) > 0 {
-		depth = int(depthStr[0] - '0') // Convert character to number
-		if depth < 0 || depth > 9 {
-			return // Invalid depth format
-		}
+		depth = int(depthStr[0] - '0')
 	}
 
 	// Check if we've seen a higher depth for this chain already
@@ -193,11 +187,54 @@ func TestConcurrencyDistribution(t *testing.T) {
 	// Create a simple test with a few chains
 	mod.InStage(stage, "A", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 		return nil
-	}).Then("B1", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+	}).Then("B-1", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 		return nil
-	}).And("B2", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+	}).And("B-2", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 		return nil
 	})
+
+	mod.InStage(stage, "1", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).Then("2", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	})
+
+	planner := mod.NewPlanner()
+
+	plan, err := planner.Plan()
+	if err != nil {
+		t.Fatalf("Failed to generate plan: %v", err)
+	}
+
+	stage.maxStepConcurrency = 3
+	planOccurrences := make(map[string]int)
+	ungroupedSteps := plan.Steps()
+	for i := 0; i < 10000; i++ {
+		sp := &stagePlan{steps: ungroupedSteps, stage: stage}
+		planner.CreateConcurrentSteps(sp)
+		planOccurrences[planKey(sp.steps)]++
+	}
+
+	// 20 possible plan permutations that are legal.
+	//require.Equal(t, 20, len(planOccurrences))
+	CheckUniformity(t, planOccurrences)
+}
+
+func TestConcurrencyDistributionWithDisabledSteps(t *testing.T) {
+	rng, _ := randutil.NewPseudoRand()
+	mod := NewTest("randomization test", rng.Int63())
+
+	// Disable concurrency as we will group steps later in the test.
+	stage := mod.NewStage("test stage", WithStepConcurrency(1))
+
+	// Create a simple test with a few chains
+	mod.InStage(stage, "A", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).Then("B-1", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}).And("B-2", func(ctx context.Context, l *logger.Logger, h *Helper) error {
+		return nil
+	}, DisableConcurrency())
 
 	mod.InStage(stage, "1", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 		return nil

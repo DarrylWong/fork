@@ -158,7 +158,10 @@ func (p *TestPlanner) isValidConcurrentGroups(steps []testStep, spans []stepSpan
 	// - if two steps are in the same chain, they must be in the same step group (depth)
 	for _, sp := range spans {
 		chains := make(map[int]int)
-		for idx := sp.start; idx < sp.end; idx++ {
+		if sp.Size() == 1 {
+			continue
+		}
+		for idx := sp.start; idx <= sp.end; idx++ {
 			step := steps[idx]
 			if ss, ok := step.StepProtocol.(*singleStep); ok {
 				if ss.concurrencyDisabled {
