@@ -11,7 +11,7 @@ import (
 
 // TestBasicDAG tests the DAG generation using an echo test.
 func TestBasicDAG(t *testing.T) {
-	mod := NewTest("basic plan", 123456)
+	mod := newModTest()
 
 	baselineStage := mod.NewStage("baseline")
 	chaosStage := mod.NewStage("chaos")
@@ -74,7 +74,7 @@ func TestBasicDAG(t *testing.T) {
 }
 
 func TestSetupOnlyDAG(t *testing.T) {
-	mod := NewTest("basic plan", 12345)
+	mod := newModTest()
 
 	// Install prometheus and grafana, then after that is done, start a background loop to scrape metrics.
 	mod.Setup("installing prom" /* step name */, func(ctx context.Context, l *logger.Logger, h *Helper) error {
@@ -92,7 +92,7 @@ func TestSetupOnlyDAG(t *testing.T) {
 }
 
 func TestMVTDAG(t *testing.T) {
-	mod := NewTest("mixed version plan", 12345)
+	mod := newModTest()
 
 	// Cluster init steps are done sequentially.
 	mod.Setup("install fixtures for version \"v24.2.2\"" /* step name */, func(ctx context.Context, l *logger.Logger, h *Helper) error {
@@ -172,7 +172,7 @@ func TestMVTDAG(t *testing.T) {
 }
 
 func TestAndDAG(t *testing.T) {
-	mod := NewTest("and synchronization test", 54321)
+	mod := newModTest()
 
 	stage := mod.NewStage("stage 1")
 	stage2 := mod.NewStage("stage 2")
@@ -237,7 +237,7 @@ func TestAndDAG(t *testing.T) {
 }
 
 func TestAfterTestOnlyDAG(t *testing.T) {
-	mod := NewTest("basic plan", 12345)
+	mod := newModTest()
 
 	mod.AfterTest("TPCC consistency checks", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 		return nil

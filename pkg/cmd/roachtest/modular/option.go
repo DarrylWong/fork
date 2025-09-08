@@ -1,5 +1,7 @@
 package modular
 
+type TestOption func(options *TestOptions)
+
 // StageOption configures a Stage.
 type StageOption func(*Stage)
 

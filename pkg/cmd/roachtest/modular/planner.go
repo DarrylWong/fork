@@ -8,7 +8,6 @@ import (
 )
 
 type TestPlanner struct {
-	name   string
 	seed   int64
 	rng    *rand.Rand
 	stages []Stage
@@ -28,7 +27,6 @@ func (p *TestPlanner) Plan() (*TestPlan, error) {
 	}
 
 	return &TestPlan{
-		name:       p.name,
 		seed:       p.seed,
 		stagePlans: stagePlans,
 	}, nil

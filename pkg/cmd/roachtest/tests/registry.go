@@ -170,6 +170,7 @@ func RegisterTests(r registry.Registry) {
 	registerVectorIndex(r)
 	registerYCSB(r)
 	registerDeclarativeSchemaChangerJobCompatibilityInMixedVersion(r)
+	registerModular(r)
 	registerMultiRegionMixedVersion(r)
 	registerMultiRegionSystemDatabase(r)
 	registerSqlStatsMixedVersion(r)
