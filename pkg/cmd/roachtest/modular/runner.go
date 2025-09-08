@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
@@ -23,22 +22,18 @@ var (
 type Runner struct {
 	testPlan *TestPlan
 	helper   *Helper
-	// stepIDCounter tracks unique IDs across all steps
-	stepIDCounter *atomic.Int64
 }
 
 // NewRunner creates a new runner for executing a test plan.
 func NewRunner(testPlan *TestPlan) *Runner {
-	var counter atomic.Int64
 	return &Runner{
-		testPlan:      testPlan,
-		helper:        &Helper{rng: testPlan.rng},
-		stepIDCounter: &counter,
+		testPlan: testPlan,
+		helper:   &Helper{rng: testPlan.rng},
 	}
 }
 
 // RunTestPlan executes the test plan using the provided roachtest.Test interface.
-// It logs the DAG and test plan, then executes all steps in order.
+// It logs the DAG and test plan, then executes all steps in position.
 func RunTestPlan(ctx context.Context, t test.Test, testPlan *TestPlan) error {
 	runner := NewRunner(testPlan)
 	return runner.Run(ctx, t)
@@ -49,8 +44,6 @@ func (r *Runner) Run(ctx context.Context, t test.Test) error {
 	l := t.L()
 
 	// Log the test plan details
-	l.Printf("Starting modular test execution")
-	l.Printf("Test Plan: %s", r.testPlan.name)
 	l.Printf("Seed: %d", r.testPlan.seed)
 	l.Printf("Number of stages: %d", len(r.testPlan.stagePlans))
 
@@ -113,23 +106,22 @@ func (r *Runner) executeSteps(ctx context.Context, l *logger.Logger) error {
 // executeStage executes all steps within a single stage.
 func (r *Runner) executeStage(ctx context.Context, l *logger.Logger, stagePlan stagePlan) error {
 	for _, step := range stagePlan.steps {
-		stepID := r.stepIDCounter.Add(1)
-		stepLogger, err := r.loggerForStep(l, int(stepID), step.Description())
+		stepLogger, err := r.loggerForStep(l, step.id, step.Description())
 		if err != nil {
 			return fmt.Errorf("failed to create step logger: %w", err)
 		}
 
-		r.logStep("STARTING", int(stepID), step.Description(), stepLogger)
+		r.logStep("STARTING", step.id, step.Description(), stepLogger)
 		start := time.Now()
 
 		err = step.Run(ctx, stepLogger, r.helper)
 		if err != nil {
-			return r.stepError(ctx, err, int(stepID), step.Description(), stepLogger)
+			return r.stepError(ctx, err, step.id, step.Description(), stepLogger)
 		}
 
 		duration := time.Since(start)
 		prefix := fmt.Sprintf("FINISHED [%s]", duration)
-		r.logStep(prefix, int(stepID), step.Description(), stepLogger)
+		r.logStep(prefix, step.id, step.Description(), stepLogger)
 	}
 
 	return nil
@@ -137,7 +129,7 @@ func (r *Runner) executeStage(ctx context.Context, l *logger.Logger, stagePlan s
 
 // logStage logs stage start/finish messages with consistent formatting.
 func (r *Runner) logStage(prefix, stageName string, l *logger.Logger) {
-	dashes := strings.Repeat("-", 10)
+	dashes := strings.Repeat("=", 10)
 	l.Printf("%[1]s %s: %s %[1]s", dashes, prefix, stageName)
 }
 

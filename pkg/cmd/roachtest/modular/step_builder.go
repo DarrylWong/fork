@@ -7,18 +7,8 @@ type StepBuilder struct {
 }
 
 func newTestStep(stepName string, fn stepFunc, opts ...StepOption) testStep {
-	ss := &singleStep{
-		description: stepName,
-		fn:          fn,
-	}
-
-	// Apply step options
-	for _, opt := range opts {
-		opt(ss)
-	}
-
 	return testStep{
-		StepProtocol: ss,
+		StepProtocol: NewSingleStep(stepName, fn, opts...),
 	}
 }
 

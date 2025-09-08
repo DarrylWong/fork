@@ -85,7 +85,7 @@ func AssignStepOrder(s *Stage) {
 	for chainID, ch := range s.chains {
 		for depth, group := range ch {
 			for stepIdx := range group {
-				group[stepIdx].order = stepOrder{
+				group[stepIdx].position = stepPosition{
 					chainID: chainID,
 					depth:   depth,
 				}

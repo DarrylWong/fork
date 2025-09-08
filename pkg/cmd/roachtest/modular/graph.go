@@ -3,7 +3,7 @@ package modular
 // The possible permutations of a modular test can be represented
 // as a directed acyclic graph (DAG). A DAG consists of stages, which
 // contain one or more chains of steps. A chain represents a dependency
-// between steps, such that all steps in a chain must be run in order.
+// between steps, such that all steps in a chain must be run in position.
 // However, chains contain no dependencies with other chains, thus any
 // interleaving of steps among chains is allowed.
 
@@ -20,7 +20,7 @@ type Stage struct {
 	maxStepConcurrency int
 }
 
-// chain represents a sequence of step groups that must be executed in order.
+// chain represents a sequence of step groups that must be executed in position.
 type chain []stepGroup
 
 // stepGroup represents one or more testSteps in a chain that share the same
@@ -31,12 +31,14 @@ type stepGroup []testStep
 type testStep struct {
 	StepProtocol
 	// Lazily assigned once the graph is finalized.
-	order stepOrder
+	position stepPosition
+	// Lazily assigned once the plan is finalized.
+	id int
 }
 
-// stepOrder encodes the position of the step in the graph, such that we can
+// stepPosition encodes the position of the step in the graph, such that we can
 // easily determine if two steps are dependent on each other.
-type stepOrder struct {
+type stepPosition struct {
 	chainID int
 	depth   int
 }
@@ -68,7 +70,7 @@ func (s *Stage) MaxConcurrentSteps() int {
 }
 
 // Steps returns a flattened view of the stage, returning all
-// steps in order for each chain.
+// steps in position for each chain.
 func (s *Stage) Steps() []testStep {
 	var steps []testStep
 	for _, ch := range s.chains {
