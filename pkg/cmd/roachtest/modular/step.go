@@ -3,8 +3,10 @@ package modular
 import (
 	"context"
 	"fmt"
-	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"strings"
+
+	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
+	"github.com/cockroachdb/cockroach/pkg/util/ctxgroup"
 )
 
 // stepFunc is the signature for user-provided test steps.
@@ -72,37 +74,24 @@ func (cs *concurrentStep) Run(ctx context.Context, l *logger.Logger, h *Helper) 
 		return cs.steps[0].Run(ctx, l, h)
 	}
 
-	// Multiple steps, run them concurrently
-	errCh := make(chan error, len(cs.steps))
+	// Multiple steps, run them concurrently using ctxgroup
+	group := ctxgroup.WithContext(ctx)
 
 	for i, step := range cs.steps {
-		go func(stepIndex int, s testStep) {
-			stepLogger, err := l.ChildLogger(fmt.Sprintf("step_%d_%s", stepIndex, sanitizeStepName(s.Description())))
+		group.GoCtx(func(ctx context.Context) error {
+			stepLogger, err := l.ChildLogger(fmt.Sprintf("step_%d_%s", i, sanitizeStepName(step.Description())))
 			if err != nil {
-				errCh <- fmt.Errorf("failed to create logger for step %d: %w", stepIndex, err)
-				return
+				return fmt.Errorf("failed to create logger for step %d: %w", i, err)
 			}
 
-			err = s.Run(ctx, stepLogger, h)
+			err = step.Run(ctx, stepLogger, h)
 			if err != nil {
-				errCh <- fmt.Errorf("step %d (%s) failed: %w", stepIndex, s.Description(), err)
-			} else {
-				errCh <- nil
+				return fmt.Errorf("step %d (%s) failed: %w", i, step.Description(), err)
 			}
-		}(i, step)
+			return nil
+		})
 	}
 
 	// Wait for all steps to complete
-	var errors []error
-	for i := 0; i < len(cs.steps); i++ {
-		if err := <-errCh; err != nil {
-			errors = append(errors, err)
-		}
-	}
-
-	if len(errors) > 0 {
-		return fmt.Errorf("concurrent step failed with %d errors: %v", len(errors), errors)
-	}
-
-	return nil
+	return group.Wait()
 }

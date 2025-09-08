@@ -9,8 +9,31 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/util/randutil"
 	"github.com/stretchr/testify/require"
+	"io"
 	"math"
 )
+
+func newModTest(options ...TestOption) *Test {
+	nilLogger := func() *logger.Logger {
+		cfg := logger.Config{
+			Stdout: io.Discard,
+			Stderr: io.Discard,
+		}
+		l, err := cfg.NewLogger("" /* path */)
+		if err != nil {
+			panic(err)
+		}
+
+		return l
+	}()
+
+	test := NewTest(context.Background(), nilLogger, nil, nil)
+	for _, opt := range options {
+		opt(&test.options)
+	}
+
+	return test
+}
 
 // TestDependencyOrdering is a property based test that constructs stages
 // with randomized chains. Each step is named as {A-Z}:{1-9}:{1-9} where the
@@ -26,7 +49,7 @@ import (
 func TestDependencyOrdering(t *testing.T) {
 	rng, _ := randutil.NewPseudoRand()
 	for iteration := 0; iteration < 10000; iteration++ {
-		mod := NewTest(fmt.Sprintf("property_test_%d", iteration), rng.Int63())
+		mod := newModTest()
 
 		stageName := fmt.Sprintf("stage")
 		stage := mod.NewStage(stageName)
@@ -135,10 +158,9 @@ func validateSingleStep(t *testing.T, stepIndex int, step testStep, maxDepthPerC
 // test our plan generation is uniformly distributed for every legal
 // permutation of steps.
 func TestPlanDistribution(t *testing.T) {
-	rng, _ := randutil.NewPseudoRand()
 	planOccurrences := make(map[string]int)
 	for i := 0; i < 10000; i++ {
-		mod := NewTest("randomization test", rng.Int63())
+		mod := newModTest()
 
 		// Disable concurrency as concurrent groupings are not uniformly distributed
 		// amongst all possible permutations, e.g. consider that different permutations
@@ -178,8 +200,7 @@ func TestPlanDistribution(t *testing.T) {
 // a DAG, then checks that the distribution of concurrent groupings
 // among the same linearization is uniform.
 func TestConcurrencyDistribution(t *testing.T) {
-	rng, _ := randutil.NewPseudoRand()
-	mod := NewTest("randomization test", rng.Int63())
+	mod := newModTest()
 
 	// Disable concurrency as we will group steps later in the test.
 	stage := mod.NewStage("test stage", WithStepConcurrency(1))
@@ -221,8 +242,7 @@ func TestConcurrencyDistribution(t *testing.T) {
 }
 
 func TestConcurrencyDistributionWithDisabledSteps(t *testing.T) {
-	rng, _ := randutil.NewPseudoRand()
-	mod := NewTest("randomization test", rng.Int63())
+	mod := newModTest()
 
 	// Disable concurrency as we will group steps later in the test.
 	stage := mod.NewStage("test stage", WithStepConcurrency(1))

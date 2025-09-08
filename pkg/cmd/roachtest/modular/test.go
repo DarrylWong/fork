@@ -1,12 +1,15 @@
 package modular
 
-import "math/rand"
+import (
+	"context"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
+	"github.com/cockroachdb/cockroach/pkg/util/randutil"
+)
 
 // Test represents a modular test definition.
 type Test struct {
-	name string
-	seed int64
-	rng  *rand.Rand
 	// setupStage is a special stage in the plan used for initializing the test.
 	// Steps are run sequentially as declared, and no failure injection is attempted.
 	setupStage *Stage
@@ -22,11 +25,13 @@ type TestOptions struct {
 }
 
 // NewTest creates a new modular test.
-func NewTest(name string, seed int64) *Test {
+func NewTest(
+	ctx context.Context,
+	l *logger.Logger,
+	c cluster.Cluster,
+	crdbNodes option.NodeListOption,
+) *Test {
 	return &Test{
-		name:           name,
-		seed:           seed,
-		rng:            rand.New(rand.NewSource(seed)),
 		setupStage:     nil,
 		stages:         make([]*Stage, 0),
 		afterTestStage: nil,
@@ -56,10 +61,11 @@ func (t *Test) NewPlanner() TestPlanner {
 		combinedStages = append(combinedStages, *t.afterTestStage)
 	}
 
+	rng, seed := randutil.NewLockedPseudoRand()
+
 	return TestPlanner{
-		name:   t.name,
-		seed:   t.seed,
-		rng:    t.rng,
+		seed:   seed,
+		rng:    rng,
 		stages: combinedStages,
 	}
 }

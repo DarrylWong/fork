@@ -171,6 +171,7 @@ func RegisterTests(r registry.Registry) {
 	registerValidateSystemSchemaAfterVersionUpgradeSeparateProcess(r)
 	registerYCSB(r)
 	registerDeclarativeSchemaChangerJobCompatibilityInMixedVersion(r)
+	registerModular(r)
 	registerMultiRegionMixedVersion(r)
 	registerMultiRegionSystemDatabase(r)
 	registerSqlStatsMixedVersion(r)
