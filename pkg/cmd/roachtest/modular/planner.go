@@ -28,6 +28,7 @@ func (p *TestPlanner) Plan() (*TestPlan, error) {
 
 	return &TestPlan{
 		seed:       p.seed,
+		rng:        p.rng,
 		stagePlans: stagePlans,
 	}, nil
 }
@@ -210,6 +211,7 @@ type stagePlan struct {
 type TestPlan struct {
 	name       string
 	seed       int64
+	rng        *rand.Rand
 	stagePlans []stagePlan
 }
 
@@ -294,4 +296,8 @@ func treeBranchString(idx, sliceLen int) string {
 		return lastBranchString
 	}
 	return branchString
+}
+
+func (p *TestPlan) newRNGFromRNG() *rand.Rand {
+	return rand.New(rand.NewSource(p.rng.Int63()))
 }

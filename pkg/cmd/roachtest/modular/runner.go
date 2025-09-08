@@ -3,24 +3,37 @@ package modular
 import (
 	"context"
 	"fmt"
-	"math/rand"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 )
 
+var (
+	// everything that is not an alphanum or a few special characters
+	invalidChars = regexp.MustCompile(`[^a-zA-Z0-9 \-_.]`)
+)
+
 // Runner executes a generated test plan from the modular framework.
 type Runner struct {
 	testPlan *TestPlan
 	helper   *Helper
+	// stepIDCounter tracks unique IDs across all steps
+	stepIDCounter *atomic.Int64
 }
 
 // NewRunner creates a new runner for executing a test plan.
 func NewRunner(testPlan *TestPlan) *Runner {
+	var counter atomic.Int64
 	return &Runner{
-		testPlan: testPlan,
-		helper:   &Helper{rng: testPlan.rng()},
+		testPlan:      testPlan,
+		helper:        &Helper{rng: testPlan.rng},
+		stepIDCounter: &counter,
 	}
 }
 
@@ -75,21 +88,22 @@ func (r *Runner) executeSteps(ctx context.Context, l *logger.Logger) error {
 			stageName = fmt.Sprintf("stage %d", stageIdx+1)
 		}
 
-		stageLogger, err := l.ChildLogger(fmt.Sprintf("stage_%d_%s", stageIdx, sanitizeStepName(stageName)))
+		stageLogger, err := r.loggerForStage(l, stageIdx, stageName)
 		if err != nil {
 			return fmt.Errorf("failed to create stage logger: %w", err)
 		}
 
-		stageLogger.Printf("Starting stage: %s", stageName)
+		r.logStage("STARTING", stageName, stageLogger)
 		start := time.Now()
 
 		err = r.executeStage(ctx, stageLogger, stagePlan)
 		if err != nil {
-			return fmt.Errorf("stage %s failed: %w", stageName, err)
+			return r.stageError(ctx, err, stageName, stageLogger)
 		}
 
 		duration := time.Since(start)
-		stageLogger.Printf("Stage %s completed successfully in %v", stageName, duration)
+		prefix := fmt.Sprintf("FINISHED [%s]", duration)
+		r.logStage(prefix, stageName, stageLogger)
 	}
 
 	l.Printf("All stages completed successfully")
@@ -98,29 +112,95 @@ func (r *Runner) executeSteps(ctx context.Context, l *logger.Logger) error {
 
 // executeStage executes all steps within a single stage.
 func (r *Runner) executeStage(ctx context.Context, l *logger.Logger, stagePlan stagePlan) error {
-	for stepIdx, step := range stagePlan.steps {
-		stepLogger, err := l.ChildLogger(fmt.Sprintf("step_%d_%s", stepIdx, sanitizeStepName(step.Description())))
+	for _, step := range stagePlan.steps {
+		stepID := r.stepIDCounter.Add(1)
+		stepLogger, err := r.loggerForStep(l, int(stepID), step.Description())
 		if err != nil {
 			return fmt.Errorf("failed to create step logger: %w", err)
 		}
 
-		stepLogger.Printf("Starting step: %s", step.Description())
+		r.logStep("STARTING", int(stepID), step.Description(), stepLogger)
 		start := time.Now()
 
 		err = step.Run(ctx, stepLogger, r.helper)
 		if err != nil {
-			return fmt.Errorf("step %s failed: %w", step.Description(), err)
+			return r.stepError(ctx, err, int(stepID), step.Description(), stepLogger)
 		}
 
 		duration := time.Since(start)
-		stepLogger.Printf("Step %s completed successfully in %v", step.Description(), duration)
+		prefix := fmt.Sprintf("FINISHED [%s]", duration)
+		r.logStep(prefix, int(stepID), step.Description(), stepLogger)
 	}
 
 	return nil
 }
 
-// rng returns the random number generator from the test plan.
-func (p *TestPlan) rng() *rand.Rand {
-	// Since TestPlan doesn't directly contain an RNG, we'll create one from the seed
-	return rand.New(rand.NewSource(p.seed))
+// logStage logs stage start/finish messages with consistent formatting.
+func (r *Runner) logStage(prefix, stageName string, l *logger.Logger) {
+	dashes := strings.Repeat("-", 10)
+	l.Printf("%[1]s %s: %s %[1]s", dashes, prefix, stageName)
+}
+
+// logStep logs step start/finish messages with consistent formatting.
+func (r *Runner) logStep(prefix string, stepID int, stepDesc string, l *logger.Logger) {
+	dashes := strings.Repeat("-", 10)
+	l.Printf("%[1]s %s (%d): %s %[1]s", dashes, prefix, stepID, stepDesc)
+}
+
+// loggerForStage creates a logger instance for a stage.
+func (r *Runner) loggerForStage(parent *logger.Logger, stageIdx int, stageName string) (*logger.Logger, error) {
+	name := invalidChars.ReplaceAllString(strings.ToLower(stageName), "")
+	name = fmt.Sprintf("stage_%d_%s", stageIdx, name)
+	return parent.ChildLogger(name)
+}
+
+// loggerForStep creates a logger instance for a step, similar to mixed-version runner.
+func (r *Runner) loggerForStep(parent *logger.Logger, stepID int, stepDesc string) (*logger.Logger, error) {
+	name := invalidChars.ReplaceAllString(strings.ToLower(stepDesc), "")
+	name = fmt.Sprintf("%d_%s", stepID, name)
+	return parent.ChildLogger(name)
+}
+
+// stepError generates a detailed error for step failures.
+func (r *Runner) stepError(_ context.Context, err error, stepID int, stepDesc string, l *logger.Logger) error {
+	stepErr := fmt.Errorf("modular test failure while running step %d (%s): %w", stepID, stepDesc, err)
+
+	// Log the error for convenience
+	l.Printf("Step failed: %+v", stepErr)
+
+	// Rename the log file to indicate failure
+	if renameErr := r.renameFailedLogger(l); renameErr != nil {
+		l.Printf("could not rename failed step logger: %v", renameErr)
+	}
+
+	return stepErr
+}
+
+// stageError generates a detailed error for stage failures.
+func (r *Runner) stageError(_ context.Context, err error, stageName string, l *logger.Logger) error {
+	stageErr := fmt.Errorf("modular test failure while running stage %s: %w", stageName, err)
+
+	// Log the error for convenience
+	l.Printf("Stage failed: %+v", stageErr)
+
+	// Rename the log file to indicate failure
+	if renameErr := r.renameFailedLogger(l); renameErr != nil {
+		l.Printf("could not rename failed stage logger: %v", renameErr)
+	}
+
+	return stageErr
+}
+
+// renameFailedLogger renames the log file to include "FAILED" prefix.
+func (r *Runner) renameFailedLogger(l *logger.Logger) error {
+	if l.File == nil {
+		return nil
+	}
+
+	currentFileName := l.File.Name()
+	newLogName := filepath.Join(
+		filepath.Dir(currentFileName),
+		"FAILED_"+filepath.Base(currentFileName),
+	)
+	return os.Rename(currentFileName, newLogName)
 }
