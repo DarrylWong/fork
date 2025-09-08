@@ -19,3 +19,9 @@ func InBackground() StepOption {
 		step.background = make(shouldStop)
 	}
 }
+
+func DisableConcurrency() StepOption {
+	return func(step *singleStep) {
+		step.concurrencyDisabled = true
+	}
+}
