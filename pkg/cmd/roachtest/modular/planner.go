@@ -1,16 +1,27 @@
 package modular
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"math/rand"
 	"strings"
+
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 )
 
 type TestPlanner struct {
-	seed   int64
-	rng    *rand.Rand
-	stages []Stage
+	seed      int64
+	rng       *rand.Rand
+	stages    []Stage
+	
+	// Test execution context
+	ctx       context.Context
+	logger    *logger.Logger
+	cluster   cluster.Cluster
+	crdbNodes option.NodeListOption
 }
 
 // DAG generates a directed acyclic graph representation of all test steps and their dependencies.
@@ -31,6 +42,10 @@ func (p *TestPlanner) Plan() (*TestPlan, error) {
 		seed:       p.seed,
 		rng:        p.rng,
 		stagePlans: stagePlans,
+		ctx:        p.ctx,
+		logger:     p.logger,
+		cluster:    p.cluster,
+		crdbNodes:  p.crdbNodes,
 	}, nil
 }
 
@@ -227,6 +242,12 @@ type TestPlan struct {
 	seed       int64
 	rng        *rand.Rand
 	stagePlans []stagePlan
+	
+	// Test execution context
+	ctx       context.Context
+	logger    *logger.Logger
+	cluster   cluster.Cluster
+	crdbNodes option.NodeListOption
 }
 
 func (p *TestPlan) Steps() []testStep {
