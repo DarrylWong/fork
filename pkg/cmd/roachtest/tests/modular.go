@@ -59,56 +59,33 @@ func runModularExample(ctx context.Context, t test.Test, c cluster.Cluster) {
 
 	// Add TPCC workload chain: init, run, then check consistency
 	mod.InStage(mainStage, "init tpcc workload", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		l.Printf("Initializing TPCC workload...")
-		cmd := "./cockroach workload init tpcc --warehouses=10 {pgurl:1}"
+		cmd := fmt.Sprintf("./cockroach workload init tpcc --warehouses=10 {pgurl:%d}", h.RandomAvailableNode())
 		c.Run(ctx, option.WithNodes(c.WorkloadNode()), cmd)
 		return nil
 	}).Then("run tpcc workload", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		l.Printf("Running TPCC workload...")
-		cmd := "./cockroach workload run tpcc --warehouses=10 --duration=60s {pgurl:1-3}"
+		cmd := fmt.Sprintf("./cockroach workload run tpcc --warehouses=10 --duration=60s {pgurl%s}", h.AvailableNodes())
 		c.Run(ctx, option.WithNodes(c.WorkloadNode()), cmd)
 		return nil
 	}).Then("check tpcc consistency", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		l.Printf("Running TPCC consistency checks...")
-		cmd := "./cockroach workload check tpcc --warehouses=10 {pgurl:1}"
+		cmd := fmt.Sprintf("./cockroach workload check tpcc --warehouses=10 {pgurl:%d}", h.RandomAvailableNode())
 		c.Run(ctx, option.WithNodes(c.WorkloadNode()), cmd)
 		return nil
 	})
 
 	// Add replication factor chain: speed up rebalancing, increase to 5, wait, decrease to 3, wait, then restore settings
 	mod.InStage(mainStage, "increase rebalance snapshot rate", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		l.Printf("Increasing kv.snapshot_rebalance.max_rate to speed up replication...")
-		db := c.Conn(ctx, t.L(), 1)
-		defer db.Close()
-
-		_, err := db.ExecContext(ctx, "SET CLUSTER SETTING kv.snapshot_rebalance.max_rate = '2 GiB'")
-		return err
+		return h.Exec("SET CLUSTER SETTING kv.snapshot_rebalance.max_rate = '2 GiB'")
 	}).Then("increase replication factor to 5", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		l.Printf("Increasing replication factor to 5...")
-		db := c.Conn(ctx, t.L(), 1)
-		defer db.Close()
-
-		_, err := db.ExecContext(ctx, "ALTER RANGE default CONFIGURE ZONE USING num_replicas = 5")
-		return err
+		return h.Exec("ALTER RANGE default CONFIGURE ZONE USING num_replicas = 5")
 	}).Then("wait for replication to 5", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		db := c.Conn(ctx, t.L(), 1)
+		_, db := h.RandomDB()
 		defer db.Close()
 
 		return roachtestutil.WaitForReplication(ctx, l, db, 5, roachprod.AtLeastReplicationFactor)
 	}).Then("decrease replication factor to 3", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		l.Printf("Decreasing replication factor to 3...")
-		db := c.Conn(ctx, t.L(), 1)
-		defer db.Close()
-
-		_, err := db.ExecContext(ctx, "ALTER RANGE default CONFIGURE ZONE USING num_replicas = 3")
-		return err
+		return h.Exec("ALTER RANGE default CONFIGURE ZONE USING num_replicas = 3")
 	}).Then("restore rebalance snapshot rate", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		l.Printf("Restoring kv.snapshot_rebalance.max_rate to default...")
-		db := c.Conn(ctx, t.L(), 1)
-		defer db.Close()
-
-		_, err := db.ExecContext(ctx, "RESET CLUSTER SETTING kv.snapshot_rebalance.max_rate")
-		return err
+		return h.Exec("RESET CLUSTER SETTING kv.snapshot_rebalance.max_rate")
 	})
 
 	// Generate the test plan

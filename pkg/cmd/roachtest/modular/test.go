@@ -17,6 +17,12 @@ type Test struct {
 	// afterTestStage is like setupStage but run after the test is completed.
 	afterTestStage *Stage
 	options        TestOptions
+	
+	// Test execution context
+	ctx       context.Context
+	logger    *logger.Logger
+	cluster   cluster.Cluster
+	crdbNodes option.NodeListOption
 }
 
 type TestOptions struct {
@@ -38,6 +44,10 @@ func NewTest(
 		options: TestOptions{
 			defaultStepConcurrency: 3,
 		},
+		ctx:       ctx,
+		logger:    l,
+		cluster:   c,
+		crdbNodes: crdbNodes,
 	}
 }
 
@@ -64,9 +74,13 @@ func (t *Test) NewPlanner() TestPlanner {
 	rng, seed := randutil.NewLockedPseudoRand()
 
 	return TestPlanner{
-		seed:   seed,
-		rng:    rng,
-		stages: combinedStages,
+		seed:      seed,
+		rng:       rng,
+		stages:    combinedStages,
+		ctx:       t.ctx,
+		logger:    t.logger,
+		cluster:   t.cluster,
+		crdbNodes: t.crdbNodes,
 	}
 }
 
