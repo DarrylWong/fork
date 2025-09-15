@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/rand"
 	"path"
-	"regexp"
 	"strings"
 	"sync/atomic"
 
@@ -17,6 +16,13 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/errors"
 )
+
+func joinArgs(args ...string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return strings.Join(args, " ")
+}
 
 const (
 	logPrefix = "modular-test"
@@ -50,7 +56,12 @@ func (h *Helper) Connect(node int) *gosql.DB {
 	return h.defaultService.Connect(node)
 }
 
-// RandomDB returns a connection pool to a random node using the default service.
+// RandomDBConn returns a connection pool to a random node using the default service.
+func (h *Helper) RandomDBConn() *gosql.DB {
+	return h.defaultService.RandomDBConn(h.rng)
+}
+
+// RandomDB is like RandomDBConn, but also returns the node ID.
 func (h *Helper) RandomDB() (int, *gosql.DB) {
 	return h.defaultService.RandomDB(h.rng)
 }
@@ -84,138 +95,63 @@ func (h *Helper) ExecWithGateway(
 	return h.defaultService.ExecWithGateway(h.rng, nodes, query, args...)
 }
 
-// StateTracker returns the cluster state tracker for recording state changes.
-func (h *Helper) StateTracker() *ClusterStateTracker {
-	return h.stateTracker
+// CreateTable creates a table with the specified schema.
+func (h *Helper) CreateTable(namePrefix, schema string) (string, error) {
+	tableName := h.stateTracker.NewTableName(namePrefix)
+	query := fmt.Sprintf("CREATE TABLE %s (%s)", tableName, schema)
+	return tableName, h.Exec(query)
 }
 
-// CreateTableWithTracking creates a table and automatically tracks it for cleanup.
-func (h *Helper) CreateTableWithTracking(query string, args ...interface{}) error {
-	if err := h.Exec(query, args...); err != nil {
-		return err
+// SetClusterSetting sets a cluster setting.
+func (h *Helper) SetClusterSetting(settingName, newValue string) error {
+	if err := h.stateTracker.maybeTrackClusterSetting(settingName, h.RandomDBConn); err != nil {
+		return fmt.Errorf("failed to track cluster setting before modification: %w", err)
 	}
-	
-	// Extract table name from CREATE TABLE query
-	tableName := extractTableNameFromQuery(query)
-	if tableName != "" {
-		h.stateTracker.TrackTableAdded(tableName)
-	}
-	
-	return nil
+	// Use parameterized query to avoid quoting issues
+	return h.Exec("SET CLUSTER SETTING $1 = $2", settingName, newValue)
 }
 
-// DropTableWithUntracking drops a table and removes it from tracking.
-func (h *Helper) DropTableWithUntracking(tableName string) error {
-	if err := h.Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName)); err != nil {
-		return err
+// ResetClusterSetting resets a cluster setting to its default value.
+func (h *Helper) ResetClusterSetting(settingName string) error {
+	if err := h.stateTracker.maybeTrackClusterSetting(settingName, h.RandomDBConn); err != nil {
+		return fmt.Errorf("failed to track cluster setting before reset: %w", err)
 	}
-	
-	h.stateTracker.UntrackTableAdded(tableName)
-	return nil
+	return h.Exec(fmt.Sprintf("RESET CLUSTER SETTING %s", settingName))
 }
 
-// SetClusterSettingWithTracking sets a cluster setting and tracks the original value.
-func (h *Helper) SetClusterSettingWithTracking(settingName, newValue string) error {
-	// Get the current value first
-	row := h.QueryRow("SHOW CLUSTER SETTING $1", settingName)
-	var currentValue string
-	if err := row.Scan(&currentValue); err != nil {
-		// If we can't get the current value, use empty string as fallback
-		currentValue = ""
+// AlterRange alters a range's zone configuration with automatic tracking.
+func (h *Helper) AlterRange(rangeName, zoneConfig string) error {
+	if err := h.stateTracker.maybeTrackZoneConfig(rangeName, h.RandomDBConn); err != nil {
+		return fmt.Errorf("failed to track zone config before modification: %w", err)
 	}
-	
-	// Track the original value
-	h.stateTracker.TrackClusterSetting(settingName, currentValue)
-	
-	// Set the new value
-	return h.Exec(fmt.Sprintf("SET CLUSTER SETTING %s = '%s'", settingName, newValue))
+	return h.Exec(fmt.Sprintf("ALTER RANGE %s CONFIGURE ZONE USING %s", rangeName, zoneConfig))
 }
 
-// InjectFailureWithTracking injects a failure and tracks it for recovery.
-func (h *Helper) InjectFailureWithTracking(failureID string, failureType, description string, recoveryInfo map[string]interface{}) error {
-	failureInfo := FailureInfo{
-		Type:         failureType,
-		Description:  description,
-		RecoveryInfo: recoveryInfo,
-	}
-	
-	h.stateTracker.TrackFailureInjected(failureID, failureInfo)
-	
-	// The actual failure injection would happen here
-	// This is a placeholder for the specific failure injection logic
-	h.logger.Printf("Injecting failure %s (%s): %s", failureID, failureType, description)
-	
-	return nil
+func (h *Helper) CreateUser(namePrefix string, args ...string) (string, error) {
+	username := h.stateTracker.NewUsername(namePrefix)
+	query := fmt.Sprintf("CREATE USER %s %s", username, joinArgs(args...))
+	return username, h.Exec(query)
 }
 
-// RecoverFailureWithUntracking recovers from a failure and removes it from tracking.
-func (h *Helper) RecoverFailureWithUntracking(failureID string) error {
-	// The actual failure recovery would happen here
-	// This is a placeholder for the specific failure recovery logic
-	h.logger.Printf("Recovering from failure %s", failureID)
-	
-	h.stateTracker.UntrackFailureInjected(failureID)
-	return nil
+func (h *Helper) CreateUserPassword(namePrefix, password string, args ...string) (string, error) {
+	args = append([]string{fmt.Sprintf("WITH PASSWORD %s", password)}, args...)
+	return h.CreateUser(namePrefix, args...)
 }
 
-// CreateSchemaWithTracking creates a schema and automatically tracks it for cleanup.
-func (h *Helper) CreateSchemaWithTracking(schemaName string) error {
-	if err := h.Exec(fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", schemaName)); err != nil {
-		return err
-	}
-	
-	h.stateTracker.TrackSchemaCreated(schemaName)
-	return nil
+// TOOD: InjectFailure
+
+// CreateDatabase creates a database with automatic name generation and tracking.
+func (h *Helper) CreateDatabase(namePrefix string, args ...string) (string, error) {
+	dbName := h.stateTracker.NewDatabaseName(namePrefix)
+	query := fmt.Sprintf("CREATE DATABASE %s %s", dbName, joinArgs(args...))
+	return dbName, h.Exec(strings.TrimSpace(query))
 }
 
-// DropSchemaWithUntracking drops a schema and removes it from tracking.
-func (h *Helper) DropSchemaWithUntracking(schemaName string) error {
-	if err := h.Exec(fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", schemaName)); err != nil {
-		return err
-	}
-	
-	h.stateTracker.UntrackSchemaCreated(schemaName)
-	return nil
-}
-
-// CreateUserWithTracking creates a user and automatically tracks it for cleanup.
-func (h *Helper) CreateUserWithTracking(username, password string) error {
-	if err := h.Exec(fmt.Sprintf("CREATE USER %s WITH PASSWORD '%s'", username, password)); err != nil {
-		return err
-	}
-	
-	h.stateTracker.TrackUserCreated(username)
-	return nil
-}
-
-// DropUserWithUntracking drops a user and removes it from tracking.
-func (h *Helper) DropUserWithUntracking(username string) error {
-	if err := h.Exec(fmt.Sprintf("DROP USER IF EXISTS %s", username)); err != nil {
-		return err
-	}
-	
-	h.stateTracker.UntrackUserCreated(username)
-	return nil
-}
-
-// CreateDatabaseWithTracking creates a database and automatically tracks it for cleanup.
-func (h *Helper) CreateDatabaseWithTracking(dbName string) error {
-	if err := h.Exec(fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", dbName)); err != nil {
-		return err
-	}
-	
-	h.stateTracker.TrackDatabaseCreated(dbName)
-	return nil
-}
-
-// DropDatabaseWithUntracking drops a database and removes it from tracking.
-func (h *Helper) DropDatabaseWithUntracking(dbName string) error {
-	if err := h.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s CASCADE", dbName)); err != nil {
-		return err
-	}
-	
-	h.stateTracker.UntrackDatabaseCreated(dbName)
-	return nil
+// CreateSchema creates a schema with automatic name generation and tracking.
+func (h *Helper) CreateSchema(namePrefix string, args ...string) (string, error) {
+	schemaName := h.stateTracker.NewSchemaName(namePrefix)
+	query := fmt.Sprintf("CREATE SCHEMA %s %s", schemaName, joinArgs(args...))
+	return schemaName, h.Exec(strings.TrimSpace(query))
 }
 
 // defaultTaskOptions returns the default options that are passed to all tasks
@@ -291,19 +227,6 @@ func (h *Helper) loggerFor(name string) (*logger.Logger, error) {
 	return h.logger.ChildLogger(fileName)
 }
 
-// extractTableNameFromQuery attempts to extract the table name from a CREATE TABLE query.
-// This is a simple regex-based extraction and may not handle all edge cases.
-func extractTableNameFromQuery(query string) string {
-	// Match CREATE TABLE statements with optional schema qualification
-	// This regex looks for "CREATE TABLE [IF NOT EXISTS] [schema.]table_name"
-	re := regexp.MustCompile(`(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)?)`)
-	matches := re.FindStringSubmatch(query)
-	if len(matches) > 1 {
-		return matches[1]
-	}
-	return ""
-}
-
 // Service implements helper functions on behalf of a specific
 // service. Internal fields are provided by the testRunner struct,
 // allowing us to connect to a specific node and check live the test
@@ -335,9 +258,15 @@ func (s *Service) Connect(node int) *gosql.DB {
 	return s.connFunc(node)
 }
 
-// RandomDB returns a connection pool to a random node in the
+// RandomDBConn returns a connection pool to a random node in the
 // cluster. Do *not* call `Close` on the pool returned (see comment on
 // `Connect` function).
+func (s *Service) RandomDBConn(rng *rand.Rand) *gosql.DB {
+	node := s.RandomAvailableNode(rng)
+	return s.Connect(node)
+}
+
+// RandomDB is like RandomDBConn, but also returns the node ID.
 func (s *Service) RandomDB(rng *rand.Rand) (int, *gosql.DB) {
 	node := s.RandomAvailableNode(rng)
 	return node, s.Connect(node)
