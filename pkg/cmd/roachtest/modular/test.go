@@ -17,7 +17,7 @@ type Test struct {
 	// afterTestStage is like setupStage but run after the test is completed.
 	afterTestStage *Stage
 	options        TestOptions
-	
+
 	// Test execution context
 	ctx       context.Context
 	logger    *logger.Logger
@@ -28,6 +28,9 @@ type Test struct {
 type TestOptions struct {
 	defaultStepConcurrency int
 	isLocal                bool
+	debugMode              bool
+	debugVerbosity         int
+	debugModules           debugModules
 }
 
 // NewTest creates a new modular test.
@@ -36,18 +39,26 @@ func NewTest(
 	l *logger.Logger,
 	c cluster.Cluster,
 	crdbNodes option.NodeListOption,
+	opts ...TestOption,
 ) *Test {
+	options := TestOptions{
+		defaultStepConcurrency: 3,
+	}
+
+	// Apply all provided options
+	for _, opt := range opts {
+		opt(&options)
+	}
+
 	return &Test{
 		setupStage:     nil,
 		stages:         make([]*Stage, 0),
 		afterTestStage: nil,
-		options: TestOptions{
-			defaultStepConcurrency: 3,
-		},
-		ctx:       ctx,
-		logger:    l,
-		cluster:   c,
-		crdbNodes: crdbNodes,
+		options:        options,
+		ctx:            ctx,
+		logger:         l,
+		cluster:        c,
+		crdbNodes:      crdbNodes,
 	}
 }
 
@@ -74,13 +85,14 @@ func (t *Test) NewPlanner() TestPlanner {
 	rng, seed := randutil.NewLockedPseudoRand()
 
 	return TestPlanner{
-		seed:      seed,
-		rng:       rng,
-		stages:    combinedStages,
-		ctx:       t.ctx,
-		logger:    t.logger,
-		cluster:   t.cluster,
-		crdbNodes: t.crdbNodes,
+		seed:         seed,
+		rng:          rng,
+		stages:       combinedStages,
+		ctx:          t.ctx,
+		logger:       t.logger,
+		cluster:      t.cluster,
+		crdbNodes:    t.crdbNodes,
+		debugModules: t.options.debugModules,
 	}
 }
 

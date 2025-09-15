@@ -13,15 +13,17 @@ import (
 )
 
 type TestPlanner struct {
-	seed      int64
-	rng       *rand.Rand
-	stages    []Stage
-	
+	seed   int64
+	rng    *rand.Rand
+	stages []Stage
+
 	// Test execution context
 	ctx       context.Context
 	logger    *logger.Logger
 	cluster   cluster.Cluster
 	crdbNodes option.NodeListOption
+
+	debugModules debugModules
 }
 
 // DAG generates a directed acyclic graph representation of all test steps and their dependencies.
@@ -39,13 +41,14 @@ func (p *TestPlanner) Plan() (*TestPlan, error) {
 	p.assignStepIDs(stagePlans)
 
 	return &TestPlan{
-		seed:       p.seed,
-		rng:        p.rng,
-		stagePlans: stagePlans,
-		ctx:        p.ctx,
-		logger:     p.logger,
-		cluster:    p.cluster,
-		crdbNodes:  p.crdbNodes,
+		seed:         p.seed,
+		rng:          p.rng,
+		stagePlans:   stagePlans,
+		ctx:          p.ctx,
+		logger:       p.logger,
+		cluster:      p.cluster,
+		crdbNodes:    p.crdbNodes,
+		debugModules: p.debugModules,
 	}, nil
 }
 
@@ -242,12 +245,14 @@ type TestPlan struct {
 	seed       int64
 	rng        *rand.Rand
 	stagePlans []stagePlan
-	
+
 	// Test execution context
 	ctx       context.Context
 	logger    *logger.Logger
 	cluster   cluster.Cluster
 	crdbNodes option.NodeListOption
+
+	debugModules debugModules
 }
 
 func (p *TestPlan) Steps() []testStep {
