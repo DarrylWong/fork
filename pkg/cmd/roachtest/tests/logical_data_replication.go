@@ -792,7 +792,7 @@ func (mc *multiCluster) StartCluster(
 			debugCtx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 			defer cancel()
 			filename := fmt.Sprintf("%s_debug.zip", desc)
-			if err := mc.c.FetchDebugZip(debugCtx, t.L(), filename, nodes); err != nil {
+			if err := mc.c.FetchDebugZip(debugCtx, t.L(), "" /* virtualClusterName */, filename, nodes); err != nil {
 				t.L().Printf("failed to download debug zip to %s from node %s", filename, nodes)
 			}
 		}
@@ -1030,10 +1030,10 @@ func VerifyCorrectness(
 }
 
 func getDebugZips(ctx context.Context, t test.Test, c cluster.Cluster, setup multiClusterSetup) {
-	if err := c.FetchDebugZip(ctx, t.L(), "latency_left_debug.zip", setup.left.nodes); err != nil {
+	if err := c.FetchDebugZip(ctx, t.L(), "" /* virtualClusterName */, "latency_left_debug.zip", setup.left.nodes); err != nil {
 		t.L().Errorf("could not fetch debug zip: %v", err)
 	}
-	if err := c.FetchDebugZip(ctx, t.L(), "latency_right_debug.zip", setup.right.nodes); err != nil {
+	if err := c.FetchDebugZip(ctx, t.L(), "" /* virtualClusterName */, "latency_right_debug.zip", setup.right.nodes); err != nil {
 		t.L().Errorf("could not fetch debug zip: %v", err)
 	}
 }

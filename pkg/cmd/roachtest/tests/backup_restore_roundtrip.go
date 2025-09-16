@@ -204,7 +204,7 @@ func backupRestoreRoundTrip(
 
 				// Between each reset grab a debug zip from the cluster.
 				zipPath := fmt.Sprintf("debug-%d.zip", timeutil.Now().Unix())
-				if err := testUtils.cluster.FetchDebugZip(ctx, t.L(), zipPath); err != nil {
+				if err := testUtils.cluster.FetchDebugZip(ctx, t.L(), "" /* virtualClusterName */, zipPath); err != nil {
 					t.L().Printf("failed to fetch a debug zip: %v", err)
 				}
 				if err := testUtils.resetCluster(ctx, t.L(), clusterupgrade.CurrentVersion(), expectDeathsFn, []install.ClusterSettingOption{}); err != nil {
@@ -516,7 +516,7 @@ func testOnlineRestoreRecovery(ctx context.Context, t test.Test, c cluster.Clust
 
 			// Between each reset grab a debug zip from the cluster.
 			zipPath := fmt.Sprintf("debug-%d.zip", timeutil.Now().Unix())
-			if err := testUtils.cluster.FetchDebugZip(ctx, t.L(), zipPath); err != nil {
+			if err := testUtils.cluster.FetchDebugZip(ctx, t.L(), "" /* virtualClusterName */, zipPath); err != nil {
 				t.L().Printf("failed to fetch a debug zip: %v", err)
 			}
 			if err := testUtils.resetCluster(

@@ -681,7 +681,7 @@ func (rd *replicationDriver) setupC2C(
 func (rd *replicationDriver) fetchDebugZip(
 	ctx context.Context, nodes option.NodeListOption, filename string,
 ) {
-	if err := rd.c.FetchDebugZip(ctx, rd.t.L(), filename, nodes); err != nil {
+	if err := rd.c.FetchDebugZip(ctx, rd.t.L(), "" /* virtualClusterName */, filename, nodes); err != nil {
 		rd.t.L().Printf("Failed to download debug zip to %s from node %s", filename, nodes)
 	}
 }

@@ -1357,7 +1357,7 @@ func (c *clusterImpl) FetchTimeseriesData(ctx context.Context, l *logger.Logger)
 // list of nodes via opts if they want to target which node(s) to grab the debug
 // zip from.
 func (c *clusterImpl) FetchDebugZip(
-	ctx context.Context, l *logger.Logger, dest string, opts ...option.Option,
+	ctx context.Context, l *logger.Logger, virtualClusterName, dest string, opts ...option.Option,
 ) error {
 	if c.spec.NodeCount == 0 {
 		// No nodes can happen during unit tests and implies nothing to do.
@@ -1396,6 +1396,9 @@ func (c *clusterImpl) FetchDebugZip(
 			// logic. The debug zip command already handles fetching all virtual clusters by passing
 			// the --ccluster for each tenant. Attempting to pass a --ccluster here will override
 			// that behavior and cause all debug zips to be of the same tenant.
+			if !install.IsSystemInterface(virtualClusterName) {
+				pgURLOpts.VirtualClusterName = virtualClusterName
+			}
 			urls, err := roachprod.PgURL(ctx, l, c.MakeNodes(c.Node(node)), install.CockroachNodeCertsDir, pgURLOpts)
 			if err != nil {
 				l.Printf("cluster.FetchDebugZip failed to retrieve PGUrl on node %d: %v", node, err)

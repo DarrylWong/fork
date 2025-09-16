@@ -920,7 +920,16 @@ func (t *Test) RunE() (*TestPlan, error) {
 }
 
 func (t *Test) run(plan *TestPlan) error {
-	return newTestRunner(t.ctx, t.cancel, plan, t.rt, t.options.tag, t.logger, t.cluster).run()
+	tr := newTestRunner(t.ctx, t.cancel, plan, t.rt, t.options.tag, t.logger, t.cluster)
+	err := tr.run()
+	if tr.plan.deploymentMode != SeparateProcessDeployment {
+		return err
+	}
+
+	if err != nil {
+		return errors.CombineErrors(err, t.cluster.FetchDebugZip(context.Background(), t.logger, tr.tenantService.descriptor.Name, "tenant-debug.zip"))
+	}
+	return nil
 }
 
 func (t *Test) plan() (plan *TestPlan, retErr error) {

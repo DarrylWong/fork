@@ -2609,7 +2609,7 @@ func (u *CommonTestUtils) collectFailureArtifacts(
 		return restoreErr, fmt.Errorf("could not fetch logs: %w", err)
 	}
 	zipLocation := filepath.Join(dirName, "debug.zip")
-	if err := u.cluster.FetchDebugZip(ctx, l, zipLocation); err != nil {
+	if err := u.cluster.FetchDebugZip(ctx, l, "" /* virtualClusterName */, zipLocation); err != nil {
 		return restoreErr, err
 	}
 

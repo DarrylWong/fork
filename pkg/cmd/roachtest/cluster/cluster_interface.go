@@ -179,7 +179,7 @@ type Cluster interface {
 
 	FetchLogs(ctx context.Context, l *logger.Logger) error
 	FetchTimeseriesData(ctx context.Context, l *logger.Logger) error
-	FetchDebugZip(ctx context.Context, l *logger.Logger, dest string, opts ...option.Option) error
+	FetchDebugZip(ctx context.Context, l *logger.Logger, virtualClusterName, dest string, opts ...option.Option) error
 	RefetchCertsFromNode(ctx context.Context, node int) error
 
 	StartGrafana(ctx context.Context, l *logger.Logger, promCfg *prometheus.Config) error

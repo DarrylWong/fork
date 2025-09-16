@@ -1935,7 +1935,7 @@ func (r *testRunner) collectArtifacts(
 				t.L().Printf("failed to fetch timeseries data: %s", err)
 			}
 		}
-		if err := c.FetchDebugZip(ctx, t.L(), "debug.zip"); err != nil {
+		if err := c.FetchDebugZip(ctx, t.L(), "" /* virtualClusterName */, "debug.zip"); err != nil {
 			t.L().Printf("failed to collect zip: %s", err)
 		}
 		if err := c.FetchVMSpecs(ctx, t.L()); err != nil {
