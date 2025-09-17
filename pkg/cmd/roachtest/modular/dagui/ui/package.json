@@ -1,0 +1,15 @@
+{
+  "name": "dagui",
+  "private": true,
+  "scripts": {
+    "build": "esbuild index.tsx --bundle --format=iife --sourcemap --minify --outdir=dist --loader:.ts=ts --loader:.tsx=tsx --loader:.css=css && cp index.html dist/"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "reactflow": "^11.10.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.23.0"
+  }
+}

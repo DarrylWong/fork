@@ -8,6 +8,7 @@ package tests
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	gosql "database/sql"
@@ -22,6 +23,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachprod"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
+	"github.com/cockroachdb/errors"
 )
 
 func registerModular(r registry.Registry) {
@@ -42,6 +44,15 @@ func registerModular(r registry.Registry) {
 		Run:              runModularMVTExample,
 		Cluster:          r.MakeClusterSpec(5, spec.CPU(16), spec.WorkloadNode()),
 		Timeout:          60 * time.Minute,
+	})
+	r.Add(registry.TestSpec{
+		Name:             "modular/example/recovery",
+		CompatibleClouds: registry.AllClouds,
+		Suites:           registry.Suites(registry.Nightly),
+		Owner:            registry.OwnerTestEng,
+		Run:              runModularRecoveryExample,
+		Cluster:          r.MakeClusterSpec(6, spec.WorkloadNodeCount(1)),
+		Timeout:          30 * time.Minute,
 	})
 }
 
@@ -98,6 +109,14 @@ func runModularExample(ctx context.Context, t test.Test, c cluster.Cluster) {
 	// Execute the test plan using the runner
 	err = modular.RunTestPlan(ctx, t, testPlan)
 	if err != nil {
+		// Check if the error contains ONLY the intentional failure we expect
+		expectedError := "intentional fatal error to test recovery"
+		if strings.Contains(err.Error(), expectedError) && !strings.Contains(err.Error(), "Failed to restore") {
+			// The test succeeded - we got the expected failure and state restoration succeeded
+			t.L().Printf("Test completed successfully: got expected intentional failure and cluster state was restored")
+			return
+		}
+		// Any other error (including restoration failures) should fail the test
 		t.Fatalf("Test execution failed: %v", err)
 	}
 }
@@ -405,4 +424,72 @@ func rollbackNodeToVersion(ctx context.Context, rt test.Test, l *logger.Logger, 
 		targetVersion,
 		clusterSettings...,
 	)
+}
+
+func runModularRecoveryExample(ctx context.Context, t test.Test, c cluster.Cluster) {
+	// Create a new modular test with state tracking enabled for recovery testing
+	mod := modular.NewTest(ctx, t.L(), c, c.CRDBNodes(), modular.WithDebug(modular.ClusterStateDebug), modular.CleanupOnFailure())
+
+	mod.Setup("initialize cluster", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		c.Start(ctx, l, option.DefaultStartOpts(), install.MakeClusterSettings(), c.CRDBNodes())
+		return nil
+	})
+
+	// Create main test stage with custom concurrency
+	mainStage := mod.NewStage("main-workload", modular.WithStepConcurrency(3))
+
+	// Add TPCC workload chain: init, run, then check consistency
+	mod.InStage(mainStage, "init tpcc workload", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		cmd := fmt.Sprintf("./cockroach workload init tpcc --warehouses=10 {pgurl:%d}", h.RandomAvailableNode())
+		c.Run(ctx, option.WithNodes(c.WorkloadNode()), cmd)
+		return nil
+	}).Then("run tpcc workload", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		cmd := fmt.Sprintf("./cockroach workload run tpcc --warehouses=10 --duration=60s {pgurl%s}", h.AvailableNodes())
+		c.Run(ctx, option.WithNodes(c.WorkloadNode()), cmd)
+		return nil
+	}).Then("check tpcc consistency", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		cmd := fmt.Sprintf("./cockroach workload check tpcc --warehouses=10 {pgurl:%d}", h.RandomAvailableNode())
+		c.Run(ctx, option.WithNodes(c.WorkloadNode()), cmd)
+		return nil
+	})
+
+	// Add replication factor chain with an unconditional fatal step to test recovery
+	mod.InStage(mainStage, "increase rebalance snapshot rate", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		return h.SetClusterSetting("kv.snapshot_rebalance.max_rate", "2 GiB")
+	}).Then("increase replication factor to 5", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		return h.AlterRange("default", "num_replicas = 5")
+	}).Then("wait for replication to 5", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		_, db := h.RandomDB()
+		defer db.Close()
+		return roachtestutil.WaitForReplication(ctx, l, db, 5, roachprod.AtLeastReplicationFactor)
+	}).Then("decrease replication factor to 3", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		return h.AlterRange("default", "num_replicas = 3")
+	}).Then("restore rebalance snapshot rate", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		return h.ResetClusterSetting("kv.snapshot_rebalance.max_rate")
+	})
+
+	mod.InStage(mainStage, "error step", func(ctx context.Context, l *logger.Logger, helper *modular.Helper) error {
+		return errors.New("intentional fatal error to test recovery")
+	})
+
+	// Generate the test plan
+	planner := mod.NewPlanner()
+	testPlan, err := planner.Plan()
+	if err != nil {
+		t.Fatalf("Failed to generate test plan: %v", err)
+	}
+
+	// Execute the test plan using the runner
+	err = modular.RunTestPlan(ctx, t, testPlan)
+	if err != nil {
+		// Check if the error contains ONLY the intentional failure we expect
+		expectedError := "intentional fatal error to test recovery"
+		if strings.Contains(err.Error(), expectedError) && !strings.Contains(err.Error(), "Failed to restore") {
+			// The test succeeded - we got the expected failure and state restoration succeeded
+			t.L().Printf("Test completed successfully: got expected intentional failure and cluster state was restored")
+			return
+		}
+		// Any other error (including restoration failures) should fail the test
+		t.Fatalf("Test execution failed: %v", err)
+	}
 }

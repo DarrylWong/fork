@@ -107,8 +107,9 @@ func (h *Helper) SetClusterSetting(settingName, newValue string) error {
 	if err := h.stateTracker.maybeTrackClusterSetting(settingName, h.RandomDBConn); err != nil {
 		return fmt.Errorf("failed to track cluster setting before modification: %w", err)
 	}
-	// Use parameterized query to avoid quoting issues
-	return h.Exec("SET CLUSTER SETTING $1 = $2", settingName, newValue)
+	// Use parameterized query for the value but format the setting name
+	query := fmt.Sprintf("SET CLUSTER SETTING %s = $1", settingName)
+	return h.Exec(query, newValue)
 }
 
 // ResetClusterSetting resets a cluster setting to its default value.
