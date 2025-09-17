@@ -178,6 +178,13 @@ func (r *Runner) executeSteps(ctx context.Context, l *logger.Logger) error {
 
 		err = r.executeStage(ctx, stageLogger, stagePlan)
 		if err != nil {
+			// Attempt to restore cluster state before returning the error (if enabled)
+			if r.testPlan.cleanupOnFailure {
+				l.Printf("Attempting to restore cluster state due to execution failure...")
+				if restoreErr := r.restoreClusterState(ctx, l); restoreErr != nil {
+					l.Printf("Failed to restore cluster state: %v", restoreErr)
+				}
+			}
 			return r.stageError(ctx, err, stageName, stageLogger)
 		}
 
@@ -195,22 +202,22 @@ func (r *Runner) executeSteps(ctx context.Context, l *logger.Logger) error {
 // executeStage executes all steps within a single stage.
 func (r *Runner) executeStage(ctx context.Context, l *logger.Logger, stagePlan stagePlan) error {
 	for _, step := range stagePlan.steps {
-		stepLogger, err := r.loggerForStep(l, step.id, step.Description())
+		stepLogger, err := r.loggerForStep(l, step.stepID, step.Description())
 		if err != nil {
 			return fmt.Errorf("failed to create step logger: %w", err)
 		}
 
-		r.logStep("STARTING", step.id, step.Description(), stepLogger)
+		r.logStep("STARTING", step.stepID, step.Description(), stepLogger)
 		start := time.Now()
 
 		err = step.Run(ctx, stepLogger, r.helper)
 		if err != nil {
-			return r.stepError(ctx, err, step.id, step.Description(), stepLogger)
+			return r.stepError(ctx, err, step.stepID, step.Description(), stepLogger)
 		}
 
 		duration := time.Since(start)
 		prefix := fmt.Sprintf("FINISHED [%s]", duration)
-		r.logStep(prefix, step.id, step.Description(), stepLogger)
+		r.logStep(prefix, step.stepID, step.Description(), stepLogger)
 
 		// Print tracked state after each step for debugging and visibility
 		stateOutput := r.stateTracker.PrintTrackedState()
@@ -253,12 +260,6 @@ func (r *Runner) stepError(ctx context.Context, err error, stepID int, stepDesc 
 	// Log the error for convenience
 	l.Printf("Step failed: %+v", stepErr)
 
-	// Attempt to restore cluster state before failing
-	l.Printf("Attempting to restore cluster state due to step failure...")
-	if restoreErr := r.restoreClusterState(ctx, l); restoreErr != nil {
-		l.Printf("Failed to restore cluster state: %v", restoreErr)
-	}
-
 	// Rename the log file to indicate failure
 	if renameErr := r.renameFailedLogger(l); renameErr != nil {
 		l.Printf("could not rename failed step logger: %v", renameErr)
@@ -273,12 +274,6 @@ func (r *Runner) stageError(ctx context.Context, err error, stageName string, l 
 
 	// Log the error for convenience
 	l.Printf("Stage failed: %+v", stageErr)
-
-	// Attempt to restore cluster state before failing
-	l.Printf("Attempting to restore cluster state due to stage failure...")
-	if restoreErr := r.restoreClusterState(ctx, l); restoreErr != nil {
-		l.Printf("Failed to restore cluster state: %v", restoreErr)
-	}
 
 	// Rename the log file to indicate failure
 	if renameErr := r.renameFailedLogger(l); renameErr != nil {
@@ -359,14 +354,16 @@ func (r *Runner) restoreClusterState(ctx context.Context, l *logger.Logger) erro
 // restoreClusterSetting restores a cluster setting to its original value.
 func (r *Runner) restoreClusterSetting(ctx context.Context, l *logger.Logger, setting, originalValue string) error {
 	l.Printf("Restoring cluster setting %s to original value: %s", setting, originalValue)
-	// Use parameterized query to avoid quoting issues
-	return r.helper.Exec("SET CLUSTER SETTING $1 = $2", setting, originalValue)
+	// Use parameterized query for the value but format the setting name
+	query := fmt.Sprintf("SET CLUSTER SETTING %s = $1", setting)
+	return r.helper.Exec(query, originalValue)
 }
 
 // restoreZoneConfig restores a zone configuration to its original value.
 func (r *Runner) restoreZoneConfig(ctx context.Context, l *logger.Logger, rangeName, originalConfig string) error {
-	l.Printf("Restoring zone config for %s to original value: %s", rangeName, originalConfig)
-	return r.helper.Exec(fmt.Sprintf("ALTER RANGE %s CONFIGURE ZONE USING %s", rangeName, originalConfig))
+	l.Printf("Restoring zone config for %s to original value", rangeName)
+
+	return r.helper.Exec(originalConfig)
 }
 
 // dropTable drops a table that was created during the test.

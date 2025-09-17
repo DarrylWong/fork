@@ -6,15 +6,16 @@ type StepBuilder struct {
 	stage *Stage
 }
 
-func newTestStep(stepName string, fn stepFunc, opts ...StepOption) testStep {
+func newTestStep(test *Test, stepName string, fn stepFunc, opts ...StepOption) testStep {
 	return testStep{
 		StepProtocol: NewSingleStep(stepName, fn, opts...),
+		hookID:       test.nextHookID(),
 	}
 }
 
 // Setup adds a setup step that runs before the test begins.
 func (t *Test) Setup(stepName string, fn stepFunc, opts ...StepOption) {
-	ts := newTestStep(stepName, fn, opts...)
+	ts := newTestStep(t, stepName, fn, opts...)
 
 	// Create setup stage if it doesn't exist
 	if t.setupStage == nil {
@@ -32,7 +33,7 @@ func (t *Test) Setup(stepName string, fn stepFunc, opts ...StepOption) {
 
 // AfterTest adds a step that runs after all test stages are complete.
 func (t *Test) AfterTest(stepName string, fn stepFunc, opts ...StepOption) {
-	ts := newTestStep(stepName, fn, opts...)
+	ts := newTestStep(t, stepName, fn, opts...)
 
 	// Create after-test stage if it doesn't exist
 	if t.afterTestStage == nil {
@@ -66,7 +67,7 @@ func (t *Test) NewStage(name string, opts ...StageOption) *Stage {
 
 // InStage adds a step to be executed in the specified stage.
 func (t *Test) InStage(stage *Stage, stepName string, fn stepFunc, opts ...StepOption) *StepBuilder {
-	ts := newTestStep(stepName, fn, opts...)
+	ts := newTestStep(t, stepName, fn, opts...)
 
 	// Add step as a new chain with a single stepGroup to the stage
 	stage.chains = append(stage.chains, chain{stepGroup{ts}})
@@ -79,7 +80,7 @@ func (t *Test) InStage(stage *Stage, stepName string, fn stepFunc, opts ...StepO
 
 // Then adds another step that runs after this one in sequence.
 func (sb *StepBuilder) Then(stepName string, fn stepFunc, opts ...StepOption) *StepBuilder {
-	ts := newTestStep(stepName, fn, opts...)
+	ts := newTestStep(sb.test, stepName, fn, opts...)
 
 	// Add the step as a new stepGroup in the chain
 	if len(sb.stage.chains) == 0 {
@@ -97,7 +98,7 @@ func (sb *StepBuilder) Then(stepName string, fn stepFunc, opts ...StepOption) *S
 // And adds a step that can run in parallel with the previous step.
 // All steps added via .And() will run in parallel within the same stepGroup.
 func (sb *StepBuilder) And(stepName string, fn stepFunc, opts ...StepOption) *StepBuilder {
-	ts := newTestStep(stepName, fn, opts...)
+	ts := newTestStep(sb.test, stepName, fn, opts...)
 
 	if len(sb.stage.chains) == 0 {
 		panic("no chain found to add an And() step to")

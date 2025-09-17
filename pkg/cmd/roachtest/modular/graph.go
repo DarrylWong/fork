@@ -1,5 +1,10 @@
 package modular
 
+import (
+	"encoding/json"
+	"fmt"
+)
+
 // The possible permutations of a modular test can be represented
 // as a directed acyclic graph (DAG). A DAG consists of stages, which
 // contain one or more chains of steps. A chain represents a dependency
@@ -20,6 +25,38 @@ type Stage struct {
 	maxStepConcurrency int
 }
 
+func MarshalJSON(stages []Stage) ([]byte, error) {
+	result := make([]map[string]interface{}, len(stages))
+
+	for i, stage := range stages {
+		chains := make([][][]map[string]string, len(stage.chains))
+
+		for j, chain := range stage.chains {
+			stepGroups := make([][]map[string]string, len(chain))
+
+			for k, stepGroup := range chain {
+				steps := make([]map[string]string, len(stepGroup))
+
+				for l, testStep := range stepGroup {
+					steps[l] = map[string]string{
+						"description": testStep.StepProtocol.Description(),
+						"hookID":      fmt.Sprintf("%d", testStep.hookID),
+					}
+				}
+				stepGroups[k] = steps
+			}
+			chains[j] = stepGroups
+		}
+
+		result[i] = map[string]interface{}{
+			"name":   stage.name,
+			"chains": chains,
+		}
+	}
+
+	return json.Marshal(result)
+}
+
 // chain represents a sequence of step groups that must be executed in position.
 type chain []stepGroup
 
@@ -32,8 +69,11 @@ type testStep struct {
 	StepProtocol
 	// Lazily assigned once the graph is finalized.
 	position stepPosition
+	// stepID represents the relative order the step is run in the final test plan.
 	// Lazily assigned once the plan is finalized.
-	id int
+	stepID int
+	// hookID is a unique identifier determined when a testStep is added by the step builder.
+	hookID int
 }
 
 // stepPosition encodes the position of the step in the graph, such that we can

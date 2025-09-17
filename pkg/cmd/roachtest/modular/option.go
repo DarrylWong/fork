@@ -37,6 +37,14 @@ func WithDebug(modules ...debugModule) TestOption {
 	}
 }
 
+// CleanupOnFailure configures the test to perform cleanup of cluster state
+// on failure. This is primarily used for testing the framework itself.
+func CleanupOnFailure() TestOption {
+	return func(options *TestOptions) {
+		options.cleanupOnFailure = true
+	}
+}
+
 // StageOption configures a Stage.
 type StageOption func(*Stage)
 

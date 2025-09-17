@@ -24,6 +24,10 @@ type TestPlanner struct {
 	crdbNodes option.NodeListOption
 
 	debugModules debugModules
+
+	// cleanupOnFailure controls whether cluster state cleanup is performed on failure.
+	// Default false (no cleanup) since cleanup is primarily for testing purposes.
+	cleanupOnFailure bool
 }
 
 // DAG generates a directed acyclic graph representation of all test steps and their dependencies.
@@ -49,6 +53,7 @@ func (p *TestPlanner) Plan() (*TestPlan, error) {
 		cluster:      p.cluster,
 		crdbNodes:    p.crdbNodes,
 		debugModules: p.debugModules,
+		cleanupOnFailure: p.cleanupOnFailure,
 	}, nil
 }
 
@@ -220,11 +225,11 @@ func (p *TestPlanner) assignStepIDs(stagePlans []stagePlan) {
 			step := &sp.steps[stepIdx]
 			if _, ok := step.StepProtocol.(*concurrentStep); ok {
 				for i := range step.StepProtocol.(*concurrentStep).steps {
-					step.StepProtocol.(*concurrentStep).steps[i].id = stepID
+					step.StepProtocol.(*concurrentStep).steps[i].stepID = stepID
 					stepID++
 				}
 			} else {
-				sp.steps[stepIdx].id = stepID
+				sp.steps[stepIdx].stepID = stepID
 				stepID++
 			}
 		}
@@ -253,6 +258,10 @@ type TestPlan struct {
 	crdbNodes option.NodeListOption
 
 	debugModules debugModules
+
+	// cleanupOnFailure controls whether cluster state cleanup is performed on failure.
+	// Default false (no cleanup) since cleanup is primarily for testing purposes.
+	cleanupOnFailure bool
 }
 
 func (p *TestPlan) Steps() []testStep {
@@ -325,7 +334,7 @@ func (p *TestPlan) prettyPrintStep(out *strings.Builder, step testStep, prefix s
 	if concurrentStep, ok := step.StepProtocol.(*concurrentStep); ok {
 		writeNested(concurrentStep.Description(), concurrentStep.steps)
 	} else {
-		writeSingle(step.Description(), step.id)
+		writeSingle(step.Description(), step.stepID)
 	}
 }
 

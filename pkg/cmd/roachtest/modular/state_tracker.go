@@ -47,8 +47,7 @@ type ClusterStateTracker struct {
 // NewClusterStateTracker creates a new cluster state tracker with initialized maps.
 func NewClusterStateTracker(debugLogger *logger.Logger) *ClusterStateTracker {
 	return &ClusterStateTracker{
-		tablesAdded: make(map[string]struct{}),
-		// clusterSettings is a sync.Map, no initialization needed
+		tablesAdded:      make(map[string]struct{}),
 		failuresInjected: make(map[string]*failures.Failer),
 		schemasCreated:   make(map[string]struct{}),
 		usersCreated:     make(map[string]struct{}),
@@ -103,8 +102,8 @@ func (c *ClusterStateTracker) maybeTrackClusterSetting(settingName string, connF
 	defer db.Close()
 
 	// Query the current value directly from the database outside of any locks
-	query := "SHOW CLUSTER SETTING $1"
-	row := db.QueryRow(query, settingName)
+	query := fmt.Sprintf("SHOW CLUSTER SETTING %s", settingName)
+	row := db.QueryRow(query)
 	var currentValue string
 	if err := row.Scan(&currentValue); err != nil {
 		// Log and return the error - we need the original value to track properly
@@ -121,19 +120,6 @@ func (c *ClusterStateTracker) maybeTrackClusterSetting(settingName string, connF
 	return nil
 }
 
-// TrackZoneConfig records the original value of a zone configuration before modification.
-// If the zone config has already been tracked, it preserves the original value.
-func (c *ClusterStateTracker) TrackZoneConfig(rangeName, originalConfig string) {
-	// Use LoadOrStore for atomic operation - only stores if key doesn't exist
-	c.zoneConfigs.LoadOrStore(rangeName, originalConfig)
-}
-
-// IsZoneConfigTracked returns true if the zone configuration is already being tracked.
-func (c *ClusterStateTracker) IsZoneConfigTracked(rangeName string) bool {
-	_, exists := c.zoneConfigs.Load(rangeName)
-	return exists
-}
-
 // maybeTrackZoneConfig atomically checks if a zone config is tracked and tracks it if not.
 // If the zone config is not tracked, it uses the provided connFunc to get a database connection and query the current value.
 // Returns an error if the current config cannot be queried.
@@ -148,10 +134,10 @@ func (c *ClusterStateTracker) maybeTrackZoneConfig(rangeName string, connFunc fu
 	defer db.Close()
 
 	// Query the current zone configuration directly from the database
-	query := "SHOW ZONE CONFIGURATION FOR RANGE $1"
-	row := db.QueryRow(query, rangeName)
-	var originalConfig string
-	if err := row.Scan(&originalConfig); err != nil {
+	query := fmt.Sprintf("SHOW ZONE CONFIGURATION FOR RANGE %s", rangeName)
+	row := db.QueryRow(query)
+	var target, originalConfig string
+	if err := row.Scan(&target, &originalConfig); err != nil {
 		// Log and return the error - we need the original config to track properly
 		c.debugLogger.Printf("Failed to scan zone configuration for range '%s': %v", rangeName, err)
 		return fmt.Errorf("failed to query current zone config for range '%s': %w", rangeName, err)
@@ -325,12 +311,7 @@ func (c *ClusterStateTracker) PrintTrackedState() string {
 	if len(zoneConfigs) > 0 {
 		output = append(output, fmt.Sprintf("Zone configurations modified (%d):", len(zoneConfigs)))
 		for rangeName, originalConfig := range zoneConfigs {
-			// Truncate long zone configs for readability
-			displayConfig := originalConfig
-			if len(displayConfig) > 50 {
-				displayConfig = displayConfig[:50] + "..."
-			}
-			output = append(output, fmt.Sprintf("  - %s (original: %s)", rangeName, displayConfig))
+			output = append(output, fmt.Sprintf("  - %s (original: %s)", rangeName, originalConfig))
 		}
 		output = append(output, "")
 	}
@@ -340,10 +321,6 @@ func (c *ClusterStateTracker) PrintTrackedState() string {
 		output = append(output, fmt.Sprintf("Failures injected (%d):", len(failureMap)))
 		for failureID, failer := range failureMap {
 			description := failer.Description()
-			// Truncate long descriptions for readability
-			if len(description) > 60 {
-				description = description[:60] + "..."
-			}
 			output = append(output, fmt.Sprintf("  - %s: %s", failureID, description))
 		}
 		output = append(output, "")

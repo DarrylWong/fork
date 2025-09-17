@@ -23,6 +23,9 @@ type Test struct {
 	logger    *logger.Logger
 	cluster   cluster.Cluster
 	crdbNodes option.NodeListOption
+
+	// hookIDCounter is a global counter that increments for every new testStep added
+	hookIDCounter int
 }
 
 type TestOptions struct {
@@ -31,6 +34,9 @@ type TestOptions struct {
 	debugMode              bool
 	debugVerbosity         int
 	debugModules           debugModules
+	// cleanupOnFailure controls whether cluster state cleanup is performed on failure.
+	// Default false (no cleanup) since cleanup is primarily for testing purposes.
+	cleanupOnFailure       bool
 }
 
 // NewTest creates a new modular test.
@@ -59,6 +65,7 @@ func NewTest(
 		logger:         l,
 		cluster:        c,
 		crdbNodes:      crdbNodes,
+		hookIDCounter:  0,
 	}
 }
 
@@ -93,6 +100,7 @@ func (t *Test) NewPlanner() TestPlanner {
 		cluster:      t.cluster,
 		crdbNodes:    t.crdbNodes,
 		debugModules: t.options.debugModules,
+		cleanupOnFailure: t.options.cleanupOnFailure,
 	}
 }
 
@@ -118,4 +126,16 @@ func AssignStepOrder(s *Stage) {
 			}
 		}
 	}
+}
+
+// nextHookID returns the next unique hookID for a new testStep.
+func (t *Test) nextHookID() int {
+	t.hookIDCounter++
+	return t.hookIDCounter
+}
+
+// EnableCleanupOnFailure enables cluster state cleanup on test failure.
+// By default, cleanup is disabled since it's primarily for testing purposes.
+func (t *Test) EnableCleanupOnFailure() {
+	t.options.cleanupOnFailure = true
 }
