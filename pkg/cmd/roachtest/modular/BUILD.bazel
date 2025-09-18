@@ -6,6 +6,7 @@ go_library(
         "dag_builder.go",
         "graph.go",
         "helper.go",
+        "operation.go",
         "option.go",
         "planner.go",
         "runner.go",
@@ -33,6 +34,7 @@ go_test(
     name = "modular_test",
     srcs = [
         "dag_builder_test.go",
+        "json_test.go",
         "planner_test.go",
     ],
     data = glob(["testdata/**"]),

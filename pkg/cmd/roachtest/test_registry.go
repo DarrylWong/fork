@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/modular"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/prometheus/client_golang/prometheus"
@@ -24,6 +25,7 @@ import (
 type testRegistryImpl struct {
 	m                map[string]*registry.TestSpec
 	ops              map[string]*registry.OperationSpec
+	modularOps       map[string]*modular.OperationBuilder
 	snapshotPrefixes map[string]struct{}
 
 	promRegistry *prometheus.Registry
@@ -36,6 +38,7 @@ func makeTestRegistry() testRegistryImpl {
 	return testRegistryImpl{
 		m:                make(map[string]*registry.TestSpec),
 		ops:              make(map[string]*registry.OperationSpec),
+		modularOps:       make(map[string]*modular.OperationBuilder),
 		snapshotPrefixes: make(map[string]struct{}),
 		promRegistry:     prometheus.NewRegistry(),
 	}
@@ -75,6 +78,15 @@ func (r *testRegistryImpl) AddOperation(spec registry.OperationSpec) {
 		os.Exit(1)
 	}
 	r.ops[spec.Name] = &spec
+}
+
+// AddModularOperation adds a modular operation to the registry.
+func (r *testRegistryImpl) AddModularOperation(builder *modular.OperationBuilder) {
+	// For now, just store the operation builder
+	// The name would need to be derived from the builder or passed as a parameter
+	// This is a placeholder implementation
+	name := fmt.Sprintf("modular-op-%d", len(r.modularOps))
+	r.modularOps[name] = builder
 }
 
 // MakeClusterSpec makes a cluster spec. It should be used over `spec.MakeClusterSpec`

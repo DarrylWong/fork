@@ -194,14 +194,14 @@ func TestAndDAG(t *testing.T) {
 		return nil
 	})
 
-	// Add another independent step chain
+	// Add another independent step Chain
 	mod.InStage(stage, "step 1", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 		return nil
 	}).Then("step 2", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 		return nil
 	})
 
-	// Add another independent step chain
+	// Add another independent step Chain
 	mod.InStage(stage2, "step A", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 		return nil
 	}).Then("step B", func(ctx context.Context, l *logger.Logger, h *Helper) error {

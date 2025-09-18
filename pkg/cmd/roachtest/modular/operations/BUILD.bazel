@@ -1,0 +1,20 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "operations",
+    srcs = [
+        "replication.go",
+        "tpcc.go",
+    ],
+    importpath = "github.com/cockroachdb/cockroach/pkg/cmd/roachtest/modular/operations",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/cmd/roachtest/cluster",
+        "//pkg/cmd/roachtest/modular",
+        "//pkg/cmd/roachtest/option",
+        "//pkg/cmd/roachtest/roachtestutil",
+        "//pkg/cmd/roachtest/test",
+        "//pkg/roachprod",
+        "//pkg/roachprod/logger",
+    ],
+)

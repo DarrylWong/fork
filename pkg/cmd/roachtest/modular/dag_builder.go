@@ -83,8 +83,8 @@ func gridDimensions(stages []Stage) (int, int) {
 			maxTotalWidth = stageWidth
 		}
 
-		// The height of a stage is determined by the longest chain in that stage.
-		// Each chain requires one node's height plus spacing, except the last one.
+		// The height of a stage is determined by the longest Chain in that stage.
+		// Each Chain requires one node's height plus spacing, except the last one.
 		height += stage.LongestChain()*(nodeHeight+verticalNodeSpacing) - verticalNodeSpacing
 	}
 
@@ -169,7 +169,7 @@ func (g *dagGrid) drawStage(stage Stage, startY int, lastStage bool) [][2]int {
 
 	for rowIdx, row := range DAGRows(&stage) {
 		for _, group := range row.Groups {
-			// Connect the previous group in the chain to this group
+			// Connect the previous group in the Chain to this group
 			xConnection := connectionPoints[group.ChainID][0]
 			if xConnection == 0 {
 				xConnection = startX + row.Offset(group)*(nodeWidth+horizontalNodeSpacing) + (group.MaxChainConcurrentSteps*(nodeWidth+horizontalNodeSpacing)-horizontalNodeSpacing)/2
@@ -238,7 +238,7 @@ func (g *dagGrid) drawStage(stage Stage, startY int, lastStage bool) [][2]int {
 			if len(group.Steps) == 1 {
 				connectionPoints[group.ChainID] = g.drawSingleStep(group.Steps[0], groupStartingX, groupStartingY)
 			} else {
-				// Don't draw transition lines for the last stage if this is the last group in the chain.
+				// Don't draw transition lines for the last stage if this is the last group in the Chain.
 				drawTransition := !(lastStage && len(stage.chains[group.ChainID]) == rowIdx+1)
 				connectionPoints[group.ChainID] = g.drawParallelSteps(group.Steps, groupStartingX, groupStartingY, drawTransition)
 			}
