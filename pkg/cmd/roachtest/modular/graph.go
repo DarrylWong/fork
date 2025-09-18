@@ -7,8 +7,8 @@ import (
 
 // The possible permutations of a modular test can be represented
 // as a directed acyclic graph (DAG). A DAG consists of stages, which
-// contain one or more chains of steps. A chain represents a dependency
-// between steps, such that all steps in a chain must be run in position.
+// contain one or more chains of steps. A Chain represents a dependency
+// between steps, such that all steps in a Chain must be run in position.
 // However, chains contain no dependencies with other chains, thus any
 // interleaving of steps among chains is allowed.
 
@@ -57,8 +57,11 @@ func MarshalJSON(stages []Stage) ([]byte, error) {
 	return json.Marshal(result)
 }
 
-// chain represents a sequence of step groups that must be executed in position.
-type chain []stepGroup
+// Chain represents a sequence of step groups that must be executed in position.
+// Chain represents a sequence of step groups that must be executed in order.
+type Chain []stepGroup
+
+type chain = Chain
 
 // stepGroup represents one or more testSteps in a chain that share the same
 // dependencies but can be run interchangeably or concurrently.
@@ -110,7 +113,7 @@ func (s *Stage) MaxConcurrentSteps() int {
 }
 
 // Steps returns a flattened view of the stage, returning all
-// steps in position for each chain.
+// steps in position for each Chain.
 func (s *Stage) Steps() []testStep {
 	var steps []testStep
 	for _, ch := range s.chains {
@@ -121,7 +124,7 @@ func (s *Stage) Steps() []testStep {
 	return steps
 }
 
-// MaxConcurrentSteps returns the maximum number of steps that can be run concurrently in this chain.
+// MaxConcurrentSteps returns the maximum number of steps that can be run concurrently in this Chain.
 func (ch *chain) MaxConcurrentSteps() int {
 	maxSteps := 0
 	for _, gr := range *ch {

@@ -6,6 +6,7 @@
 package registry
 
 import (
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/modular"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -16,5 +17,6 @@ type Registry interface {
 	MakeClusterSpec(nodeCount int, opts ...spec.Option) spec.ClusterSpec
 	Add(TestSpec)
 	AddOperation(OperationSpec)
+	AddModularOperation(*modular.OperationBuilder)
 	PromFactory() promauto.Factory
 }

@@ -1273,6 +1273,7 @@ GO_TARGETS = [
     "//pkg/cmd/roachtest/grafana:grafana",
     "//pkg/cmd/roachtest/modular/mixedversion:mixedversion",
     "//pkg/cmd/roachtest/modular/mixedversion:mixedversion_test",
+    "//pkg/cmd/roachtest/modular/operations:operations",
     "//pkg/cmd/roachtest/modular:modular",
     "//pkg/cmd/roachtest/modular:modular_test",
     "//pkg/cmd/roachtest/operation:operation",

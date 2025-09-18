@@ -45,22 +45,22 @@ func (p *TestPlanner) Plan() (*TestPlan, error) {
 	p.assignStepIDs(stagePlans)
 
 	return &TestPlan{
-		seed:         p.seed,
-		rng:          p.rng,
-		stagePlans:   stagePlans,
-		ctx:          p.ctx,
-		logger:       p.logger,
-		cluster:      p.cluster,
-		crdbNodes:    p.crdbNodes,
-		debugModules: p.debugModules,
+		seed:             p.seed,
+		rng:              p.rng,
+		stagePlans:       stagePlans,
+		ctx:              p.ctx,
+		logger:           p.logger,
+		cluster:          p.cluster,
+		crdbNodes:        p.crdbNodes,
+		debugModules:     p.debugModules,
 		cleanupOnFailure: p.cleanupOnFailure,
 	}, nil
 }
 
 // generateStagePlan generates a random legal permutation of steps in a Stage.
 func (p *TestPlanner) generateStagePlan(s Stage) stagePlan {
-	// Start with a known valid ordering of steps: All the steps in the first chain
-	// sequentially, followed by all the steps in the second chain and so on.
+	// Start with a known valid ordering of steps: All the steps in the first Chain
+	// sequentially, followed by all the steps in the second Chain and so on.
 	steps := s.Steps()
 	numSteps := len(steps)
 	if numSteps <= 1 {
@@ -174,7 +174,7 @@ func randomSpans(rng *rand.Rand, numSteps int, maxConcurrency int) ([]stepSpan, 
 func (p *TestPlanner) isValidConcurrentGroups(steps []testStep, spans []stepSpan) bool {
 	// A concurrent grouping of steps [i, j] is valid iff:
 	// - no step disables concurrency
-	// - if two steps are in the same chain, they must be in the same step group (depth)
+	// - if two steps are in the same Chain, they must be in the same step group (depth)
 	for _, sp := range spans {
 		chains := make(map[int]int)
 		if sp.Size() == 1 {

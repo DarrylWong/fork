@@ -6,6 +6,7 @@
 package tests
 
 import (
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/modular"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -27,6 +28,10 @@ func (m *mockRegistry) Add(spec registry.TestSpec) {
 }
 
 func (m *mockRegistry) AddOperation(spec registry.OperationSpec) {
+	// No-op.
+}
+
+func (m *mockRegistry) AddModularOperation(*modular.OperationBuilder) {
 	// No-op.
 }
 

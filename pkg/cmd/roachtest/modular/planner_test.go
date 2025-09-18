@@ -37,8 +37,8 @@ func newModTest(options ...TestOption) *Test {
 
 // TestDependencyOrdering is a property based test that constructs stages
 // with randomized chains. Each step is named as {A-Z}:{1-9}:{1-9} where the
-// first letter represents the chain; all steps in a chain should have the same first
-// letter. The second letter represents the depth of the step in the chain; all steps
+// first letter represents the Chain; all steps in a Chain should have the same first
+// letter. The second letter represents the depth of the step in the Chain; all steps
 // with a higher letter are dependent on the steps with smaller letters. Finally,
 // the third letter represents steps that are part of the same step group, these are
 // steps that can run concurrently with each other.
@@ -60,7 +60,7 @@ func TestDependencyOrdering(t *testing.T) {
 		for chainIdx := 0; chainIdx < numChains; chainIdx++ {
 			chainLetter := string(rune('A' + chainIdx))
 
-			// Generate 2-4 step groups per chain
+			// Generate 2-4 step groups per Chain
 			numStepGroups := 2 + rng.Intn(3)
 
 			var builder *StepBuilder
@@ -77,7 +77,7 @@ func TestDependencyOrdering(t *testing.T) {
 					}
 
 					if builder == nil {
-						// First step in the chain
+						// First step in the Chain
 						builder = mod.InStage(stage, stepName, noopFunc)
 					} else if stepIdx == 0 {
 						// First step in a new step group (sequential)
@@ -105,7 +105,7 @@ func TestDependencyOrdering(t *testing.T) {
 
 // validateStepOrdering checks that the flat step list respects dependency constraints
 func validateStepOrdering(t *testing.T, steps []testStep) {
-	// Keep track of the highest depth seen for each chain
+	// Keep track of the highest depth seen for each Chain
 	maxDepthPerChain := make(map[string]int)
 
 	// Walk through all steps in position
@@ -128,7 +128,7 @@ func validateStepOrdering(t *testing.T, steps []testStep) {
 func validateSingleStep(t *testing.T, stepIndex int, step testStep, maxDepthPerChain map[string]int) {
 	stepName := step.Description()
 
-	// Parse step name to extract chain and depth
+	// Parse step name to extract Chain and depth
 	parts := strings.Split(stepName, ":")
 
 	chainID := parts[0]
@@ -140,15 +140,15 @@ func validateSingleStep(t *testing.T, stepIndex int, step testStep, maxDepthPerC
 		depth = int(depthStr[0] - '0')
 	}
 
-	// Check if we've seen a higher depth for this chain already
+	// Check if we've seen a higher depth for this Chain already
 	if maxDepth, exists := maxDepthPerChain[chainID]; exists {
 		if depth < maxDepth {
-			t.Fatalf("Dependency violation at step %d: step %s (depth %d) appears after higher depth %d in chain %s",
+			t.Fatalf("Dependency violation at step %d: step %s (depth %d) appears after higher depth %d in Chain %s",
 				stepIndex+1, stepName, depth, maxDepth, chainID)
 		}
 	}
 
-	// Update the maximum depth seen for this chain
+	// Update the maximum depth seen for this Chain
 	if maxDepth, exists := maxDepthPerChain[chainID]; !exists || depth > maxDepth {
 		maxDepthPerChain[chainID] = depth
 	}
