@@ -3,6 +3,7 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library")
 go_library(
     name = "operations",
     srcs = [
+        "add_index.go",
         "replication.go",
         "tpcc.go",
     ],
@@ -16,5 +17,10 @@ go_library(
         "//pkg/cmd/roachtest/test",
         "//pkg/roachprod",
         "//pkg/roachprod/logger",
+        "//pkg/sql/randgen",
+        "//pkg/sql/sem/tree",
+        "//pkg/sql/types",
+        "//pkg/util/randutil",
+        "@com_github_lib_pq//oid",
     ],
 )

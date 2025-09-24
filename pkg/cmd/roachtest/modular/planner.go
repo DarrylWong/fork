@@ -207,10 +207,14 @@ func (p *TestPlanner) buildConcurrentSteps(originalSteps []testStep, spans []ste
 			groupedSteps := make([]testStep, sp.Size())
 			copy(groupedSteps, originalSteps[sp.start:sp.end+1])
 
-			cs := newConcurrentStep(
-				fmt.Sprintf("running %d steps concurrently", len(groupedSteps)),
-				groupedSteps,
-			)
+			// Create a meaningful label from the step descriptions
+			stepNames := make([]string, len(groupedSteps))
+			for i, step := range groupedSteps {
+				stepNames[i] = step.Description()
+			}
+			label := strings.Join(stepNames, " + ")
+
+			cs := newConcurrentStep(label, groupedSteps)
 			result = append(result, testStep{StepProtocol: cs})
 		}
 	}

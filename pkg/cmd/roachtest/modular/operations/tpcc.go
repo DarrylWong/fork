@@ -19,6 +19,7 @@ type TPCCExtraOptions struct {
 	rampDuration         time.Duration
 	binaryPath           string
 	skipConsistencyCheck bool
+	skipInit             bool
 	// extraInitArgs allows passing additional arguments to the init command.
 	extraInitArgs string
 

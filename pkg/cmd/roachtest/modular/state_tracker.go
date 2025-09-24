@@ -40,6 +40,9 @@ type ClusterStateTracker struct {
 	// databasesCreated tracks databases created during the test
 	databasesCreated map[string]struct{}
 
+	// indexesCreated tracks indexes created during the test
+	indexesCreated map[string]struct{}
+
 	// debugLogger logs debug information for tracking operations
 	debugLogger *logger.Logger
 }
@@ -52,6 +55,7 @@ func NewClusterStateTracker(debugLogger *logger.Logger) *ClusterStateTracker {
 		schemasCreated:   make(map[string]struct{}),
 		usersCreated:     make(map[string]struct{}),
 		databasesCreated: make(map[string]struct{}),
+		indexesCreated:   make(map[string]struct{}),
 		debugLogger:      debugLogger,
 	}
 }
@@ -86,6 +90,14 @@ func (c *ClusterStateTracker) NewSchemaName(namePrefix string) string {
 	defer c.mu.Unlock()
 	c.schemasCreated[schemaName] = struct{}{}
 	return schemaName
+}
+
+func (c *ClusterStateTracker) NewIndexName(namePrefix string) string {
+	indexName := fmt.Sprintf("%s_%d", namePrefix, time.Now().Unix())
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.indexesCreated[indexName] = struct{}{}
+	return indexName
 }
 
 // maybeTrackClusterSetting atomically checks if a cluster setting is tracked and tracks it if not.
