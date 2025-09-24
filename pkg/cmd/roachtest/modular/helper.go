@@ -155,6 +155,163 @@ func (h *Helper) CreateSchema(namePrefix string, args ...string) (string, error)
 	return schemaName, h.Exec(strings.TrimSpace(query))
 }
 
+// CreateIndex creates an index with automatic name generation and tracking.
+func (h *Helper) CreateIndex(namePrefix, database, table string, columns []string, args ...string) (string, error) {
+	indexName := h.stateTracker.NewIndexName(namePrefix)
+	columnsStr := strings.Join(columns, ", ")
+	tableRef := fmt.Sprintf("%s.%s", database, table)
+	query := fmt.Sprintf("CREATE INDEX %s ON %s (%s) %s", indexName, tableRef, columnsStr, joinArgs(args...))
+	return indexName, h.Exec(strings.TrimSpace(query))
+}
+
+// ColumnInfo represents information about a table column.
+type ColumnInfo struct {
+	Name string
+	Type uint32 // OID type
+}
+
+// PickRandomDatabase picks a random database from the cluster.
+func (h *Helper) PickRandomDatabase() (string, error) {
+	rows, err := h.Query("SELECT database_name FROM [SHOW DATABASES] WHERE database_name NOT IN ('system', 'postgres', 'defaultdb', 'information_schema')")
+	if err != nil {
+		return "", fmt.Errorf("failed to query databases: %w", err)
+	}
+	defer rows.Close()
+
+	var databases []string
+	for rows.Next() {
+		var dbName string
+		if err := rows.Scan(&dbName); err != nil {
+			return "", fmt.Errorf("failed to scan database name: %w", err)
+		}
+		databases = append(databases, dbName)
+	}
+
+	if len(databases) == 0 {
+		return "", fmt.Errorf("no user databases found")
+	}
+
+	return databases[h.rng.Intn(len(databases))], nil
+}
+
+// PickRandomTable picks a random table from the specified database.
+func (h *Helper) PickRandomTable(database string) (string, error) {
+	query := fmt.Sprintf("SELECT table_name FROM [SHOW TABLES FROM %s]", database)
+	rows, err := h.Query(query)
+	if err != nil {
+		return "", fmt.Errorf("failed to query tables: %w", err)
+	}
+	defer rows.Close()
+
+	var tables []string
+	for rows.Next() {
+		var tableName string
+		if err := rows.Scan(&tableName); err != nil {
+			return "", fmt.Errorf("failed to scan table name: %w", err)
+		}
+		tables = append(tables, tableName)
+	}
+
+	if len(tables) == 0 {
+		return "", fmt.Errorf("no tables found in database %s", database)
+	}
+
+	return tables[h.rng.Intn(len(tables))], nil
+}
+
+// GetTableColumns returns column information for the specified table.
+func (h *Helper) GetTableColumns(database, table string) ([]ColumnInfo, error) {
+	query := fmt.Sprintf(`
+SELECT attname, atttypid
+FROM pg_catalog.pg_attribute
+WHERE attrelid = '%s.%s'::REGCLASS AND attnum > 0 AND NOT attisdropped
+ORDER BY attnum`, database, table)
+
+	rows, err := h.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query table columns: %w", err)
+	}
+	defer rows.Close()
+
+	var columns []ColumnInfo
+	for rows.Next() {
+		var col ColumnInfo
+		if err := rows.Scan(&col.Name, &col.Type); err != nil {
+			return nil, fmt.Errorf("failed to scan column info: %w", err)
+		}
+		columns = append(columns, col)
+	}
+
+	return columns, nil
+}
+
+// SearchTable finds a random database and table that satisfies the given predicate.
+// It exhaustively searches all database+table combinations, collects matches,
+// and returns a random one. This ensures we don't miss valid tables due to randomness.
+func (h *Helper) SearchTable(pred func(dbName, tableName string) bool) (string, string, error) {
+	// Get all databases using existing helper logic
+	rows, err := h.Query("SELECT database_name FROM [SHOW DATABASES] WHERE database_name NOT IN ('system', 'postgres', 'defaultdb', 'information_schema')")
+	if err != nil {
+		return "", "", fmt.Errorf("failed to query databases: %w", err)
+	}
+	defer rows.Close()
+
+	var databases []string
+	for rows.Next() {
+		var dbName string
+		if err := rows.Scan(&dbName); err != nil {
+			return "", "", fmt.Errorf("failed to scan database name: %w", err)
+		}
+		databases = append(databases, dbName)
+	}
+
+	if len(databases) == 0 {
+		return "", "", fmt.Errorf("no user databases found")
+	}
+
+	// Collect all valid database+table combinations
+	type tableMatch struct {
+		database string
+		table    string
+	}
+	var matches []tableMatch
+
+	// Exhaustively search all combinations
+	for _, dbName := range databases {
+		// Get all tables using existing helper logic
+		query := fmt.Sprintf("SELECT table_name FROM [SHOW TABLES FROM %s]", dbName)
+		tableRows, err := h.Query(query)
+		if err != nil {
+			continue // Skip databases we can't query
+		}
+
+		var tables []string
+		for tableRows.Next() {
+			var tableName string
+			if err := tableRows.Scan(&tableName); err != nil {
+				continue
+			}
+			tables = append(tables, tableName)
+		}
+		tableRows.Close()
+
+		// Test predicate on each table
+		for _, tableName := range tables {
+			if pred(dbName, tableName) {
+				matches = append(matches, tableMatch{database: dbName, table: tableName})
+			}
+		}
+	}
+
+	if len(matches) == 0 {
+		return "", "", fmt.Errorf("no table found matching the predicate")
+	}
+
+	// Return a random match from all valid options
+	chosen := matches[h.rng.Intn(len(matches))]
+	return chosen.database, chosen.table, nil
+}
+
 // defaultTaskOptions returns the default options that are passed to all tasks
 // started by the helper.
 func (h *Helper) defaultTaskOptions() []task.Option {

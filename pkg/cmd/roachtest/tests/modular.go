@@ -66,8 +66,24 @@ func runModularExample(ctx context.Context, t test.Test, c cluster.Cluster) {
 		return nil
 	})
 
-	// Create main test stage with custom concurrency
+	mod.Setup("initialize bank workload", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		dbName, err := h.CreateDatabase("bank")
+		if err != nil {
+			return err
+		}
+
+		cmd := roachtestutil.NewCommand("%s workload init bank", test.DefaultCockroachPath).
+			Flag("rows", 1000).
+			Flag("db", dbName).
+			Arg("{pgurl:%d}", h.RandomAvailableNode()).
+			String()
+
+		return c.RunE(ctx, option.WithNodes(c.WorkloadNode()), cmd)
+	})
+
 	mainStage := mod.NewStage("main-workload", modular.WithStepConcurrency(3))
+
+	mod.AddOperation(mainStage, operations.AddRandomIndex())
 
 	// Add TPCC workload chain: init, run, then check consistency
 	mod.AddOperation(mainStage, operations.TPCC(c, 10, time.Minute, operations.TPCCExtraOptions{}))
