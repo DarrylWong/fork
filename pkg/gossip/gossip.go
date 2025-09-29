@@ -293,6 +293,10 @@ type Gossip struct {
 	bootstrapAddrs map[util.UnresolvedAddr]roachpb.NodeID
 
 	locality roachpb.Locality
+
+	// skipStoredBootstrapAddresses indicates whether to skip loading
+	// cached bootstrap addresses from storage
+	skipStoredBootstrapAddresses bool
 }
 
 // New creates an instance of a gossip node.
@@ -430,12 +434,25 @@ func (g *Gossip) SetCullInterval(interval time.Duration) {
 	g.cullInterval = interval
 }
 
+// SetSkipStoredBootstrapAddresses sets whether to skip loading cached bootstrap
+// addresses from storage. This should be called before SetStorage.
+func (g *Gossip) SetSkipStoredBootstrapAddresses(skip bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.skipStoredBootstrapAddresses = skip
+}
+
 // SetStorage provides an instance of the Storage interface
 // for reading and writing gossip bootstrap data from persistent
 // storage. This should be invoked as early in the lifecycle of a
 // gossip instance as possible, but can be called at any time.
 func (g *Gossip) SetStorage(storage Storage) error {
 	ctx := g.AnnotateCtx(context.TODO())
+	if g.skipStoredBootstrapAddresses {
+		log.Ops.Infof(ctx, "skipping loading of stored bootstrap addresses")
+		return nil
+	}
+
 	// Maintain lock ordering.
 	var storedBI BootstrapInfo
 	if err := storage.ReadBootstrapInfo(&storedBI); err != nil {
@@ -1083,43 +1100,6 @@ func (g *Gossip) tryClearInfoWithTTL(key string, ttl time.Duration) (bool, error
 		return false, err
 	}
 	return true, nil
-}
-
-// ClearBootstrapAddresses clears cached bootstrap addresses from persistent
-// storage, forcing them to be re-read from the --join flag on startup instead
-// of using potentially stale cached data.
-func (g *Gossip) ClearBootstrapAddresses(ctx context.Context) error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	if g.storage == nil {
-		// No persistent storage, nothing to clear
-		return nil
-	}
-
-	ctx = g.AnnotateCtx(ctx)
-
-	// Count addresses before clearing
-	addressCount := len(g.bootstrapInfo.Addresses)
-
-	// Create minimal bootstrap info with empty addresses
-	clearedBootstrapInfo := BootstrapInfo{
-		Addresses: []util.UnresolvedAddr{}, // Clear cached addresses
-	}
-
-	// Write the cleared bootstrap info to persistent storage
-	if err := g.storage.WriteBootstrapInfo(&clearedBootstrapInfo); err != nil {
-		return errors.Wrap(err, "failed to write cleared bootstrap info")
-	}
-
-	// Update our in-memory bootstrap state
-	g.bootstrapInfo = clearedBootstrapInfo
-	g.bootstrapAddrs = map[util.UnresolvedAddr]roachpb.NodeID{}
-	g.addressExists = map[util.UnresolvedAddr]bool{}
-
-	log.Ops.Infof(ctx, "cleared %d cached bootstrap addresses; will use --join flag on next startup", addressCount)
-
-	return nil
 }
 
 // InfoOriginatedHere returns true iff the latest info for the provided key
