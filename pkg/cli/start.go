@@ -629,7 +629,7 @@ func runStartInternal(
 	serverCfg.ExternalIODir = startCtx.externalIODir
 
 	// Set gossip addresses clearing flag if specified.
-	serverCfg.ClearGossipAddresses = clearGossipAddresses
+	serverCfg.DiscardPersistedBootstrapAddresses = discardPersistedBootstrapAddresses
 
 	st := serverCfg.BaseConfig.Settings
 	if serverCfg.SQLConfig.TempStorageConfig, err = initTempStorageConfig(

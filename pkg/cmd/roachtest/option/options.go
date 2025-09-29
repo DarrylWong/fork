@@ -255,6 +255,16 @@ func DisableWALFailover(opts interface{}) {
 	}
 }
 
+// DiscardPersistedBootstrapAddresses can be used to generate StartOpts that
+// discard cached bootstrap addresses on startup, forcing them to be re-read
+// from the --join flag instead of using potentially stale cached data.
+func DiscardPersistedBootstrapAddresses(opts interface{}) {
+	switch opts := opts.(type) {
+	case *StartOpts:
+		opts.RoachprodOpts.DiscardPersistedBootstrapAddresses = true
+	}
+}
+
 // Graceful performs a graceful stop of the cockroach process.
 func Graceful(gracePeriodSeconds int) func(interface{}) {
 	return func(opts interface{}) {

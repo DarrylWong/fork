@@ -510,6 +510,12 @@ This feature is experimental and may be removed or modified
 in a later version.`,
 	}
 
+	DiscardPersistedBootstrapAddresses = FlagInfo{
+		Name: "discard-persisted-bootstrap-addresses",
+		Description: `
+Discard cached bootstrap addresses on startup (internal debugging use).`,
+	}
+
 	ListenAddr = FlagInfo{
 		Name: "listen-addr",
 		Description: `

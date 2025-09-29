@@ -65,7 +65,7 @@ var goMemLimit int64
 var tenantIDFile string
 var localityFile string
 var encryptionSpecs storageconfig.EncryptionSpecList
-var clearGossipAddresses bool
+var discardPersistedBootstrapAddresses bool
 
 // initPreFlagsDefaults initializes the values of the global variables
 // defined above.
@@ -528,9 +528,9 @@ func init() {
 		cliflagcfg.StringFlag(f, &deprecatedStorageEngine, cliflags.StorageEngine)
 		_ = pf.MarkHidden(cliflags.StorageEngine.Name)
 
-		// clearGossipAddresses flag for clearing gossip addresses on startup (internal debugging use).
-		f.BoolVar(&clearGossipAddresses, "clear-gossip-addresses", false, "Clear cached bootstrap addresses on startup (internal debugging use)")
-		_ = f.MarkHidden("clear-gossip-addresses")
+		// discardPersistedBootstrapAddresses flag for discarding persisted bootstrap addresses on startup (internal debugging use).
+		cliflagcfg.BoolFlag(f, &discardPersistedBootstrapAddresses, cliflags.DiscardPersistedBootstrapAddresses)
+		_ = f.MarkHidden(cliflags.DiscardPersistedBootstrapAddresses.Name)
 
 		cliflagcfg.VarFlag(f, &serverCfg.StorageConfig.WALFailover, cliflags.WALFailover)
 		// TODO(storage): Consider combining the uri and cache manual settings.

@@ -332,9 +332,9 @@ func NewServer(cfg Config, stopper *stop.Stopper) (serverctl.ServerStartupInterf
 
 	// Configure gossip to skip loading cached bootstrap addresses if requested
 	// TODO: make setting this clearer.
-	if cfg.ClearGossipAddresses {
+	if cfg.DiscardPersistedBootstrapAddresses {
 		g.SetSkipStoredBootstrapAddresses(true)
-		log.Ops.Infof(ctx, "will skip loading cached bootstrap addresses from storage")
+		log.Ops.Infof(ctx, "will discard persisted bootstrap addresses due to --discard-persisted-bootstrap-addresses flag")
 	}
 
 	tenantCapabilitiesTestingKnobs, _ := cfg.TestingKnobs.TenantCapabilitiesTestingKnobs.(*tenantcapabilities.TestingKnobs)

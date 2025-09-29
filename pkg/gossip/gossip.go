@@ -449,7 +449,7 @@ func (g *Gossip) SetSkipStoredBootstrapAddresses(skip bool) {
 func (g *Gossip) SetStorage(storage Storage) error {
 	ctx := g.AnnotateCtx(context.TODO())
 	if g.skipStoredBootstrapAddresses {
-		log.Ops.Infof(ctx, "skipping loading of stored bootstrap addresses")
+		log.Ops.Infof(ctx, "discarding persisted bootstrap addresses due to --discard-persisted-bootstrap-addresses flag")
 		return nil
 	}
 

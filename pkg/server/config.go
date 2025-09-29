@@ -278,9 +278,9 @@ type BaseConfig struct {
 	// or IMPORT) can access files.
 	ExternalIODir string
 
-	// ClearGossipAddresses clears cached bootstrap addresses on startup.
+	// DiscardPersistedBootstrapAddresses discards cached bootstrap addresses on startup.
 	// Used for debugging and snapshot restoration scenarios.
-	ClearGossipAddresses bool
+	DiscardPersistedBootstrapAddresses bool
 }
 
 // MakeBaseConfig returns a BaseConfig with default values.
