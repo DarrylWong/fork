@@ -260,6 +260,8 @@ func initStartCmdFlags(startCmd *cobra.Command) {
 		"store-count", startOpts.StoreCount, "number of stores to start each node with")
 	startCmd.Flags().IntVar(&startOpts.AdminUIPort,
 		"admin-ui-port", startOpts.AdminUIPort, "port to serve the admin UI on")
+	startCmd.Flags().BoolVar(&startOpts.ClearGossipAddresses,
+		"clear-gossip-addresses", startOpts.ClearGossipAddresses, "clear cached bootstrap addresses on startup")
 }
 
 func initStartInstanceCmdFlags(startInstanceCmd *cobra.Command) {

@@ -156,6 +156,10 @@ type StartOpts struct {
 	// in the CockroachDB logging configuration.
 	EnableFluentSink bool
 
+	// ClearGossipAddresses determines whether to clear cached bootstrap addresses
+	// on startup, forcing them to be re-read from the --join flag.
+	ClearGossipAddresses bool
+
 	// PreStartHooks are hooks that are run after service registration has occurred,
 	// but before starting the cockroach process.
 	PreStartHooks []PreStartHook
@@ -1332,6 +1336,11 @@ func (c *SyncedCluster) generateStartFlagsKV(
 	if localityArg := c.generateLocalityArg(node, startOpts); localityArg != "" {
 		args = append(args, localityArg)
 	}
+
+	if startOpts.ClearGossipAddresses {
+		args = append(args, "--clear-gossip-addresses")
+	}
+
 	return args
 }
 
