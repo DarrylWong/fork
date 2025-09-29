@@ -752,7 +752,7 @@ func NewServer(cfg Config, stopper *stop.Stopper) (serverctl.ServerStartupInterf
 	})
 	kvMemoryMonitor := mon.NewMonitorInheritWithLimit(
 		mon.MakeName("kv-mem"), 0 /* limit */, sqlMonitorAndMetrics.rootSQLMemoryMonitor,
-		true, /* longLiving */
+		true,                     /* longLiving */
 	)
 	kvMemoryMonitor.StartNoReserved(ctx, sqlMonitorAndMetrics.rootSQLMemoryMonitor)
 	rangeFeedBudgetFactory := serverrangefeed.NewBudgetFactory(
@@ -1926,6 +1926,18 @@ func (s *topLevelServer) PreStart(ctx context.Context) error {
 	// We're going to need to start gossip before we spin up Node below.
 	s.gossip.Start(advAddrU, filtered, s.rpcContext)
 	log.Event(ctx, "started gossip")
+
+	// Clear gossip addresses if requested via --clear-gossip-addresses flag.
+	// This must happen after gossip.Start() but before node.start() to clear
+	// cached gossip data before it's loaded from persistent storage.
+	if s.cfg.ClearGossipAddresses {
+		// Clear cached bootstrap addresses so they're re-read from --join flag
+		if err := s.gossip.ClearBootstrapAddresses(ctx); err != nil {
+			log.Ops.Warningf(ctx, "failed to clear cached bootstrap addresses: %v", err)
+		} else {
+			log.Ops.Infof(ctx, "cleared cached bootstrap addresses")
+		}
+	}
 
 	// Now that we have a monotonic HLC wrt previous incarnations of the process,
 	// init all the replicas. At this point *some* store has been initialized or

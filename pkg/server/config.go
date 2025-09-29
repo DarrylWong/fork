@@ -277,6 +277,10 @@ type BaseConfig struct {
 	// operations that can specify node-local I/O paths (such as BACKUP, RESTORE
 	// or IMPORT) can access files.
 	ExternalIODir string
+
+	// ClearGossipAddresses clears cached bootstrap addresses on startup.
+	// Used for debugging and snapshot restoration scenarios.
+	ClearGossipAddresses bool
 }
 
 // MakeBaseConfig returns a BaseConfig with default values.

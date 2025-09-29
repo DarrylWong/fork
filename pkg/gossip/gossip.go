@@ -1085,6 +1085,43 @@ func (g *Gossip) tryClearInfoWithTTL(key string, ttl time.Duration) (bool, error
 	return true, nil
 }
 
+// ClearBootstrapAddresses clears cached bootstrap addresses from persistent
+// storage, forcing them to be re-read from the --join flag on startup instead
+// of using potentially stale cached data.
+func (g *Gossip) ClearBootstrapAddresses(ctx context.Context) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.storage == nil {
+		// No persistent storage, nothing to clear
+		return nil
+	}
+
+	ctx = g.AnnotateCtx(ctx)
+
+	// Count addresses before clearing
+	addressCount := len(g.bootstrapInfo.Addresses)
+
+	// Create minimal bootstrap info with empty addresses
+	clearedBootstrapInfo := BootstrapInfo{
+		Addresses: []util.UnresolvedAddr{}, // Clear cached addresses
+	}
+
+	// Write the cleared bootstrap info to persistent storage
+	if err := g.storage.WriteBootstrapInfo(&clearedBootstrapInfo); err != nil {
+		return errors.Wrap(err, "failed to write cleared bootstrap info")
+	}
+
+	// Update our in-memory bootstrap state
+	g.bootstrapInfo = clearedBootstrapInfo
+	g.bootstrapAddrs = map[util.UnresolvedAddr]roachpb.NodeID{}
+	g.addressExists = map[util.UnresolvedAddr]bool{}
+
+	log.Ops.Infof(ctx, "cleared %d cached bootstrap addresses; will use --join flag on next startup", addressCount)
+
+	return nil
+}
+
 // InfoOriginatedHere returns true iff the latest info for the provided key
 // originated on this node. This is useful for ensuring that the system config
 // is regossiped as soon as possible when its lease changes hands.

@@ -628,6 +628,9 @@ func runStartInternal(
 	// Derive temporary/auxiliary directory specifications.
 	serverCfg.ExternalIODir = startCtx.externalIODir
 
+	// Set gossip addresses clearing flag if specified.
+	serverCfg.ClearGossipAddresses = clearGossipAddresses
+
 	st := serverCfg.BaseConfig.Settings
 	if serverCfg.SQLConfig.TempStorageConfig, err = initTempStorageConfig(
 		ctx, st, stopper, serverCfg.Stores,
