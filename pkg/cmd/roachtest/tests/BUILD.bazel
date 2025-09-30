@@ -83,6 +83,7 @@ go_library(
         "gorm.go",
         "gorm_blocklist.go",
         "gossip.go",
+        "gossip_snapshot.go",
         "hibernate.go",
         "hibernate_blocklist.go",
         "hotspotsplits.go",
