@@ -200,7 +200,7 @@ type Cluster interface {
 	// prefix. These snapshots can later be retrieved, deleted or applied to
 	// already instantiated clusters.
 	//
-	CreateSnapshot(ctx context.Context, snapshotPrefix string) ([]vm.VolumeSnapshot, error)
+	CreateSnapshot(ctx context.Context, snapshotPrefix string, opts ...option.Option) ([]vm.VolumeSnapshot, error)
 	// ListSnapshots lists the individual volume snapshots that satisfy the
 	// search criteria.
 	ListSnapshots(ctx context.Context, vslo vm.VolumeSnapshotListOpts) ([]vm.VolumeSnapshot, error)
@@ -215,7 +215,7 @@ type Cluster interface {
 	// TODO(irfansharif): The implementation tacitly assumes one volume
 	// per-node, but this could be changed. Another assumption is that all
 	// volumes are created identically.
-	ApplySnapshots(ctx context.Context, snapshots []vm.VolumeSnapshot) error
+	ApplySnapshots(ctx context.Context, snapshots []vm.VolumeSnapshot, opts ...option.Option) error
 
 	// GetPreemptedVMs gets any VMs that were part of the cluster but preempted by cloud vendor.
 	GetPreemptedVMs(ctx context.Context, l *logger.Logger) ([]vm.PreemptedVM, error)

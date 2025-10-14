@@ -168,6 +168,21 @@ func sortedClusters() []string {
 	return r
 }
 
+// parseClusterName parses a cluster name that may include a node selector.
+func parseClusterName(name string) (clusterName, nodeSelector string, err error) {
+	parts := strings.Split(name, ":")
+	switch len(parts) {
+	case 2:
+		return parts[0], parts[1], nil
+	case 1:
+		return parts[0], "all", nil
+	case 0:
+		return "", "", fmt.Errorf("no cluster specified")
+	default:
+		return "", "", fmt.Errorf("invalid cluster name: %s", name)
+	}
+}
+
 // newCluster initializes a SyncedCluster for the given cluster name.
 //
 // The cluster name can include a node selector (e.g. "foo:1-3"). If the
@@ -176,20 +191,11 @@ func newCluster(
 	l *logger.Logger, name string, opts ...install.ClusterSettingOption,
 ) (*install.SyncedCluster, error) {
 	clusterSettings := install.MakeClusterSettings(opts...)
-	nodeSelector := "all"
-	{
-		parts := strings.Split(name, ":")
-		switch len(parts) {
-		case 2:
-			nodeSelector = parts[1]
-			fallthrough
-		case 1:
-			name = parts[0]
-		case 0:
-			return nil, fmt.Errorf("no cluster specified")
-		default:
-			return nil, fmt.Errorf("invalid cluster name: %s", name)
-		}
+	var err error
+	var nodeSelector string
+	name, nodeSelector, err = parseClusterName(name)
+	if err != nil {
+		return nil, err
 	}
 
 	metadata, ok := readSyncedClusters(name)
@@ -2162,6 +2168,13 @@ func CreateSnapshot(
 		return nil, err
 	}
 
+	// N.B. we need the cluster name without the node selector suffix
+	// for creating the new snapshot names.
+	clusterName, _, err = parseClusterName(clusterName)
+	if err != nil {
+		return nil, err
+	}
+
 	nodes := c.Nodes
 	nodesStatus, err := c.Status(ctx, l)
 
@@ -2290,6 +2303,12 @@ func ApplySnapshots(
 	opts vm.VolumeCreateOpts,
 ) error {
 	c, err := GetClusterFromCache(l, clusterName)
+	if err != nil {
+		return err
+	}
+	// N.B. we need the cluster name without the node selector suffix
+	// for creating the new volume names.
+	clusterName, _, err = parseClusterName(clusterName)
 	if err != nil {
 		return err
 	}

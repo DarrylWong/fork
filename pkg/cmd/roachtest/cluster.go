@@ -1888,9 +1888,10 @@ func (c *clusterImpl) DeleteSnapshots(ctx context.Context, snapshots ...vm.Volum
 }
 
 func (c *clusterImpl) CreateSnapshot(
-	ctx context.Context, snapshotPrefix string,
+	ctx context.Context, snapshotPrefix string, opts ...option.Option,
 ) ([]vm.VolumeSnapshot, error) {
-	return roachprod.CreateSnapshot(ctx, c.l, c.name, vm.VolumeSnapshotCreateOpts{
+	nodes := selectedNodesOrDefault(opts, c.CRDBNodes())
+	return roachprod.CreateSnapshot(ctx, c.l, c.MakeNodes(nodes), vm.VolumeSnapshotCreateOpts{
 		Name:        snapshotPrefix,
 		Description: fmt.Sprintf("snapshot for test: %s", c.t.Name()),
 		Labels: map[string]string{
@@ -1899,15 +1900,16 @@ func (c *clusterImpl) CreateSnapshot(
 	})
 }
 
-func (c *clusterImpl) ApplySnapshots(ctx context.Context, snapshots []vm.VolumeSnapshot) error {
-	opts := vm.VolumeCreateOpts{
+func (c *clusterImpl) ApplySnapshots(ctx context.Context, snapshots []vm.VolumeSnapshot, opts ...option.Option) error {
+	volOpts := vm.VolumeCreateOpts{
 		Size: c.spec.VolumeSize,
 		Type: c.spec.GCE.VolumeType, // TODO(irfansharif): This is only applicable to GCE. Change that.
 		Labels: map[string]string{
 			vm.TagUsage: "roachtest",
 		},
 	}
-	return roachprod.ApplySnapshots(ctx, c.l, c.name, snapshots, opts)
+	nodes := selectedNodesOrDefault(opts, c.CRDBNodes())
+	return roachprod.ApplySnapshots(ctx, c.l, c.MakeNodes(nodes), snapshots, volOpts)
 }
 
 // Put a local file to all of the machines in a cluster.
