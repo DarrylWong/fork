@@ -19,7 +19,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/prometheus"
-	"github.com/cockroachdb/cockroach/pkg/roachprod/vm"
 	"github.com/cockroachdb/cockroach/pkg/testutils/release"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 )
@@ -47,84 +46,49 @@ func registerIndexBackfill(r registry.Registry) {
 		//Suites:           registry.Suites(registry.Weekly),
 		//Tags:             registry.Tags(`weekly`),
 		Cluster:        clusterSpec,
-		SnapshotPrefix: "index-backfill-tpce-100k",
+		SnapshotPrefix: "tpce-100k-n9",
 		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
-			snapshots, err := c.ListSnapshots(ctx, vm.VolumeSnapshotListOpts{
-				// TODO(irfansharif): Search by taking in the other parts of the
-				// snapshot fingerprint, i.e. the node count, the version, etc.
-				NamePrefix: t.SnapshotPrefix(),
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(snapshots) == 0 {
-				t.L().Printf("no existing snapshots found for %s (%s), doing pre-work",
-					t.Name(), t.SnapshotPrefix())
-
-				// Set up TPC-E with 100k customers. Do so using a published
-				// CRDB release, since we'll use this state to generate disk
-				// snapshots.
-				runTPCE(ctx, t, c, tpceOptions{
-					start: func(ctx context.Context, t test.Test, c cluster.Cluster) {
-						pred, err := release.LatestPredecessor(t.BuildVersion())
-						if err != nil {
-							t.Fatal(err)
-						}
-
-						path, err := clusterupgrade.UploadCockroach(
-							ctx, t, t.L(), c, c.All(), clusterupgrade.MustParseVersion(pred),
-						)
-						if err != nil {
-							t.Fatal(err)
-						}
-
-						// Copy over the binary to ./cockroach and run it from
-						// there. This test captures disk snapshots, which are
-						// fingerprinted using the binary version found in this
-						// path. The reason it can't just poke at the running
-						// CRDB process is because when grabbing snapshots, CRDB
-						// is not running.
-						c.Run(ctx, option.WithNodes(c.All()), fmt.Sprintf("cp %s ./cockroach", path))
-						settings := install.MakeClusterSettings(install.NumRacksOption(len(c.CRDBNodes())))
-						startOpts := option.NewStartOpts(option.NoBackupSchedule)
-						roachtestutil.SetDefaultSQLPort(c, &startOpts.RoachprodOpts)
-						if err := c.StartE(ctx, t.L(), startOpts, settings, c.CRDBNodes()); err != nil {
-							t.Fatal(err)
-						}
-					},
-					customers:          100_000,
-					disablePrometheus:  true,
-					setupType:          usingTPCEInit,
-					estimatedSetupTime: 4 * time.Hour,
-					nodes:              len(c.CRDBNodes()),
-					cpus:               clusterSpec.CPUs,
-					ssds:               1,
-					onlySetup:          true,
-				})
-
-				// Stop all nodes before capturing cluster snapshots.
-				c.Stop(ctx, t.L(), option.DefaultStopOpts())
-
-				// Create the aforementioned snapshots.
-				snapshots, err = c.CreateSnapshot(ctx, t.SnapshotPrefix())
-				if err != nil {
-					t.Fatal(err)
-				}
-				t.L().Printf("created %d new snapshot(s) with prefix %q, using this state",
-					len(snapshots), t.SnapshotPrefix())
-			} else {
-				t.L().Printf("using %d pre-existing snapshot(s) with prefix %q",
-					len(snapshots), t.SnapshotPrefix())
-
-				if !t.SkipInit() {
-					// Creating and attaching volumes takes some time. This test
-					// is written to be re-entrant. Assume the user passing in
-					// --skip-init knows this particular test behavior.
-					if err := c.ApplySnapshots(ctx, snapshots); err != nil {
+			// Set up TPC-E with 100k customers. Do so using a published
+			// CRDB release, since we'll use this state to generate disk
+			// snapshots.
+			runTPCE(ctx, t, c, tpceOptions{
+				start: func(ctx context.Context, t test.Test, c cluster.Cluster) {
+					pred, err := release.LatestPredecessor(t.BuildVersion())
+					if err != nil {
 						t.Fatal(err)
 					}
-				}
-			}
+
+					path, err := clusterupgrade.UploadCockroach(
+						ctx, t, t.L(), c, c.All(), clusterupgrade.MustParseVersion(pred),
+					)
+					if err != nil {
+						t.Fatal(err)
+					}
+
+					// Copy over the binary to ./cockroach and run it from
+					// there. This test captures disk snapshots, which are
+					// fingerprinted using the binary version found in this
+					// path. The reason it can't just poke at the running
+					// CRDB process is because when grabbing snapshots, CRDB
+					// is not running.
+					c.Run(ctx, option.WithNodes(c.All()), fmt.Sprintf("cp %s ./cockroach", path))
+					settings := install.MakeClusterSettings(install.NumRacksOption(len(c.CRDBNodes())))
+					startOpts := option.NewStartOpts(option.NoBackupSchedule)
+					roachtestutil.SetDefaultSQLPort(c, &startOpts.RoachprodOpts)
+					roachtestutil.SetDefaultAdminUIPort(c, &startOpts.RoachprodOpts)
+					if err := c.StartE(ctx, t.L(), startOpts, settings, c.CRDBNodes()); err != nil {
+						t.Fatal(err)
+					}
+				},
+				customers:          100_000,
+				disablePrometheus:  true,
+				snapshotName:       t.SnapshotPrefix(),
+				estimatedSetupTime: 4 * time.Hour,
+				nodes:              len(c.CRDBNodes()),
+				cpus:               clusterSpec.CPUs,
+				ssds:               1,
+				onlySetup:          true,
+			})
 
 			promCfg := &prometheus.Config{}
 			promCfg.WithPrometheusNode(c.WorkloadNode().InstallNodes()[0]).
@@ -143,21 +107,12 @@ func registerIndexBackfill(r registry.Registry) {
 			// Run the foreground TPC-E workload for 20k customers for 1hr. Run
 			// large index backfills while it's running.
 			runTPCE(ctx, t, c, tpceOptions{
-				start: func(ctx context.Context, t test.Test, c cluster.Cluster) {
-					startOpts := option.NewStartOpts(option.NoBackupSchedule)
-					roachtestutil.SetDefaultSQLPort(c, &startOpts.RoachprodOpts)
-					roachtestutil.SetDefaultAdminUIPort(c, &startOpts.RoachprodOpts)
-					settings := install.MakeClusterSettings(install.NumRacksOption(len(c.CRDBNodes())))
-					if err := c.StartE(ctx, t.L(), startOpts, settings, c.CRDBNodes()); err != nil {
-						t.Fatal(err)
-					}
-				},
 				customers:        100_000,
 				activeCustomers:  20_000,
 				threads:          400,
 				skipCleanup:      true,
 				ssds:             1,
-				setupType:        usingExistingTPCEData,
+				skipInit:         true,
 				nodes:            clusterSpec.NodeCount - 1,
 				cpus:             clusterSpec.CPUs,
 				prometheusConfig: promCfg,

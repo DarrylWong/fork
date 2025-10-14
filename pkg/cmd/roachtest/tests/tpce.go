@@ -142,8 +142,10 @@ type tpceOptions struct {
 	disablePrometheus bool               // forces prometheus to not start up
 
 	// TPC-E init specific flags.
-	//
-	setupType          tpceSetupType
+	// If true, skips the TPCE init step.
+	skipInit bool
+	// If not empty, will init the TPCE workload by restoring from this snapshot.
+	snapshotName       string
 	estimatedSetupTime time.Duration // used only for logging
 
 	// Workload specific flags.
@@ -156,30 +158,9 @@ type tpceOptions struct {
 	exportMetrics    bool                            // exports metrics to stats.json used by roachperf
 	during           func(ctx context.Context) error // invoked concurrently with the workload
 }
-type tpceSetupType int
 
-const (
-	usingTPCEInit         tpceSetupType = iota
-	usingExistingTPCEData               // skips import
-)
-
-func runTPCE(ctx context.Context, t test.Test, c cluster.Cluster, opts tpceOptions) {
-	racks := opts.nodes
-
-	if opts.start == nil {
-		opts.start = func(ctx context.Context, t test.Test, c cluster.Cluster) {
-			t.Status("installing cockroach")
-			startOpts := option.DefaultStartOpts()
-			startOpts.RoachprodOpts.StoreCount = opts.ssds
-			settings := install.MakeClusterSettings(install.NumRacksOption(racks))
-			c.Start(ctx, t.L(), startOpts, settings, c.CRDBNodes())
-		}
-	}
+func initTPCE(ctx context.Context, t test.Test, c cluster.Cluster, spec *tpceSpec, opts tpceOptions) error {
 	opts.start(ctx, t, c)
-
-	tpceSpec, err := initTPCESpec(ctx, t.L(), c)
-	require.NoError(t, err)
-
 	// Configure to increase the speed of the import.
 	{
 		db := c.Conn(ctx, t.L(), 1)
@@ -191,36 +172,60 @@ func runTPCE(ctx context.Context, t test.Test, c cluster.Cluster, opts tpceOptio
 		}
 	}
 
-	if !opts.disablePrometheus {
-		// TODO(irfansharif): Move this after the import step? The statistics
-		// during import itself is uninteresting and pollutes actual workload
-		// data.
-		var cleanupFunc func()
-		_, cleanupFunc = setupPrometheusForRoachtest(ctx, t, c, opts.prometheusConfig, nil)
-		defer cleanupFunc()
+	m := c.NewDeprecatedMonitor(ctx, c.CRDBNodes())
+	m.Go(func(ctx context.Context) error {
+		estimatedSetupTimeStr := ""
+		if opts.estimatedSetupTime != 0 {
+			estimatedSetupTimeStr = fmt.Sprintf(" (<%s)", opts.estimatedSetupTime)
+		}
+		t.Status(fmt.Sprintf("initializing %d tpc-e customers%s", opts.customers, estimatedSetupTimeStr))
+		spec.init(ctx, t, c, tpceCmdOptions{
+			customers:      opts.customers,
+			racks:          opts.nodes,
+			connectionOpts: defaultTPCEConnectionOpts(),
+		})
+		return nil
+	})
+	return m.WaitE() // for init
+}
+
+func runTPCE(ctx context.Context, t test.Test, c cluster.Cluster, opts tpceOptions) {
+	racks := opts.nodes
+	if opts.start == nil {
+		opts.start = func(ctx context.Context, t test.Test, c cluster.Cluster) {
+			t.Status("installing cockroach")
+			startOpts := option.DefaultStartOpts()
+			startOpts.RoachprodOpts.StoreCount = opts.ssds
+			settings := install.MakeClusterSettings(install.NumRacksOption(racks))
+			c.Start(ctx, t.L(), startOpts, settings, c.CRDBNodes())
+		}
 	}
 
-	if opts.setupType == usingTPCEInit && !t.SkipInit() {
-		m := c.NewDeprecatedMonitor(ctx, c.CRDBNodes())
-		m.Go(func(ctx context.Context) error {
-			estimatedSetupTimeStr := ""
-			if opts.estimatedSetupTime != 0 {
-				estimatedSetupTimeStr = fmt.Sprintf(" (<%s)", opts.estimatedSetupTime)
-			}
-			t.Status(fmt.Sprintf("initializing %d tpc-e customers%s", opts.customers, estimatedSetupTimeStr))
-			tpceSpec.init(ctx, t, c, tpceCmdOptions{
-				customers:      opts.customers,
-				racks:          racks,
-				connectionOpts: defaultTPCEConnectionOpts(),
+	tpceSpec, err := initTPCESpec(ctx, t.L(), c)
+	require.NoError(t, err)
+
+	if !opts.skipInit && !t.SkipInit() {
+		if opts.snapshotName != "" {
+			err = roachtestutil.ApplyOrCreateSnapshots(ctx, t, c, c.CRDBNodes(), opts.snapshotName, func() error {
+				return initTPCE(ctx, t, c, tpceSpec, opts)
 			})
-			return nil
-		})
-		m.Wait() // for init
+			require.NoError(t, err)
+			opts.start(ctx, t, c)
+		} else {
+			err = initTPCE(ctx, t, c, tpceSpec, opts)
+			require.NoError(t, err)
+		}
 	} else {
 		t.Status("skipping tpc-e init")
 	}
 	if opts.onlySetup {
 		return
+	}
+
+	if !opts.disablePrometheus {
+		var cleanupFunc func()
+		_, cleanupFunc = setupPrometheusForRoachtest(ctx, t, c, opts.prometheusConfig, nil)
+		defer cleanupFunc()
 	}
 
 	m := c.NewDeprecatedMonitor(ctx, c.CRDBNodes())
@@ -274,14 +279,16 @@ func registerTPCE(r registry.Registry) {
 		cpus:          4,
 		ssds:          1,
 		exportMetrics: true,
+		snapshotName:  "tpce-5k-n3",
 	}
 	r.Add(registry.TestSpec{
 		Name:             fmt.Sprintf("tpce/c=%d/nodes=%d", smallNightly.customers, smallNightly.nodes),
 		Owner:            registry.OwnerTestEng,
 		Benchmark:        true,
 		Timeout:          4 * time.Hour,
-		Cluster:          r.MakeClusterSpec(smallNightly.nodes+1, spec.CPU(smallNightly.cpus), spec.WorkloadNode(), spec.WorkloadNodeCPU(smallNightly.cpus), spec.SSD(smallNightly.ssds)),
+		Cluster:          r.MakeClusterSpec(smallNightly.nodes+1, spec.CPU(smallNightly.cpus), spec.WorkloadNode(), spec.WorkloadNodeCPU(smallNightly.cpus), spec.VolumeSize(400), spec.GCEVolumeType("pd-ssd"), spec.GCEVolumeCount(smallNightly.ssds)),
 		CompatibleClouds: registry.OnlyGCE,
+		SnapshotPrefix:   smallNightly.snapshotName,
 		Suites:           registry.Suites(registry.Nightly),
 		// Never run with runtime assertions as this makes this test take
 		// too long to complete.
@@ -298,6 +305,7 @@ func registerTPCE(r registry.Registry) {
 		cpus:          32,
 		ssds:          2,
 		exportMetrics: true,
+		snapshotName:  "tpce-100k-n5",
 	}
 	r.Add(registry.TestSpec{
 		Name:             fmt.Sprintf("tpce/c=%d/nodes=%d", largeWeekly.customers, largeWeekly.nodes),
@@ -306,7 +314,8 @@ func registerTPCE(r registry.Registry) {
 		CompatibleClouds: registry.OnlyGCE,
 		Suites:           registry.Suites(registry.Weekly),
 		Timeout:          8 * time.Hour,
-		Cluster:          r.MakeClusterSpec(largeWeekly.nodes+1, spec.CPU(largeWeekly.cpus), spec.WorkloadNode(), spec.WorkloadNodeCPU(largeWeekly.cpus), spec.SSD(largeWeekly.ssds)),
+		SnapshotPrefix:   largeWeekly.snapshotName,
+		Cluster:          r.MakeClusterSpec(largeWeekly.nodes+1, spec.CPU(largeWeekly.cpus), spec.WorkloadNode(), spec.WorkloadNodeCPU(largeWeekly.cpus), spec.VolumeSize(800), spec.GCEVolumeType("pd-ssd"), spec.GCEVolumeCount(largeWeekly.ssds)),
 		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 			runTPCE(ctx, t, c, largeWeekly)
 		},
