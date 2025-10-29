@@ -17,6 +17,8 @@ go_library(
     deps = [
         "//pkg/build",
         "//pkg/cli/exit",
+        "//pkg/sql/pgwire/pgcode",
+        "//pkg/sql/pgwire/pgerror",
         "//pkg/util/allstacks",
         "//pkg/util/envutil",
         "//pkg/util/log",
@@ -88,11 +90,17 @@ go_library(
 go_test(
     name = "cli_test",
     size = "small",
-    srcs = ["format_test.go"],
+    srcs = [
+        "format_test.go",
+        "run_test.go",
+    ],
     embed = [":cli"],
     deps = [
+        "//pkg/sql/pgwire/pgcode",
+        "//pkg/sql/pgwire/pgerror",
         "//pkg/util/leaktest",
         "//pkg/workload/histogram",
+        "@com_github_cockroachdb_errors//:errors",
         "@com_github_stretchr_testify//require",
     ],
 )

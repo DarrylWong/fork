@@ -1880,6 +1880,117 @@ func registerTPCC(r registry.Registry) {
 			Suites: registry.Suites(registry.Nightly),
 		},
 	)
+
+	// Test to validate --tolerate-retry-errors flag with network partition.
+	r.Add(registry.TestSpec{
+		Name:             "tpcc/partition-retry-errors/nodes=3/w=10",
+		Owner:            registry.OwnerTestEng,
+		Cluster:          r.MakeClusterSpec(4, spec.WorkloadNode()),
+		CompatibleClouds: registry.AllClouds,
+		Suites:           registry.Suites(registry.Nightly),
+		Leases:           registry.MetamorphicLeases,
+		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
+			runTPCCWithPartition(ctx, t, c)
+		},
+	})
+}
+
+// runTPCCWithPartition runs a TPCC workload with a network partition to test
+// the --tolerate-retry-errors flag. This test sets up a 3-node cluster with
+// 10 warehouses, creates a partition between node 1 and node 2, then runs TPCC
+// for 10 minutes with the --tolerate-retry-errors flag.
+func runTPCCWithPartition(ctx context.Context, t test.Test, c cluster.Cluster) {
+	const warehouses = 10
+	const duration = 10 * time.Minute
+	const partitionDuration = 5 * time.Minute
+
+	crdbNodes := c.Range(1, 3) // Nodes 1, 2, 3 for CockroachDB
+	workloadNode := c.Node(4)  // Node 4 for workload
+
+	t.L().Printf("starting cockroach on nodes %s", crdbNodes)
+	c.Start(ctx, t.L(), option.DefaultStartOpts(), install.MakeClusterSettings(), crdbNodes)
+
+	// Initialize TPCC with a small number of warehouses
+	t.L().Printf("initializing tpcc with %d warehouses", warehouses)
+	cmd := roachtestutil.NewCommand("%s workload init tpcc", test.DefaultCockroachPath).
+		Flag("warehouses", warehouses).
+		Arg("{pgurl%s}", crdbNodes.String())
+	c.Run(ctx, option.WithNodes(workloadNode), cmd.String())
+
+	// Wait for the cluster to stabilize
+	time.Sleep(30 * time.Second)
+
+	// Create a network partition failer
+	failer, err := c.GetFailer(
+		t.L(),
+		crdbNodes,
+		failures.IPTablesNetworkPartitionName,
+		false, /* disableStateValidation */
+		failures.ReplicationFactor(3),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := failer.Cleanup(ctx, t.L()); err != nil {
+			t.L().Printf("failed to cleanup partition: %v", err)
+		}
+	}()
+
+	m := c.NewDeprecatedMonitor(ctx, crdbNodes)
+
+	// Start the partition injection after 1 minute
+	m.Go(func(ctx context.Context) error {
+		time.Sleep(1 * time.Minute)
+
+		t.L().Printf("setting up network partition between node 1 and node 2")
+		if err := failer.Setup(ctx, t.L(), failures.NetworkPartitionArgs{}); err != nil {
+			return err
+		}
+
+		t.L().Printf("injecting network partition: blocking node 1 from node 2")
+		partitionArgs := failures.NetworkPartitionArgs{
+			Partitions: []failures.NetworkPartition{
+				{
+					Source:      install.Nodes{install.Node(1)},
+					Destination: install.Nodes{install.Node(2)},
+					Type:        failures.Bidirectional,
+				},
+			},
+		}
+
+		if err := failer.Inject(ctx, t.L(), partitionArgs); err != nil {
+			return err
+		}
+
+		t.L().Printf("partition active for %s", partitionDuration)
+		time.Sleep(partitionDuration)
+
+		// Restore network connectivity
+		t.L().Printf("recovering from network partition")
+		if err := failer.Recover(ctx, t.L()); err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	// Run TPCC workload with --tolerate-retry-errors flag
+	m.Go(func(ctx context.Context) error {
+		t.L().Printf("running tpcc workload with --tolerate-retry-errors for %s", duration)
+
+		cmd := roachtestutil.NewCommand("%s workload run tpcc", test.DefaultCockroachPath).
+			Flag("warehouses", warehouses).
+			Flag("duration", duration).
+			Flag("tolerate-retry-errors", ""). // The new flag!
+			Arg("{pgurl%s}", crdbNodes.String())
+
+		return c.RunE(ctx, option.WithNodes(workloadNode), cmd.String())
+	})
+
+	m.Wait()
+
+	t.L().Printf("test completed successfully")
 }
 
 func valueForCloud(cloud spec.Cloud, gce, aws, azure, ibm int) int {

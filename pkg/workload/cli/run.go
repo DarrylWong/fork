@@ -28,6 +28,8 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/log/logconfig"
 	"github.com/cockroachdb/cockroach/pkg/util/retry"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
+	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
+	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/workload"
 	"github.com/cockroachdb/cockroach/pkg/workload/changefeeds"
 	"github.com/cockroachdb/cockroach/pkg/workload/histogram"
@@ -43,6 +45,7 @@ import (
 
 var runFlags = pflag.NewFlagSet(`run`, pflag.ContinueOnError)
 var tolerateErrors = runFlags.Bool("tolerate-errors", false, "Keep running on error")
+var tolerateRetryErrors = runFlags.Bool("tolerate-retry-errors", false, "Keep running on transaction retry errors (pgcode 40001)")
 var maxRate = runFlags.Float64(
 	"max-rate", 0, "Maximum frequency of operations (reads/writes). If 0, no limit.")
 var maxOps = runFlags.Uint64("max-ops", 0, "Maximum number of operations to run")
@@ -280,6 +283,13 @@ func SetCmdDefaults(cmd *cobra.Command) *cobra.Command {
 // false) or of all operations (if countErrors is true).
 var numOps atomic.Uint64
 
+// isRetryError checks if an error is a transaction retry error.
+// These are errors with pgcode 40001 (SerializationFailure), which includes
+// errors like RETRY_WRITE_TOO_OLD, RETRY_SERIALIZABLE, etc.
+func isRetryError(err error) bool {
+	return pgerror.GetPGCode(err) == pgcode.SerializationFailure
+}
+
 // workerRun is an infinite loop in which the worker continuously attempts to
 // read / write blocks of random data into a table in cockroach DB. The function
 // returns only when the provided context is canceled.
@@ -313,10 +323,16 @@ func workerRun(
 				// that has been canceled. See https://github.com/lib/pq/pull/1000
 				return
 			}
+
+			// Check if we should tolerate this error.
+			// If --tolerate-retry-errors is set, skip retry errors (pgcode 40001).
+			// If --tolerate-errors is set, skip all errors.
+			shouldSkipError := *tolerateErrors || (*tolerateRetryErrors && isRetryError(err))
+
 			errCh <- err
-			if !*countErrors {
+			if !*countErrors && shouldSkipError {
 				// Continue to the next iteration of the infinite loop only if
-				// we are not counting the errors.
+				// we are not counting the errors and we should skip this error.
 				continue
 			}
 		}
@@ -615,7 +631,11 @@ func runRun(gen workload.Generator, urls []string, dbName string) error {
 		select {
 		case err := <-errCh:
 			formatter.outputError(err)
-			if *tolerateErrors {
+			// Tolerate the error if:
+			// - --tolerate-errors is set (all errors), OR
+			// - --tolerate-retry-errors is set AND this is a retry error (pgcode 40001)
+			shouldTolerate := *tolerateErrors || (*tolerateRetryErrors && isRetryError(err))
+			if shouldTolerate {
 				if everySecond.ShouldLog() {
 					log.Dev.Errorf(ctx, "%v", err)
 				}
