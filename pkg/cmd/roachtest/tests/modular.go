@@ -73,7 +73,7 @@ func runModularExample(ctx context.Context, t test.Test, c cluster.Cluster) {
 		}
 
 		cmd := roachtestutil.NewCommand("%s workload init bank", test.DefaultCockroachPath).
-			Flag("rows", 1000).
+			Flag("rows", 100000).
 			Flag("db", dbName).
 			Arg("{pgurl:%d}", h.RandomAvailableNode()).
 			String()
@@ -86,9 +86,12 @@ func runModularExample(ctx context.Context, t test.Test, c cluster.Cluster) {
 	mod.AddOperation(mainStage, operations.AddRandomIndex())
 
 	// Add TPCC workload chain: init, run, then check consistency
-	mod.AddOperation(mainStage, operations.TPCC(c, 10, time.Minute, operations.TPCCExtraOptions{}))
+	mod.AddOperation(mainStage, operations.TPCC(c, 1000, time.Minute, operations.TPCCExtraOptions{}))
 
 	mod.AddOperation(mainStage, operations.ReplicationFactorCycle())
+
+	// Add INSPECT operation to validate table consistency
+	mod.AddOperation(mainStage, operations.InspectTable())
 
 	// Generate the test plan
 	planner := mod.NewPlanner()

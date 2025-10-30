@@ -128,6 +128,49 @@ func (h *Helper) AlterRange(rangeName, zoneConfig string) error {
 	return h.Exec(fmt.Sprintf("ALTER RANGE %s CONFIGURE ZONE USING %s", rangeName, zoneConfig))
 }
 
+// AlterAllRanges alters zone configuration for all system ranges, the default range,
+// and all previously tracked zone configs (tables/databases with explicit overrides).
+// This ensures complete coverage:
+// - System ranges (meta, system, liveness, timeseries)
+// - Default zone (for future tables)
+// - All previously modified zones (tables/databases with explicit configs)
+func (h *Helper) AlterAllRanges(zoneConfig string) error {
+	// First, update all standard system and default ranges
+	systemRanges := map[string]struct{}{
+		"meta":       {},
+		"system":     {},
+		"liveness":   {},
+		"timeseries": {},
+		"default":    {},
+	}
+
+	for rangeName := range systemRanges {
+		if err := h.AlterRange(rangeName, zoneConfig); err != nil {
+			return err
+		}
+	}
+
+	// Collect all tracked zone configs to update
+	var trackedRanges []string
+	h.stateTracker.zoneConfigs.Range(func(key, value interface{}) bool {
+		rangeName := key.(string)
+		// Skip if it's a system range we already updated
+		if _, isSystemRange := systemRanges[rangeName]; !isSystemRange {
+			trackedRanges = append(trackedRanges, rangeName)
+		}
+		return true // continue iteration
+	})
+
+	// Update all tracked zone configs (tables/databases with explicit overrides)
+	for _, rangeName := range trackedRanges {
+		if err := h.AlterRange(rangeName, zoneConfig); err != nil {
+			return fmt.Errorf("failed to alter zone config for %s: %w", rangeName, err)
+		}
+	}
+
+	return nil
+}
+
 func (h *Helper) CreateUser(namePrefix string, args ...string) (string, error) {
 	username := h.stateTracker.NewUsername(namePrefix)
 	query := fmt.Sprintf("CREATE USER %s %s", username, joinArgs(args...))
@@ -250,7 +293,7 @@ ORDER BY attnum`, database, table)
 // and returns a random one. This ensures we don't miss valid tables due to randomness.
 func (h *Helper) SearchTable(pred func(dbName, tableName string) bool) (string, string, error) {
 	// Get all databases using existing helper logic
-	rows, err := h.Query("SELECT database_name FROM [SHOW DATABASES] WHERE database_name NOT IN ('system', 'postgres', 'defaultdb', 'information_schema')")
+	rows, err := h.Query("SELECT database_name FROM [SHOW DATABASES] WHERE database_name NOT IN ('system', 'postgres', 'information_schema')")
 	if err != nil {
 		return "", "", fmt.Errorf("failed to query databases: %w", err)
 	}
