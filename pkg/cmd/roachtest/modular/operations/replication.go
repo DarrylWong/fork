@@ -41,13 +41,13 @@ func ReplicationFactorCycle() modular.Operation {
 	builder := modular.NewOperation("increase rebalance snapshot rate", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
 		return h.SetClusterSetting("kv.snapshot_rebalance.max_rate", "2 GiB")
 	}).Then("increase replication factor to 5", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		return h.AlterRange("default", "num_replicas = 5")
+		return h.AlterAllRanges("num_replicas = 5")
 	}).Then("wait for replication factor of 5", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
 		_, db := h.RandomDB()
 		defer db.Close()
 		return roachtestutil.WaitForReplication(ctx, l, db, 5, roachprod.AtLeastReplicationFactor)
 	}).Then("decrease replication factor to 3", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		return h.AlterRange("default", "num_replicas = 3")
+		return h.AlterAllRanges("num_replicas = 3")
 	}).Then("wait for replication factor of 3", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
 		_, db := h.RandomDB()
 		defer db.Close()
