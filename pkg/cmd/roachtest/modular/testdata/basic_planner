@@ -1,0 +1,27 @@
+echo
+----
+----
+Seed: 12345
+
+Plan:
+├── Setup
+│   ├── Start Cluster (1)
+│   └── running 2 steps concurrently
+│      ├── Load TPCC Workload (2)
+│      └── Load Bank Workload (3)
+├── Baseline Testing
+│   ├── running 3 steps concurrently
+│   │   ├── Run TPCC Workload (4)
+│   │   ├── Measure latency, after 841ms delay (5)
+│   │   └── Measure throughput (6)
+│   └── Verify consistency (7)
+└── Chaos Testing
+   ├── Inject Disk Stall (8)
+   ├── running 3 steps concurrently
+   │   ├── Run TPCC Workload (9)
+   │   ├── Measure latency, after 6.101s delay (10)
+   │   └── Measure throughput (11)
+   ├── Recover Disk Stall (12)
+   └── Verify consistency (13)
+----
+----
