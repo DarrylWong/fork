@@ -36,7 +36,7 @@ func (p *Planner) Plan() (*TestPlan, error) {
 		}
 		stagePlans = append(stagePlans, plan)
 	}
-	return &TestPlan{}, nil
+	return &TestPlan{stagePlans: stagePlans}, nil
 }
 
 func (p *Planner) DAG() string {
@@ -44,7 +44,9 @@ func (p *Planner) DAG() string {
 	return "unimplemented"
 }
 
-type TestPlan struct{}
+type TestPlan struct {
+	stagePlans []stagePlan
+}
 
 func (p *TestPlan) String() string {
 	// TODO: implement pretty printing of the test plan similar to mixed version tests.

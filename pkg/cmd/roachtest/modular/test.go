@@ -1,5 +1,10 @@
 package modular
 
+import (
+	"context"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
+)
+
 // Test is the main struct test writers will interact with. It is used to
 // construct a DAG of the test, which is then converted to a test plan
 // and executed.
@@ -26,8 +31,22 @@ func WithExecutor(executor Executor) TestOption {
 	}
 }
 
-func (*Test) Plan() (*TestPlan, error) {
+func (*Test) Plan() (string, *TestPlan, error) {
 	// TODO: implement the test planner.
 	planner := NewPlanner(nil, nil /* planFn */)
-	return planner.Plan()
+	DAG := planner.DAG()
+	plan, err := planner.Plan()
+	return DAG, plan, err
+}
+
+func (t *Test) Run(ctx context.Context, l *logger.Logger) error {
+	DAG, plan, err := t.Plan()
+	if err != nil {
+		return err
+	}
+	l.Printf(DAG)
+	l.Printf(plan.String())
+
+	r := NewRunner(t.options.executor)
+	return r.Run(ctx, l, plan)
 }
