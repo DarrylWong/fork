@@ -7,11 +7,13 @@ import (
 
 type runner struct {
 	executor Executor
+	tracker  ClusterStateTracker
 }
 
 func NewRunner(executor Executor) *runner {
 	return &runner{
 		executor: executor,
+		tracker:  ClusterStateTracker{},
 	}
 }
 
