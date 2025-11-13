@@ -15,5 +15,13 @@ type Test struct {
 	options        TestOptions
 }
 
-type TestOptions struct{}
+type TestOptions struct {
+	executor Executor
+}
 type TestOption func(options *TestOptions)
+
+func WithExecutor(executor Executor) TestOption {
+	return func(options *TestOptions) {
+		options.executor = executor
+	}
+}

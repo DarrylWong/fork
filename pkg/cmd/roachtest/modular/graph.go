@@ -62,6 +62,7 @@ type stepGroup []Step
 
 // Step represents the smallest unit of work in a modular plan.
 type Step struct {
+	StepProtocol
 	opts stepOpts
 }
 
