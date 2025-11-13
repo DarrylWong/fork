@@ -25,3 +25,9 @@ func WithExecutor(executor Executor) TestOption {
 		options.executor = executor
 	}
 }
+
+func (*Test) Plan() (*TestPlan, error) {
+	// TODO: implement the test planner.
+	planner := NewPlanner(nil, nil /* planFn */)
+	return planner.Plan()
+}
