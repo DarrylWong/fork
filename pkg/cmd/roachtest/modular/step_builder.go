@@ -44,3 +44,34 @@ func (sb *StepBuilder) MaybeAnd(condition bool, stepName string, fn stepFunc, op
 	// TODO: implement a DAG builder.
 	return nil
 }
+
+type OperationBuilder struct{}
+
+func NewOperation(stepName string, fn stepFunc, opts ...StepOption) *Builder {
+	// TODO: implement an operation builder.
+	return nil
+}
+
+// Then adds another step that runs after the previous one in sequence.
+func (ob *OperationBuilder) Then(stepName string, fn stepFunc, opts ...StepOption) *Builder {
+	// TODO: implement an operation builder.
+	return nil
+}
+
+// MaybeThen is like Then, but only adds the step if the conditional is true.
+func (ob *OperationBuilder) MaybeThen(condition bool, stepName string, fn stepFunc, opts ...StepOption) *Builder {
+	// TODO: implement an operation builder.
+	return nil
+}
+
+// And adds a step that can run in parallel with the previous step.
+func (ob *OperationBuilder) And(stepName string, fn stepFunc, opts ...StepOption) *Builder {
+	// TODO: implement an operation builder.
+	return nil
+}
+
+// MaybeAnd is like And, but only adds the step if the conditional is true.
+func (ob *OperationBuilder) MaybeAnd(condition bool, stepName string, fn stepFunc, opts ...StepOption) *Builder {
+	// TODO: implement an operation builder.
+	return nil
+}
