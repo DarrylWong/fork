@@ -119,7 +119,7 @@ func TestMultipleChainsBuilder(t *testing.T) {
 		And("2", noopStep()).
 		Then("3", noopStep())
 
-	require.Equal(t, 2, len(stage.roots))
+	require.Equal(t, 3, len(stage.roots))
 
 	stepA := mustGetStep(t, stage, "A")
 	require.Len(t, stepA.parents, 0)

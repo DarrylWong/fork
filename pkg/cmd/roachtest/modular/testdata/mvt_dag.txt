@@ -1,0 +1,45 @@
+echo
+----
+----
+
+
+
+
+                                                      [upgrade cluster from "v24.2.2" to "master"]
+  ┌───────────────────┐    ┌───────────────────┐    ┌───────────────────┐    ┌───────────────────┐    ┌───────────────────┐    ┌───────────────────┐
+  │  restart system   │    │  restart system   │    │  restart system   │    │  restart system   │    │    run backup     │    │   test features   │
+  │ server on node 1  │    │ server on node 2  │    │ server on node 3  │    │ server on node 4  │    │                   │    │                   │
+  │    with binary    │    │    with binary    │    │    with binary    │    │    with binary    │    │                   │    │                   │
+  └───────────────────┘    └───────────────────┘    └───────────────────┘    └───────────────────┘    └───────────────────┘    └───────────────────┘
+
+
+
+
+                                                   [downgrade nodes :1-4 from "master" to "v24.2.2"]
+  ┌───────────────────┐    ┌───────────────────┐    ┌───────────────────┐    ┌───────────────────┐    ┌───────────────────┐    ┌───────────────────┐
+  │  restart system   │    │  restart system   │    │  restart system   │    │  restart system   │    │    run backup     │    │   test features   │
+  │ server on node 1  │    │ server on node 2  │    │ server on node 3  │    │ server on node 4  │    │                   │    │                   │
+  │    with binary    │    │    with binary    │    │    with binary    │    │    with binary    │    │                   │    │                   │
+  └───────────────────┘    └───────────────────┘    └───────────────────┘    └───────────────────┘    └───────────────────┘    └───────────────────┘
+
+
+
+
+                                                      [upgrade cluster from "v24.2.2" to "master"]
+  ┌───────────────────┐    ┌───────────────────┐    ┌───────────────────┐    ┌───────────────────┐    ┌───────────────────┐    ┌───────────────────┐
+  │  restart system   │    │  restart system   │    │  restart system   │    │  restart system   │    │    run backup     │    │   test features   │
+  │ server on node 1  │    │ server on node 2  │    │ server on node 3  │    │ server on node 4  │    │                   │    │                   │
+  │    with binary    │    │    with binary    │    │    with binary    │    │    with binary    │    │                   │    │                   │
+  └───────────────────┘    └───────────────────┘    └───────────────────┘    └───────────────────┘    └───────────────────┘    └───────────────────┘
+            │                        │                        │                        │
+            ┼────────────────────────┼────────────────────────┼────────────────────────┼
+                                                  │
+                                                  │
+                                                  ▼
+                                        ┌───────────────────┐
+                                        │   wait for all    │
+                                        │  nodes (:1-4) to  │
+                                        │    acknowledge    │
+                                        └───────────────────┘
+----
+----

@@ -1,0 +1,82 @@
+echo
+----
+----
+drawStepNode:
+  ┌───────────────────┐
+  │     test step     │
+  │                   │
+  │                   │
+  └───────────────────┘
+
+drawStepNode/text-wrap:
+  ┌───────────────────┐
+  │  test step with   │
+  │ long description  │
+  │    that wraps     │
+  └───────────────────┘
+
+drawUpperDependencyNode:
+            │
+            │
+
+
+
+
+drawLowerDependencyNode:
+
+
+            │
+            │
+            ▼
+
+drawStageLabel:
+
+
+
+
+      [test stage]
+
+drawMergeLeftNode:
+            │
+            ┼────────────
+
+
+
+
+drawMergeCenterNode:
+            │
+────────────┼────────────
+
+
+
+
+drawMergeRightNode:
+            │
+────────────┼
+
+
+
+
+drawSplitLeftNode:
+
+
+
+            ┼────────────
+            ▼
+
+drawSplitCenterNode:
+
+
+
+────────────┼────────────
+            ▼
+
+drawSplitRightNode:
+
+
+
+────────────┼
+            ▼
+
+----
+----

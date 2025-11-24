@@ -32,10 +32,17 @@ func WithExecutor(executor Executor) TestOption {
 	}
 }
 
-func (*Test) Plan() (string, *TestPlan, error) {
+func (t *Test) Plan() (string, *TestPlan, error) {
 	// TODO: implement the test planner.
-	planner := NewPlanner(nil, nil /* planFn */)
-	DAG := planner.DAG()
+	planner := NewPlanner(t.stages, nil /* planFn */)
+	if err := planner.FinalizeStages(); err != nil {
+		return "", nil, err
+	}
+
+	DAG, err := planner.DAG()
+	if err != nil {
+		return "", nil, err
+	}
 	plan, err := planner.Plan()
 	return DAG, plan, err
 }

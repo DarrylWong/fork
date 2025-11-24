@@ -1,7 +1,5 @@
 package modular
 
-import "errors"
-
 // Builder provides a simple way to construct DAGs. It allows chaining steps together
 // to indicate dependencies.
 type Builder interface {
@@ -23,16 +21,16 @@ type StepBuilder struct {
 }
 
 func newTestStep(stage *Stage, nodeID int, stepName string, fn stepFunc, opts ...StepOption) *Step {
-	stepOpts := stepOpts{}
+	options := stepOpts{}
 	for _, opt := range opts {
-		opt(&stepOpts)
+		opt(&options)
 	}
 
 	newStep := &Step{
 		StepProtocol: newSingleStep(stepName, fn),
 		nodeID:       nodeID,
 		children:     make([]*Step, 0),
-		opts:         stepOpts,
+		opts:         options,
 	}
 	stage.stepMap[stepName] = newStep
 	return newStep
@@ -97,6 +95,13 @@ func (sb *StepBuilder) And(stepName string, fn stepFunc, opts ...StepOption) Bui
 		ts.parents = append(ts.parents, parent)
 	}
 
+	if len(sb.lastLevel) == 0 {
+		// If there is no last level, this means we are adding an 'And' step
+		// immediately after the first step. In this case, the new step should
+		// be a root step.
+		sb.stage.roots = append(sb.stage.roots, ts)
+	}
+
 	// Add the new step to the last level.
 	sb.currLevel = append(sb.currLevel, ts)
 	return sb
@@ -153,21 +158,4 @@ func (t *Test) NewStep(stage *Stage, stepName string, fn stepFunc, opts ...StepO
 func (s *Step) AddDependency(child *Step) {
 	s.children = append(s.children, child)
 	child.parents = append(child.parents, s)
-}
-
-// Finalize finalizes the stage's DAG by assigning root steps and ensuring we have a valid DAG.
-func (s *Stage) Finalize() error {
-	rootNodes := make([]*Step, 0)
-
-	for _, step := range s.stepMap {
-		if len(step.parents) == 0 {
-			rootNodes = append(rootNodes, step)
-		}
-	}
-	if len(rootNodes) == 0 {
-		return errors.New("stage is an invalid DAG: no root nodes found")
-	}
-
-	s.roots = rootNodes
-	return nil
 }

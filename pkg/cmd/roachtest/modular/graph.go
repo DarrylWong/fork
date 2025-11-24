@@ -1,6 +1,11 @@
 package modular
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+
+	"github.com/cockroachdb/errors"
+)
 
 // The possible permutations of a modular test can be represented
 // as a directed acyclic graph (DAG). A DAG is constructed from the
@@ -51,7 +56,10 @@ type Stage struct {
 	// as an escape hatch for more complex DAG dependencies not supported by the Builder API.
 	// Assumes step names are unique within a stage.
 	stepMap map[string]*Step
-	opts    stageOpts
+	// The depth of the stage's DAG, i.e. the length of the longest path from
+	// a root step to a leaf step. Lazily computed after stage.Finalize() is called.
+	depth int
+	opts  stageOpts
 }
 
 // find returns the Step with the given step name, or an error if not found.
@@ -61,6 +69,76 @@ func (s *Stage) find(stepName string) (*Step, error) {
 		return nil, fmt.Errorf("step %q not found in stage %q", stepName, s.name)
 	}
 	return step, nil
+}
+
+// Finalize finalizes the stage's DAG by assigning root steps and levels. It also ensures we
+// have a valid DAG.
+func (s *Stage) Finalize() error {
+	rootNodes := make([]*Step, 0)
+
+	// Assign any root nodes (steps with indegree 0).
+	for _, step := range s.stepMap {
+		if len(step.parents) == 0 {
+			rootNodes = append(rootNodes, step)
+		}
+	}
+	if len(rootNodes) == 0 {
+		return errors.New("stage is an invalid DAG: no root nodes found")
+	}
+
+	// Sort root nodes by nodeID so we have a deterministic way to traverse our graph.
+	slices.SortFunc(rootNodes, func(a, b *Step) int {
+		return a.nodeID - b.nodeID
+	})
+
+	s.roots = rootNodes
+
+	// Assign levels to each step in the DAG.
+	if err := s.assignLevels(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Stage) assignLevels() error {
+	indegrees := make(map[*Step]int)
+	for _, step := range s.stepMap {
+		indegrees[step] = len(step.parents)
+	}
+
+	// Initialize queue with all steps that have indegree 0, i.e. have no child dependencies.
+	queue := make([]*Step, 0, len(s.roots))
+	queue = append(queue, s.roots...)
+
+	maxLevel := 0
+	numSteps := 0
+	for len(queue) > 0 {
+		curr := queue[len(queue)-1]
+		queue = queue[:len(queue)-1]
+		numSteps++
+
+		for _, child := range curr.children {
+			// A node's level is defined as one more than the max level of its parents.
+			if curr.level+1 > child.level {
+				child.level = curr.level + 1
+				maxLevel = max(maxLevel, child.level)
+			}
+
+			indegrees[child]--
+			// If indegree becomes 0, then we have added all parent dependencies and
+			// can add it to the queue.
+			if indegrees[child] == 0 {
+				queue = append(queue, child)
+			}
+		}
+	}
+	if numSteps != len(s.stepMap) {
+		return errors.Errorf("unreachable step(s) detected in stage %q", s.name)
+	}
+
+	s.depth = maxLevel
+	return nil
 }
 
 // StageOption configures a Stage.

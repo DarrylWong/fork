@@ -1,0 +1,39 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "modular",
+    srcs = [
+        "dag.go",
+        "executor.go",
+        "graph.go",
+        "helper.go",
+        "operation.go",
+        "planner.go",
+        "runner.go",
+        "state_tracker.go",
+        "step.go",
+        "step_builder.go",
+        "test.go",
+    ],
+    importpath = "github.com/cockroachdb/cockroach/pkg/cmd/roachtest/modular",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/roachprod/logger",
+        "@com_github_cockroachdb_errors//:errors",
+    ],
+)
+
+go_test(
+    name = "modular_test",
+    srcs = [
+        "dag_test.go",
+        "step_builder_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":modular"],
+    deps = [
+        "//pkg/roachprod/logger",
+        "//pkg/testutils/echotest",
+        "@com_github_stretchr_testify//require",
+    ],
+)

@@ -39,9 +39,36 @@ func (p *Planner) Plan() (*TestPlan, error) {
 	return &TestPlan{stagePlans: stagePlans}, nil
 }
 
-func (p *Planner) DAG() string {
-	// TODO: implement pretty printing of the DAG.
-	return "unimplemented"
+func (p *Planner) FinalizeStages() error {
+	for _, s := range p.stages {
+		if err := s.Finalize(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *Planner) DAG() (string, error) {
+	complexGraph := false
+	for _, s := range p.stages {
+		complexGraph = s.containsNonAdjacentEdges()
+		if complexGraph {
+			break
+		}
+	}
+
+	// If our DAG has any non-adjacent edges, our simple rendering won't work as
+	// it doesn't support things like crossing edges. Instead, fall back to using
+	// graphviz.
+	if complexGraph {
+
+	}
+
+	output, err := renderDAG(p.stages)
+	if err != nil {
+		return "", err
+	}
+	return output, nil
 }
 
 type TestPlan struct {
