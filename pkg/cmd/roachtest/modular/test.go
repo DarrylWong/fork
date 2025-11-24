@@ -17,6 +17,7 @@ type Test struct {
 	stages []*Stage
 	// afterTestStage is like setupStage but run after the test is completed.
 	afterTestStage *Stage
+	numSteps       int
 	options        TestOptions
 }
 
@@ -49,4 +50,9 @@ func (t *Test) Run(ctx context.Context, l *logger.Logger) error {
 
 	r := NewRunner(t.options.executor)
 	return r.Run(ctx, l, plan)
+}
+
+func (t *Test) nextNodeID() int {
+	t.numSteps++
+	return t.numSteps
 }

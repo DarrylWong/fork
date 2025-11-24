@@ -23,6 +23,13 @@ type SingleStep struct {
 	fn          stepFunc
 }
 
+func newSingleStep(description string, fn stepFunc) *SingleStep {
+	return &SingleStep{
+		description: description,
+		fn:          fn,
+	}
+}
+
 func (s *SingleStep) Description() string {
 	return s.description
 }

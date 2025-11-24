@@ -11,7 +11,7 @@ import (
 // we want to construct complex randomized tests.
 // TODO: implement some common operations as well as a registry to enable reuse.
 type Operation interface {
-	Chain() Chain
+	Chain() []*Step
 	Name() string
 	Precondition() bool
 	Timeout() time.Duration
