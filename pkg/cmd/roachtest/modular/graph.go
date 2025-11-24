@@ -1,5 +1,7 @@
 package modular
 
+import "fmt"
+
 // The possible permutations of a modular test can be represented
 // as a directed acyclic graph (DAG). A DAG is constructed from the
 // following hierarchical components:
@@ -50,6 +52,15 @@ type Stage struct {
 	// Assumes step names are unique within a stage.
 	stepMap map[string]*Step
 	opts    stageOpts
+}
+
+// find returns the Step with the given step name, or an error if not found.
+func (s *Stage) find(stepName string) (*Step, error) {
+	step, ok := s.stepMap[stepName]
+	if !ok {
+		return nil, fmt.Errorf("step %q not found in stage %q", stepName, s.name)
+	}
+	return step, nil
 }
 
 // StageOption configures a Stage.
