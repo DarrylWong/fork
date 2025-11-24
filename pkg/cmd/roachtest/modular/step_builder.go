@@ -4,74 +4,136 @@ package modular
 // to indicate dependencies.
 type Builder interface {
 	// Then adds a step that has a dependency on the previous step in the chain.
-	Then(stepName string, fn stepFunc, opts ...StepOption) *Builder
+	Then(stepName string, fn stepFunc, opts ...StepOption) Builder
 	// MaybeThen is like Then but only adds the step if the conditional is true.
-	MaybeThen(condition bool, stepName string, fn stepFunc, opts ...StepOption) *Builder
+	MaybeThen(condition bool, stepName string, fn stepFunc, opts ...StepOption) Builder
 	// And adds a step that has the same dependencies as the previous step in the chain.
-	And(stepName string, fn stepFunc, opts ...StepOption) *Builder
+	And(stepName string, fn stepFunc, opts ...StepOption) Builder
 	// MaybeAnd is like And but only adds the step if the conditional is true.
-	MaybeAnd(condition bool, stepName string, fn stepFunc, opts ...StepOption) *Builder
+	MaybeAnd(condition bool, stepName string, fn stepFunc, opts ...StepOption) Builder
 }
 
-type StepBuilder struct{}
+type StepBuilder struct {
+	test      *Test
+	stage     *Stage
+	currLevel []*Step
+	lastLevel []*Step
+}
+
+func newTestStep(stage *Stage, nodeID int, stepName string, fn stepFunc, opts ...StepOption) *Step {
+	stepOpts := stepOpts{}
+	for _, opt := range opts {
+		opt(&stepOpts)
+	}
+
+	newStep := &Step{
+		StepProtocol: newSingleStep(stepName, fn),
+		nodeID:       nodeID,
+		children:     make([]*Step, 0),
+		opts:         stepOpts,
+	}
+	stage.stepMap[stepName] = newStep
+	return newStep
+}
 
 // NewStage creates a new stage for organizing test steps.
 func (t *Test) NewStage(name string, opts ...StageOption) *Stage {
-	// TODO: implement a DAG builder.
-	return nil
+	stage := &Stage{
+		name:    name,
+		roots:   make([]*Step, 0),
+		stepMap: make(map[string]*Step),
+	}
+
+	for _, opt := range opts {
+		opt(&stage.opts)
+	}
+
+	t.stages = append(t.stages, stage)
+	return stage
 }
 
-func (t *Test) InStage(stepName string, fn stepFunc, opts ...StepOption) *Builder {
-	// TODO: implement a DAG builder.
-	return nil
+func (t *Test) InStage(stage *Stage, stepName string, fn stepFunc, opts ...StepOption) Builder {
+	ts := newTestStep(stage, t.nextNodeID(), stepName, fn, opts...)
+
+	// Add step as a new root to the stage.
+	stage.roots = append(stage.roots, ts)
+
+	return &StepBuilder{
+		test:      t,
+		stage:     stage,
+		currLevel: []*Step{ts},
+	}
 }
 
-func (sb *StepBuilder) Then(stepName string, fn stepFunc, opts ...StepOption) *Builder {
-	// TODO: implement a DAG builder.
-	return nil
+func (sb *StepBuilder) Then(stepName string, fn stepFunc, opts ...StepOption) Builder {
+	nodeID := sb.test.nextNodeID()
+	ts := newTestStep(sb.stage, nodeID, stepName, fn, opts...)
+
+	// Our new step is dependent on all steps in the current level.
+	for _, parent := range sb.currLevel {
+		parent.children = append(parent.children, ts)
+		ts.parents = append(ts.parents, parent)
+	}
+
+	sb.lastLevel, sb.currLevel = sb.currLevel, []*Step{ts}
+	return sb
 }
-func (sb *StepBuilder) MaybeThen(condition bool, stepName string, fn stepFunc, opts ...StepOption) *Builder {
-	// TODO: implement a DAG builder.
-	return nil
+func (sb *StepBuilder) MaybeThen(condition bool, stepName string, fn stepFunc, opts ...StepOption) Builder {
+	if condition {
+		return sb.Then(stepName, fn, opts...)
+	}
+	return sb
 }
 
-func (sb *StepBuilder) And(stepName string, fn stepFunc, opts ...StepOption) *Builder {
-	// TODO: implement a DAG builder.
-	return nil
+func (sb *StepBuilder) And(stepName string, fn stepFunc, opts ...StepOption) Builder {
+	nodeID := sb.test.nextNodeID()
+	ts := newTestStep(sb.stage, nodeID, stepName, fn, opts...)
+
+	// Our new step is dependent on all steps in the last level.
+	for _, parent := range sb.lastLevel {
+		parent.children = append(parent.children, ts)
+		ts.parents = append(ts.parents, parent)
+	}
+
+	// Add the new step to the last level.
+	sb.currLevel = append(sb.currLevel, ts)
+	return sb
 }
 
-func (sb *StepBuilder) MaybeAnd(condition bool, stepName string, fn stepFunc, opts ...StepOption) *Builder {
-	// TODO: implement a DAG builder.
-	return nil
+func (sb *StepBuilder) MaybeAnd(condition bool, stepName string, fn stepFunc, opts ...StepOption) Builder {
+	if condition {
+		return sb.And(stepName, fn, opts...)
+	}
+	return sb
 }
 
 type OperationBuilder struct{}
 
-func NewOperation(stepName string, fn stepFunc, opts ...StepOption) *Builder {
+func NewOperation(stepName string, fn stepFunc, opts ...StepOption) Builder {
 	// TODO: implement an operation builder.
 	return nil
 }
 
 // Then adds another step that runs after the previous one in sequence.
-func (ob *OperationBuilder) Then(stepName string, fn stepFunc, opts ...StepOption) *Builder {
+func (ob *OperationBuilder) Then(stepName string, fn stepFunc, opts ...StepOption) Builder {
 	// TODO: implement an operation builder.
 	return nil
 }
 
 // MaybeThen is like Then, but only adds the step if the conditional is true.
-func (ob *OperationBuilder) MaybeThen(condition bool, stepName string, fn stepFunc, opts ...StepOption) *Builder {
+func (ob *OperationBuilder) MaybeThen(condition bool, stepName string, fn stepFunc, opts ...StepOption) Builder {
 	// TODO: implement an operation builder.
 	return nil
 }
 
 // And adds a step that can run in parallel with the previous step.
-func (ob *OperationBuilder) And(stepName string, fn stepFunc, opts ...StepOption) *Builder {
+func (ob *OperationBuilder) And(stepName string, fn stepFunc, opts ...StepOption) Builder {
 	// TODO: implement an operation builder.
 	return nil
 }
 
 // MaybeAnd is like And, but only adds the step if the conditional is true.
-func (ob *OperationBuilder) MaybeAnd(condition bool, stepName string, fn stepFunc, opts ...StepOption) *Builder {
+func (ob *OperationBuilder) MaybeAnd(condition bool, stepName string, fn stepFunc, opts ...StepOption) Builder {
 	// TODO: implement an operation builder.
 	return nil
 }

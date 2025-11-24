@@ -42,28 +42,32 @@ package modular
 // Stage represents one or more chains that all converge at the start and
 // end of the Stage.
 type Stage struct {
-	name   string
-	index  int
-	chains []Chain
-	opts   stageOpts
+	name  string
+	index int
+	roots []*Step
+	// stepMap maps step names to their corresponding Steps. Used for unit tests and
+	// as an escape hatch for more complex DAG dependencies not supported by the Builder API.
+	// Assumes step names are unique within a stage.
+	stepMap map[string]*Step
+	opts    stageOpts
 }
 
 // StageOption configures a Stage.
 type StageOption func(*stageOpts)
 type stageOpts struct{}
 
-// Chain represents a sequence of steps that must be executed in order.
-type Chain []stepGroup
-
-// stepGroup is an internal implementation detail representing steps with
-// in the same Chain with the same dependencies, i.e. they can be run
-// in any order/concurrently.
-type stepGroup []Step
-
 // Step represents the smallest unit of work in a modular plan.
 type Step struct {
 	StepProtocol
-	opts stepOpts
+	// nodeID is the unique ID assigned to the step in the context of the DAG.
+	nodeID int
+	// children is the slice of steps that depend on this step, i.e. this step must be run before all children
+	children []*Step
+	// parents is the slice of steps that this step depends on, i.e. all parents must be run before this step
+	parents []*Step
+	// level is the topological level of the step in the DAG. Lazily computed after DAG is finalized.
+	level int
+	opts  stepOpts
 }
 
 // StepOption configures a Step.
