@@ -1,5 +1,7 @@
 package modular
 
+import "errors"
+
 // Builder provides a simple way to construct DAGs. It allows chaining steps together
 // to indicate dependencies.
 type Builder interface {
@@ -135,5 +137,37 @@ func (ob *OperationBuilder) And(stepName string, fn stepFunc, opts ...StepOption
 // MaybeAnd is like And, but only adds the step if the conditional is true.
 func (ob *OperationBuilder) MaybeAnd(condition bool, stepName string, fn stepFunc, opts ...StepOption) Builder {
 	// TODO: implement an operation builder.
+	return nil
+}
+
+// The following methods serve as an escape hatch for more complex DAG dependencies
+// not supported by the Builder API. It allows explicit declaration of dependencies between steps,
+// at the cost of being more verbose.
+
+// NewStep creates a new step in the given stage with no dependencies.
+func (t *Test) NewStep(stage *Stage, stepName string, fn stepFunc, opts ...StepOption) *Step {
+	return newTestStep(stage, t.nextNodeID(), stepName, fn, opts...)
+}
+
+// AddDependency adds a directed dependency from this step to the child step.
+func (s *Step) AddDependency(child *Step) {
+	s.children = append(s.children, child)
+	child.parents = append(child.parents, s)
+}
+
+// Finalize finalizes the stage's DAG by assigning root steps and ensuring we have a valid DAG.
+func (s *Stage) Finalize() error {
+	rootNodes := make([]*Step, 0)
+
+	for _, step := range s.stepMap {
+		if len(step.parents) == 0 {
+			rootNodes = append(rootNodes, step)
+		}
+	}
+	if len(rootNodes) == 0 {
+		return errors.New("stage is an invalid DAG: no root nodes found")
+	}
+
+	s.roots = rootNodes
 	return nil
 }

@@ -171,3 +171,109 @@ func TestConditionalBuilder(t *testing.T) {
 	require.Error(t, err)
 	_ = mustGetStep(t, stage, "C")
 }
+
+// Test that demonstrates a complex dependency that can't be easily expressed
+// with the step builder API.
+/*
+A ──▶ B ───┐
+           │
+           ├──▶ D
+           │
+C ─────────┘
+*/
+func TestEscapeHatch(t *testing.T) {
+	test := &Test{}
+	stage := test.NewStage("test-stage")
+
+	// Create steps manually
+	stepA := newTestStep(stage, test.nextNodeID(), "A", noopStep())
+	stepB := newTestStep(stage, test.nextNodeID(), "B", noopStep())
+	stepC := newTestStep(stage, test.nextNodeID(), "C", noopStep())
+	stepD := newTestStep(stage, test.nextNodeID(), "D", noopStep())
+
+	stepA.AddDependency(stepB)
+	stepB.AddDependency(stepD)
+	stepC.AddDependency(stepD)
+
+	require.NoError(t, stage.Finalize())
+
+	stepA = mustGetStep(t, stage, "A")
+	require.Len(t, stepA.parents, 0)
+	require.Len(t, stepA.children, 1)
+
+	stepB = mustGetStep(t, stage, "B")
+	require.Len(t, stepB.parents, 1)
+	require.Len(t, stepB.children, 1)
+
+	stepC = mustGetStep(t, stage, "C")
+	require.Len(t, stepC.parents, 0)
+	require.Len(t, stepC.children, 1)
+
+	stepD = mustGetStep(t, stage, "D")
+	require.Len(t, stepD.parents, 2)
+	require.Len(t, stepD.children, 0)
+}
+
+// Test that finalize will return an error if there is a cycle in the dependencies.
+/*
+A ──▶ B
+▲     │
+│     ▼
+└──── C
+*/
+func TestEscapeHatchCycle(t *testing.T) {
+	test := &Test{}
+	stage := test.NewStage("test-stage")
+
+	stepA := newTestStep(stage, test.nextNodeID(), "A", noopStep())
+	stepB := newTestStep(stage, test.nextNodeID(), "B", noopStep())
+	stepC := newTestStep(stage, test.nextNodeID(), "C", noopStep())
+
+	stepA.AddDependency(stepB)
+	stepB.AddDependency(stepC)
+	stepC.AddDependency(stepA)
+
+	require.Error(t, stage.Finalize())
+}
+
+// Test that we can use the escape hatch with the builder API to create complex dependencies.
+/*
+A ──▶ B ───┐
+           │
+           ├──▶ D
+           │
+C ─────────┘
+*/
+func TestEscapeHatchWithBuilder(t *testing.T) {
+	test := &Test{}
+	stage := test.NewStage("test-stage")
+
+	test.InStage(stage, "A", noopStep()).
+		Then("B", noopStep()).
+		Then("D", noopStep())
+
+	test.InStage(stage, "C", noopStep())
+
+	// Use escape hatch to add dependency from C to D
+	stepC := mustGetStep(t, stage, "C")
+	stepD := mustGetStep(t, stage, "D")
+	stepC.AddDependency(stepD)
+
+	require.NoError(t, stage.Finalize())
+
+	stepA := mustGetStep(t, stage, "A")
+	require.Len(t, stepA.parents, 0)
+	require.Len(t, stepA.children, 1)
+
+	stepB := mustGetStep(t, stage, "B")
+	require.Len(t, stepB.parents, 1)
+	require.Len(t, stepB.children, 1)
+
+	stepC = mustGetStep(t, stage, "C")
+	require.Len(t, stepC.parents, 0)
+	require.Len(t, stepC.children, 1)
+
+	stepD = mustGetStep(t, stage, "D")
+	require.Len(t, stepD.parents, 2)
+	require.Len(t, stepD.children, 0)
+}
