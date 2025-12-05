@@ -1,0 +1,20 @@
+echo
+----
+----
+Before merge:
+                       [test]
+   ┌───────────────────┐     ┌───────────────────┐
+   │ chain 1: run TPCC │     │  chain 2: backup  │
+   │     workload      │     │   TPCC database   │
+   │                   │     │                   │
+   └───────────────────┘     └───────────────────┘
+
+After merge:
+                       [test]
+   ┌───────────────────┐     ┌───────────────────┐
+   │ chain 1: run TPCC │     │  chain 2: backup  │
+   │     workload      │     │   TPCC database   │
+   │                   │     │                   │
+   └───────────────────┘     └───────────────────┘
+----
+----

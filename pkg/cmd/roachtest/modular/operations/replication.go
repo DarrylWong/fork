@@ -26,10 +26,6 @@ func (r *ReplicationFactorCycleOp) Name() string {
 	return r.name
 }
 
-func (r *ReplicationFactorCycleOp) Precondition() bool {
-	return true
-}
-
 func (r *ReplicationFactorCycleOp) Timeout() time.Duration {
 	// TODO: figure out how to make this more dynamic?
 	return 5 * time.Hour

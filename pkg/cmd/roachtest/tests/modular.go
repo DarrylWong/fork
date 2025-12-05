@@ -55,6 +55,15 @@ func registerModular(r registry.Registry) {
 		Cluster:          r.MakeClusterSpec(6, spec.WorkloadNodeCount(1)),
 		Timeout:          30 * time.Minute,
 	})
+	r.Add(registry.TestSpec{
+		Name:             "modular/example/merge-operation",
+		CompatibleClouds: registry.AllClouds,
+		Suites:           registry.Suites(registry.Nightly),
+		Owner:            registry.OwnerTestEng,
+		Run:              runMergeOperationExample,
+		Cluster:          r.MakeClusterSpec(5, spec.CPU(16), spec.WorkloadNode()),
+		Timeout:          60 * time.Minute,
+	})
 }
 
 func runModularExample(ctx context.Context, t test.Test, c cluster.Cluster) {
@@ -128,18 +137,24 @@ func runModularMVTExample(ctx context.Context, t test.Test, c cluster.Cluster) {
 	// Create a modular test that mimics the mixed-headroom structure
 	mod := modular.NewTest(ctx, t.L(), c, c.CRDBNodes())
 
+	// Store the v25.3.0 binary path for workload operations
+	var v253BinaryPath string
+
 	initStage := mod.NewStage("cluster init")
-	mod.InStage(initStage, "install fixtures for version 25.2", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		// Install fixtures for version 25.2
-		version := clusterupgrade.MustParseVersion("v25.2.0")
+	mod.InStage(initStage, "install fixtures for version 25.3", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		// Install fixtures for version 25.3
+		version := clusterupgrade.MustParseVersion("v24.3.0")
 		return clusterupgrade.InstallFixtures(ctx, l, c, c.CRDBNodes(), version)
-	}).Then("start cluster at version 25.2", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		// Start cluster using version 25.2
-		version := clusterupgrade.MustParseVersion("v25.2.0")
+	}).Then("start cluster at version 24.3", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		// Start cluster using version 24.3
+		version := clusterupgrade.MustParseVersion("v24.3.0")
 		binaryPath, err := clusterupgrade.UploadCockroach(ctx, t, l, c, c.CRDBNodes(), version)
 		if err != nil {
 			return err
 		}
+
+		// Store binary path for use in workload operations
+		v253BinaryPath = binaryPath
 
 		clusterSettings := install.MakeClusterSettings(
 			install.BinaryOption(binaryPath),
@@ -151,7 +166,7 @@ func runModularMVTExample(ctx context.Context, t test.Test, c cluster.Cluster) {
 
 		c.Start(ctx, l, startOpts, clusterSettings, c.CRDBNodes())
 		return nil
-	}).Then("waiting for all nodes to acknowledge cluster version 25.2", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+	}).Then("waiting for all nodes to acknowledge cluster version 25.3", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
 		// Use a timeout of 5 minutes for cluster version acknowledgment
 		timeout := 5 * time.Minute
 
@@ -172,28 +187,28 @@ func runModularMVTExample(ctx context.Context, t test.Test, c cluster.Cluster) {
 	})
 
 	inStartupStage := mod.NewStage("startup")
-	mod.InStage(inStartupStage, "set preserve_downgrade_option to 25.2", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+	mod.InStage(inStartupStage, "set preserve_downgrade_option to 25.3", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
 		db := c.Conn(ctx, l, 1)
-		_, err := db.ExecContext(ctx, "SET CLUSTER SETTING cluster.preserve_downgrade_option = $1", "25.2")
+		_, err := db.ExecContext(ctx, "SET CLUSTER SETTING cluster.preserve_downgrade_option = $1", "25.3")
 		return err
 	})
 	mod.InStage(inStartupStage, "enable tenant features", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
 		return enableTenantSplitScatterModular(l, h)
 	}).Then("import TPCC dataset", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		return importTPCCDataModular(ctx, t, c, l, h, headroomWarehouses)
+		return importTPCCDataModular(ctx, t, c, l, h, headroomWarehouses, v253BinaryPath)
 	}).And("import bank dataset", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		return importBankDataModular(ctx, t, c, l, h, bankRows)
+		return importBankDataModular(ctx, t, c, l, h, bankRows, v253BinaryPath)
 	})
 
-	upgradeStage := mod.NewStage("upgrade from v25.2 -> current")
+	upgradeStage := mod.NewStage("upgrade from v25.3 -> v25.4")
 	mod.InStage(upgradeStage, "run TPCC workload", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
 		return runTPCCWorkloadModular(ctx, t, c, l, h, headroomWarehouses)
 	})
 
 	for _, node := range c.CRDBNodes() {
-		mod.InStage(upgradeStage, fmt.Sprintf("restart node %d with current version", node), func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-			return restartNodeWithCurrentVersion(ctx, t, l, c, node)
-		}, modular.DisableConcurrency())
+		mod.InStage(upgradeStage, fmt.Sprintf("restart node %d with v25.4", node), func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+			return restartNodeWithVersion(ctx, t, l, c, node, "v25.4.0")
+		}, modular.DisableConcurrency(), modular.AcquireLock(modular.NodeAvailability{}), modular.ReleaseLock(modular.NodeAvailability{}))
 	}
 
 	rollbackStage := mod.NewStage("rollback")
@@ -202,29 +217,29 @@ func runModularMVTExample(ctx context.Context, t test.Test, c cluster.Cluster) {
 	})
 
 	for _, node := range c.CRDBNodes() {
-		mod.InStage(rollbackStage, fmt.Sprintf("rollback node %d to version 25.2", node), func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-			return rollbackNodeToVersion(ctx, t, l, c, node, "v25.2.0")
-		}, modular.DisableConcurrency())
+		mod.InStage(rollbackStage, fmt.Sprintf("rollback node %d to version 25.3", node), func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+			return rollbackNodeToVersion(ctx, t, l, c, node, "v25.3.0")
+		}, modular.DisableConcurrency(), modular.AcquireLock(modular.NodeAvailability{}), modular.ReleaseLock(modular.NodeAvailability{}))
 	}
 
 	finalizeStage := mod.NewStage("finalize")
 	mod.InStage(finalizeStage, "run TPCC workload", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
 		return runTPCCWorkloadModular(ctx, t, c, l, h, headroomWarehouses)
 	})
-	sb := mod.InStage(finalizeStage, fmt.Sprintf("restart node %d with current version", 1), func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		return restartNodeWithCurrentVersion(ctx, t, l, c, 1)
-	}, modular.DisableConcurrency())
+	sb := mod.InStage(finalizeStage, fmt.Sprintf("restart node %d with v25.4", 1), func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		return restartNodeWithVersion(ctx, t, l, c, 1, "v25.4.0")
+	}, modular.DisableConcurrency(), modular.AcquireLock(modular.NodeAvailability{}), modular.ReleaseLock(modular.NodeAvailability{}))
 
 	for _, node := range c.CRDBNodes()[1:] {
-		sb = sb.And(fmt.Sprintf("restart node %d with current version", node), func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-			return restartNodeWithCurrentVersion(ctx, t, l, c, node)
-		}, modular.DisableConcurrency())
+		sb = sb.And(fmt.Sprintf("restart node %d with v25.4", node), func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+			return restartNodeWithVersion(ctx, t, l, c, node, "v25.4.0")
+		}, modular.DisableConcurrency(), modular.AcquireLock(modular.NodeAvailability{}), modular.ReleaseLock(modular.NodeAvailability{}))
 	}
 	sb.And("reset preserve_downgrade_option", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
 		db := c.Conn(ctx, l, 1)
 		_, err := db.ExecContext(ctx, "RESET CLUSTER SETTING cluster.preserve_downgrade_option")
 		return err
-	}).Then("wait for all nodes to acknowledge current cluster version", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+	}).Then("wait for all nodes to acknowledge v25.4 cluster version", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
 		// Use a timeout of 5 minutes for cluster version acknowledgment
 		timeout := 5 * time.Minute
 
@@ -281,12 +296,12 @@ func enableTenantSplitScatterModular(l *logger.Logger, _ *modular.Helper) error 
 }
 
 // importTPCCDataModular imports TPCC dataset
-func importTPCCDataModular(ctx context.Context, _ test.Test, c cluster.Cluster, l *logger.Logger, _ *modular.Helper, warehouses int) error {
+func importTPCCDataModular(ctx context.Context, _ test.Test, c cluster.Cluster, l *logger.Logger, _ *modular.Helper, warehouses int, binaryPath string) error {
 	l.Printf("importing TPCC data with %d warehouses", warehouses)
 
 	// Use the workload node for import
 	cmd := tpccImportCmdWithCockroachBinary(
-		test.DefaultCockroachPath, "", "tpcc", warehouses,
+		binaryPath, "", "tpcc", warehouses,
 		fmt.Sprintf("{pgurl%s}", c.Node(1)),
 	)
 
@@ -294,10 +309,10 @@ func importTPCCDataModular(ctx context.Context, _ test.Test, c cluster.Cluster, 
 }
 
 // importBankDataModular imports large bank dataset to stress the system
-func importBankDataModular(ctx context.Context, _ test.Test, c cluster.Cluster, l *logger.Logger, _ *modular.Helper, rows int) error {
+func importBankDataModular(ctx context.Context, _ test.Test, c cluster.Cluster, l *logger.Logger, _ *modular.Helper, rows int, binaryPath string) error {
 	l.Printf("importing bank data with %d rows", rows)
 
-	cmd := roachtestutil.NewCommand("%s workload fixtures import bank", test.DefaultCockroachPath).
+	cmd := roachtestutil.NewCommand("%s workload fixtures import bank", binaryPath).
 		Arg("{pgurl%s}", c.Node(1)).
 		Flag("payload-bytes", 10240).
 		Flag("rows", rows).
@@ -312,7 +327,7 @@ func importBankDataModular(ctx context.Context, _ test.Test, c cluster.Cluster, 
 func runTPCCWorkloadModular(ctx context.Context, _ test.Test, c cluster.Cluster, l *logger.Logger, _ *modular.Helper, warehouses int) error {
 	workloadDur := 10 * time.Minute
 	rampDur := 1 * time.Minute
-	if c.IsLocal() {
+	if !c.IsLocal() {
 		workloadDur = 2 * time.Minute
 		rampDur = 30 * time.Second
 	}
@@ -342,10 +357,13 @@ func checkTPCCWorkloadModular(ctx context.Context, _ test.Test, c cluster.Cluste
 	return c.RunE(ctx, option.WithNodes(c.WorkloadNode()), cmd)
 }
 
-// restartNodeWithCurrentVersion restarts a node with the current binary version
+// restartNodeWithVersion restarts a node with a specified binary version
 // This mimics the behavior of restartWithNewBinaryStep from the mixed version framework
-func restartNodeWithCurrentVersion(ctx context.Context, rt test.Test, l *logger.Logger, cluster cluster.Cluster, node int) error {
-	l.Printf("restarting node %d with current binary version", node)
+func restartNodeWithVersion(ctx context.Context, rt test.Test, l *logger.Logger, cluster cluster.Cluster, node int, versionStr string) error {
+	l.Printf("restarting node %d with version %s", node, versionStr)
+
+	// Parse the target version
+	targetVersion := clusterupgrade.MustParseVersion(versionStr)
 
 	// Use a timeout for the restart operation similar to mixed version framework
 	startTimeout := 30 * time.Minute
@@ -361,13 +379,12 @@ func restartNodeWithCurrentVersion(ctx context.Context, rt test.Test, l *logger.
 		option.NoBackupSchedule, // Disable scheduled backups for deterministic tests
 	}
 
-	// Use current version binary (no specific version specified means current)
-	// Create empty cluster settings slice for current version
+	// Use the specified version binary
+	// Create empty cluster settings slice
 	var clusterSettings []install.ClusterSettingOption
 
 	// Use clusterupgrade.RestartNodesWithNewBinary which handles the full restart process
 	// This is the same function used in the mixed version framework
-	// Use nil for current version - this will use the test's build version
 	return clusterupgrade.RestartNodesWithNewBinary(
 		startCtx,
 		rt,
@@ -375,7 +392,7 @@ func restartNodeWithCurrentVersion(ctx context.Context, rt test.Test, l *logger.
 		cluster,
 		nodeOption,
 		option.NewStartOpts(customStartOpts...),
-		clusterupgrade.CurrentVersion(),
+		targetVersion,
 		clusterSettings...,
 	)
 }
@@ -418,6 +435,190 @@ func rollbackNodeToVersion(ctx context.Context, rt test.Test, l *logger.Logger, 
 		targetVersion,
 		clusterSettings...,
 	)
+}
+
+func runMergeOperationExample(ctx context.Context, t test.Test, c cluster.Cluster) {
+	// Calculate warehouse and row counts similar to mixed-headroom
+	maxWarehouses := maxSupportedTPCCWarehouses(*t.BuildVersion(), c.Cloud(), c.Spec())
+	headroomWarehouses := int(float64(maxWarehouses) * 0.7)
+	bankRows := 65104166 / 2
+	if !c.IsLocal() {
+		bankRows = 1000
+		headroomWarehouses = 20
+	}
+
+	// Create a modular test that mimics the mixed-headroom structure
+	mod := modular.NewTest(ctx, t.L(), c, c.CRDBNodes())
+
+	// Store the v25.3.0 binary path for workload operations
+	var v253BinaryPath string
+
+	initStage := mod.NewStage("cluster init")
+	mod.InStage(initStage, "install fixtures for version 25.3", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		// Install fixtures for version 25.3
+		version := clusterupgrade.MustParseVersion("v25.3.0")
+		return clusterupgrade.InstallFixtures(ctx, l, c, c.CRDBNodes(), version)
+	}).Then("start cluster at version 25.3", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		// Start cluster using version 25.3
+		version := clusterupgrade.MustParseVersion("v25.3.0")
+		binaryPath, err := clusterupgrade.UploadCockroach(ctx, t, l, c, c.CRDBNodes(), version)
+		if err != nil {
+			return err
+		}
+
+		// Store binary path for use in workload operations
+		v253BinaryPath = binaryPath
+
+		clusterSettings := install.MakeClusterSettings(
+			install.BinaryOption(binaryPath),
+		)
+
+		startOpts := option.NewStartOpts(
+			option.NoBackupSchedule,
+		)
+
+		c.Start(ctx, l, startOpts, clusterSettings, c.CRDBNodes())
+		return nil
+	}).Then("waiting for all nodes to acknowledge cluster version 25.3", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		// Use a timeout of 5 minutes for cluster version acknowledgment
+		timeout := 5 * time.Minute
+
+		// Connect function that creates a connection to a specific node
+		// Let WaitForClusterUpgrade handle connection errors gracefully
+		connectFunc := func(node int) *gosql.DB {
+			db, err := c.ConnE(ctx, l, node)
+			if err != nil {
+				// Return nil and let WaitForClusterUpgrade handle the error
+				// This is safer than panicking
+				l.Printf("warning: failed to connect to node %d: %v", node, err)
+				return nil
+			}
+			return db
+		}
+
+		return clusterupgrade.WaitForClusterUpgrade(ctx, l, c.CRDBNodes(), connectFunc, timeout)
+	})
+
+	inStartupStage := mod.NewStage("startup")
+	mod.InStage(inStartupStage, "set preserve_downgrade_option to 25.3", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		db := c.Conn(ctx, l, 1)
+		_, err := db.ExecContext(ctx, "SET CLUSTER SETTING cluster.preserve_downgrade_option = $1", "25.3")
+		return err
+	})
+	mod.InStage(inStartupStage, "enable tenant features", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		return enableTenantSplitScatterModular(l, h)
+	}).Then("import TPCC dataset", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		return importTPCCDataModular(ctx, t, c, l, h, headroomWarehouses, v253BinaryPath)
+	}).And("import bank dataset", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		return importBankDataModular(ctx, t, c, l, h, bankRows, v253BinaryPath)
+	})
+
+	upgradeStage := mod.NewStage("upgrade from v25.3 -> v25.4")
+	mod.InStage(upgradeStage, "run TPCC workload", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		return runTPCCWorkloadModular(ctx, t, c, l, h, headroomWarehouses)
+	})
+
+	for _, node := range c.CRDBNodes() {
+		mod.InStage(upgradeStage, fmt.Sprintf("restart node %d with v25.4", node), func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+			return restartNodeWithVersion(ctx, t, l, c, node, "v25.4.0")
+		}, modular.DisableConcurrency(), modular.AcquireLock(modular.NodeAvailability{}), modular.ReleaseLock(modular.NodeAvailability{}))
+	}
+
+	rollbackStage := mod.NewStage("rollback")
+	mod.InStage(rollbackStage, "run TPCC workload", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		return runTPCCWorkloadModular(ctx, t, c, l, h, headroomWarehouses)
+	})
+
+	for _, node := range c.CRDBNodes() {
+		mod.InStage(rollbackStage, fmt.Sprintf("rollback node %d to version 25.3", node), func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+			return rollbackNodeToVersion(ctx, t, l, c, node, "v25.3.0")
+		}, modular.DisableConcurrency(), modular.AcquireLock(modular.NodeAvailability{}), modular.ReleaseLock(modular.NodeAvailability{}))
+	}
+
+	finalizeStage := mod.NewStage("finalize")
+	mod.InStage(finalizeStage, "run TPCC workload", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		return runTPCCWorkloadModular(ctx, t, c, l, h, headroomWarehouses)
+	})
+	sb := mod.InStage(finalizeStage, fmt.Sprintf("restart node %d with v25.4", 1), func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		return restartNodeWithVersion(ctx, t, l, c, 1, "v25.4.0")
+	}, modular.DisableConcurrency(), modular.AcquireLock(modular.NodeAvailability{}), modular.ReleaseLock(modular.NodeAvailability{}))
+
+	for _, node := range c.CRDBNodes()[1:] {
+		sb = sb.And(fmt.Sprintf("restart node %d with v25.4", node), func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+			return restartNodeWithVersion(ctx, t, l, c, node, "v25.4.0")
+		}, modular.DisableConcurrency(), modular.AcquireLock(modular.NodeAvailability{}), modular.ReleaseLock(modular.NodeAvailability{}))
+	}
+	sb.And("reset preserve_downgrade_option", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		db := c.Conn(ctx, l, 1)
+		_, err := db.ExecContext(ctx, "RESET CLUSTER SETTING cluster.preserve_downgrade_option")
+		return err
+	}).Then("wait for all nodes to acknowledge v25.4 cluster version", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		// Use a timeout of 5 minutes for cluster version acknowledgment
+		timeout := 5 * time.Minute
+
+		// Connect function that creates a connection to a specific node
+		// Let WaitForClusterUpgrade handle connection errors gracefully
+		connectFunc := func(node int) *gosql.DB {
+			db, err := c.ConnE(ctx, l, node)
+			if err != nil {
+				// Return nil and let WaitForClusterUpgrade handle the error
+				// This is safer than panicking
+				l.Printf("warning: failed to connect to node %d: %v", node, err)
+				return nil
+			}
+			return db
+		}
+
+		return clusterupgrade.WaitForClusterUpgrade(ctx, l, c.CRDBNodes(), connectFunc, timeout)
+	})
+
+	// Final validation stage
+	validationStage := mod.NewStage("validation")
+	mod.InStage(validationStage, "check TPCC workload integrity", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		return checkTPCCWorkloadModular(ctx, t, c, l, h, headroomWarehouses)
+	})
+
+	mod.AddOperation(upgradeStage, operations.NodeRestart())
+	//mod.AddOperation(upgradeStage, operations.BackupRestore(c, operations.BackupRestoreOptions{
+	//	Database:          "tpcc",
+	//	IncrementalLayers: 1,
+	//}))
+	//// Add backup/restore operation on same database "tpcc" and table "order" - should conflict
+	//mod.AddOperation(upgradeStage, operations.BackupRestore(c, operations.BackupRestoreOptions{
+	//	Database:          "tpcc",
+	//	Table:             "order",
+	//	IncrementalLayers: 2,
+	//}))
+	//// Add a backup restore to a different database, shouldn't conflict.
+	//mod.AddOperation(upgradeStage, operations.BackupRestore(c, operations.BackupRestoreOptions{
+	//	Database:          "bigbank",
+	//	IncrementalLayers: 1,
+	//}))
+
+	// TODO lets add a operation mutator that lets us add n random operations
+	mod.AddOperation(upgradeStage, operations.AddRandomIndex())
+	mod.AddOperation(upgradeStage, operations.AddRandomIndex())
+	mod.AddOperation(upgradeStage, operations.AddRandomColumn())
+	mod.AddOperation(upgradeStage, operations.AddRandomColumn())
+	mod.AddOperation(upgradeStage, operations.AddRandomColumn())
+
+	// Print the DAG before we merge our extra operations.
+	planner := mod.NewPlanner()
+	t.L().Printf("DAG before merging:\n%s", planner.DAG())
+
+	// Generate and execute test plan (this is where merging happens)
+	testPlan, err := planner.Plan()
+	if err != nil {
+		t.Fatalf("Failed to generate test plan: %v", err)
+	}
+
+	// Print the DAG after merging to see if chains merged
+	t.L().Printf("DAG after merging:\n%s", planner.DAG())
+
+	err = modular.RunTestPlan(ctx, t, testPlan)
+	if err != nil {
+		t.Fatalf("Test execution failed: %v", err)
+	}
 }
 
 func runModularRecoveryExample(ctx context.Context, t test.Test, c cluster.Cluster) {

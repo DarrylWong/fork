@@ -47,6 +47,10 @@ type SingleStep struct {
 	fn                  stepFunc
 	background          shouldStop
 	concurrencyDisabled bool
+	resources           struct {
+		accesses []ResourceAccess
+		releases []ResourceAccess
+	}
 }
 
 // Description returns a human-readable description of the step.

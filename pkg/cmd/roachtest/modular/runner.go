@@ -16,6 +16,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/failureinjection/failures"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
+	"github.com/cockroachdb/errors"
 )
 
 var (
@@ -28,16 +29,19 @@ type Runner struct {
 	testPlan     *TestPlan
 	helper       *Helper
 	stateTracker *ClusterStateTracker
+	lockManager  *RuntimeLockManager
 }
 
 // NewRunner creates a new runner for executing a test plan.
 func NewRunner(testPlan *TestPlan) *Runner {
 	clusterStateLogger := testPlan.debugModules.NewLogger(testPlan.logger, ClusterStateDebug)
+	lockManager := NewRuntimeLockManager()
 
 	return &Runner{
 		testPlan:     testPlan,
-		helper:       &Helper{rng: testPlan.rng},
+		helper:       &Helper{rng: testPlan.rng, lockManager: lockManager},
 		stateTracker: NewClusterStateTracker(clusterStateLogger),
+		lockManager:  lockManager,
 	}
 }
 
@@ -210,7 +214,17 @@ func (r *Runner) executeStage(ctx context.Context, l *logger.Logger, stagePlan s
 		r.logStep("STARTING", step.stepID, step.Description(), stepLogger)
 		start := time.Now()
 
+		// Acquire locks before executing step
+		unlocks, err := r.acquireStepLocks(step, stepLogger)
+		if err != nil {
+			return err
+		}
+
+		// Execute the step
 		err = step.Run(ctx, stepLogger, r.helper)
+
+		r.releaseStepLocks(step, unlocks, stepLogger)
+
 		if err != nil {
 			return r.stepError(ctx, err, step.stepID, step.Description(), stepLogger)
 		}
@@ -408,4 +422,53 @@ func (r *Runner) renameFailedLogger(l *logger.Logger) error {
 		"FAILED_"+filepath.Base(currentFileName),
 	)
 	return os.Rename(currentFileName, newLogName)
+}
+
+// acquireStepLocks acquires all locks declared by a step.
+// Returns unlock functions that should be called when the step completes.
+func (r *Runner) acquireStepLocks(step testStep, l *logger.Logger) ([]func(), error) {
+	var unlocks []func()
+
+	// Get resources from the step if it's a SingleStep
+	singleStep, ok := step.StepProtocol.(*SingleStep)
+	if !ok {
+		// concurrentStep or other types don't have direct resource declarations
+		return unlocks, nil
+	}
+
+	// Acquire all declared accesses
+	for _, access := range singleStep.resources.accesses {
+		l.Printf("Acquiring lock: %s", access.String())
+		unlock, ok := r.lockManager.Acquire(access)
+		if !ok {
+			// Failed to acquire lock - release any locks we already acquired
+			for _, u := range unlocks {
+				u()
+			}
+			return nil, errors.Errorf("failed to acquire lock %s: conflicts with existing locks", access.String())
+		}
+		unlocks = append(unlocks, unlock)
+	}
+
+	return unlocks, nil
+}
+
+// releaseStepLocks releases locks acquired by a step and processes any release declarations.
+func (r *Runner) releaseStepLocks(step testStep, unlocks []func(), l *logger.Logger) {
+	// Release locks that were acquired at step start
+	for _, unlock := range unlocks {
+		unlock()
+	}
+
+	// Process explicit release declarations
+	singleStep, ok := step.StepProtocol.(*SingleStep)
+	if !ok {
+		return
+	}
+
+	for _, release := range singleStep.resources.releases {
+		l.Printf("Processed release: %s", release.String())
+		// The release should already be handled by the unlock functions above,
+		// but this logs the explicit releases for debugging
+	}
 }

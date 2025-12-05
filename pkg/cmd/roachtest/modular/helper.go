@@ -13,6 +13,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/task"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/errors"
 )
@@ -40,6 +41,7 @@ type Helper struct {
 	background   task.Manager
 	ctx          context.Context
 	stateTracker *ClusterStateTracker
+	lockManager  *RuntimeLockManager
 }
 
 func (h *Helper) AvailableNodes() option.NodeListOption {
@@ -265,9 +267,10 @@ func (h *Helper) PickRandomTable(database string) (string, error) {
 // GetTableColumns returns column information for the specified table.
 func (h *Helper) GetTableColumns(database, table string) ([]ColumnInfo, error) {
 	query := fmt.Sprintf(`
+USE %s;
 SELECT attname, atttypid
 FROM pg_catalog.pg_attribute
-WHERE attrelid = '%s.%s'::REGCLASS AND attnum > 0 AND NOT attisdropped
+WHERE attrelid = '%s'::REGCLASS AND attnum > 0 AND NOT attisdropped
 ORDER BY attnum`, database, table)
 
 	rows, err := h.Query(query)
@@ -286,6 +289,16 @@ ORDER BY attnum`, database, table)
 	}
 
 	return columns, nil
+}
+
+// StopNode stops the cockroach process on the specified node.
+func (h *Helper) StopNode(node int) error {
+	return h.cluster.StopE(h.ctx, h.logger, option.DefaultStopOpts(), h.cluster.Node(node))
+}
+
+// StartNode starts the cockroach process on the specified node.
+func (h *Helper) StartNode(node int) error {
+	return h.cluster.StartE(h.ctx, h.logger, option.DefaultStartOpts(), install.MakeClusterSettings(), h.cluster.Node(node))
 }
 
 // SearchTable finds a random database and table that satisfies the given predicate.
@@ -426,6 +439,37 @@ func (h *Helper) loggerFor(name string) (*logger.Logger, error) {
 	fileName = path.Join(logPrefix, fileName)
 
 	return h.logger.ChildLogger(fileName)
+}
+
+// AcquireLock attempts to acquire an exclusive lock on a resource at runtime.
+// Returns an unlock function and true if successful, nil and false if there's a conflict.
+//
+// Example usage:
+//
+//	func myStep(ctx context.Context, l *logger.Logger, h *Helper) error {
+//	    table := h.PickRandomTable(db)
+//	    lock := SchemaChangeAccess{Database: db, Table: table}
+//	    unlock, ok := h.AcquireLock(lock)
+//	    if !ok {
+//	        return errors.New("table is locked")
+//	    }
+//	    defer unlock()
+//	    // ... do work on table
+//	}
+func (h *Helper) AcquireLock(resource Resource) (func(), bool) {
+	return h.lockManager.AcquireLock(resource)
+}
+
+// AcquireAccess attempts to acquire non-exclusive access to a resource at runtime.
+// Returns an unlock function and true if successful, nil and false if there's a conflict.
+func (h *Helper) AcquireAccess(resource Resource) (func(), bool) {
+	return h.lockManager.AcquireAccess(resource)
+}
+
+// IsLocked checks if a resource would conflict with currently held locks.
+// This is useful for filtering out locked resources when selecting targets.
+func (h *Helper) IsLocked(access ResourceAccess) bool {
+	return h.lockManager.IsLocked(access)
 }
 
 // Service implements helper functions on behalf of a specific

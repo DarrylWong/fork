@@ -27,10 +27,6 @@ func (i *InspectTableOp) Name() string {
 	return i.name
 }
 
-func (i *InspectTableOp) Precondition() bool {
-	return true
-}
-
 func (i *InspectTableOp) Timeout() time.Duration {
 	return 30 * time.Minute
 }

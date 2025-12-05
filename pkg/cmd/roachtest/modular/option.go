@@ -1,6 +1,8 @@
 package modular
 
-import "github.com/cockroachdb/cockroach/pkg/roachprod/logger"
+import (
+	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
+)
 
 type TestOption func(options *TestOptions)
 type debugModule string

@@ -30,10 +30,6 @@ func (a *AddRandomIndexOp) Name() string {
 	return a.name
 }
 
-func (a *AddRandomIndexOp) Precondition() bool {
-	return true
-}
-
 func (a *AddRandomIndexOp) Timeout() time.Duration {
 	return 30 * time.Minute
 }
@@ -44,9 +40,19 @@ func (a *AddRandomIndexOp) Timeout() time.Duration {
 func AddRandomIndex() modular.Operation {
 	builder := modular.NewOperation("add random index", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
 		rng, _ := randutil.NewPseudoRand()
-
+		unlock := func() {}
+		defer unlock()
 		// Use SearchTable to find a table with multiple columns
 		dbName, tableName, err := h.SearchTable(func(dbName, tableName string) bool {
+			var success bool
+			unlock, success = h.AcquireLock(modular.SchemaChangeAccess{
+				Database: dbName,
+				Table:    tableName,
+			})
+			if !success {
+				return false
+			}
+
 			columns, err := h.GetTableColumns(dbName, tableName)
 			if err != nil {
 				l.Printf("error getting table columns: %v", err)

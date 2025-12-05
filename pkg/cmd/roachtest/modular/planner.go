@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"sort"
 	"strings"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
@@ -36,8 +37,20 @@ func (p *TestPlanner) DAG() string {
 }
 
 func (p *TestPlanner) Plan() (*TestPlan, error) {
+	// First, analyze all stages and merge chains with conflicting resource
+	// accesses.
+	mergedStages := make([]Stage, len(p.stages))
+	for i, stage := range p.stages {
+		mergedStage, err := p.maybeMergeChains(stage)
+		if err != nil {
+			return nil, err
+		}
+		mergedStages[i] = mergedStage
+	}
+
+	// Now generate plans from resolved stages
 	var stagePlans []stagePlan
-	for _, stage := range p.stages {
+	for _, stage := range mergedStages {
 		plan := p.generateStagePlan(stage)
 		p.CreateConcurrentSteps(&plan)
 		stagePlans = append(stagePlans, plan)
@@ -101,6 +114,337 @@ func (p *TestPlanner) generateStagePlan(s Stage) stagePlan {
 		stage: &s,
 		steps: steps,
 	}
+}
+
+// hasConcurrentConflict checks if two steps conflict when run concurrently.
+// Steps conflict if they access the same resource with at least one having exclusive access (lock).
+func hasConcurrentConflict(step1, step2 *SingleStep) bool {
+	// Collect all resource accesses from both steps
+	allResources1 := make([]ResourceAccess, 0, len(step1.resources.accesses)+len(step1.resources.releases))
+	allResources1 = append(allResources1, step1.resources.accesses...)
+	allResources1 = append(allResources1, step1.resources.releases...)
+
+	allResources2 := make([]ResourceAccess, 0, len(step2.resources.accesses)+len(step2.resources.releases))
+	allResources2 = append(allResources2, step2.resources.accesses...)
+	allResources2 = append(allResources2, step2.resources.releases...)
+
+	// Check if any resources conflict
+	for _, res1 := range allResources1 {
+		for _, res2 := range allResources2 {
+			if res1.ConflictsWith(&res2) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// findConflictingChains uses union-find to group chains that have conflicting resources.
+// If two chains have conflicting resources (i.e. a resource is locked by one chain
+// and accessed or locked by another), they cannot be run in parallel and must be merged.
+//
+// Returns a slice of groups, where each group is a slice of chain indices.
+// Groups are sorted by their minimum chain index for deterministic ordering.
+//
+// Example with 4 chains:
+//
+//	Chain 0: locks cluster_setting:A
+//	Chain 1: locks schema_change:B
+//	Chain 2: locks cluster_setting:A (conflicts with 0!)
+//	Chain 3: no locks
+//
+// Union-find process:
+//
+//	Initial: parent = [0, 1, 2, 3] (each chain is its own group)
+//	Compare 0 vs 1: no conflict, parent = [0, 1, 2, 3]
+//	Compare 0 vs 2: CONFLICT! union(0,2), parent = [0, 1, 0, 3] (2 now points to 0)
+//	Compare 0 vs 3: no conflict, parent = [0, 1, 0, 3]
+//	Compare 1 vs 2: find(2)=0, so comparing 1 vs group{0,2}, no conflict
+//	Compare 1 vs 3: no conflict
+//	Compare 2 vs 3: already in group with 0, no new conflict
+//
+// Final groups:
+//
+//	[[0, 2], [1], [3]] - sorted by first element
+//
+// Transitive conflicts also work:
+//
+//	Chain 0: locks A
+//	Chain 1: locks B
+//	Chain 2: locks A and B (conflicts with both!)
+//	Result: union(0,2), union(1,2) → all three chains merge into one group
+//	because union(1,2) finds that 2 is already with 0, so it unions 1 with 0's group.
+func findConflictingChains(chainResources [][]ResourceAccess) [][]int {
+	n := len(chainResources)
+
+	// Initialize: each chain starts in its own group
+	parent := make([]int, n)
+	for i := range parent {
+		parent[i] = i // parent[i] = i means "i is its own root"
+	}
+
+	// find(x) returns the root of x's group (with path compression)
+	// Path compression: flattens the tree so future lookups are faster
+	var find func(int) int
+	find = func(x int) int {
+		if parent[x] != x {
+			parent[x] = find(parent[x]) // Recursively find root and compress path
+		}
+		return parent[x]
+	}
+
+	// union(x, y) merges the groups containing x and y
+	union := func(x, y int) {
+		px, py := find(x), find(y)
+		if px != py {
+			parent[px] = py // Make py the parent of px's entire group
+		}
+	}
+
+	// Find all conflicting pairs (chains that conflict on any resource)
+	for i := 0; i < n; i++ {
+		for j := i + 1; j < n; j++ {
+			// Check if chains i and j have conflicting resources
+			conflict := false
+			for _, res1 := range chainResources[i] {
+				for _, res2 := range chainResources[j] {
+					if res1.ConflictsWith(&res2) {
+						conflict = true
+						break
+					}
+				}
+				if conflict {
+					break
+				}
+			}
+			if conflict {
+				union(i, j) // Merge i and j into the same group
+			}
+		}
+	}
+
+	// Group chains by their root parent
+	groupMap := make(map[int][]int)
+	for i := 0; i < n; i++ {
+		root := find(i)
+		groupMap[root] = append(groupMap[root], i)
+	}
+
+	// Convert to slice and sort by minimum chain index for determinism
+	var groups [][]int
+	for _, group := range groupMap {
+		groups = append(groups, group)
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		return groups[i][0] < groups[j][0]
+	})
+
+	return groups
+}
+
+// maybeMergeChains analyzes chains for lock conflicts and merges
+// conflicting chains.
+func (p *TestPlanner) maybeMergeChains(stage Stage) (Stage, error) {
+	if len(stage.chains) <= 1 {
+		return stage, nil
+	}
+
+	// Collect resource accesses for each chain.
+	chainResources := make([][]ResourceAccess, len(stage.chains))
+	for i, ch := range stage.chains {
+		var resources []ResourceAccess
+		for _, stepGroup := range ch {
+			for _, step := range stepGroup {
+				if singleStep, ok := step.StepProtocol.(*SingleStep); ok {
+					resources = append(resources, singleStep.resources.accesses...)
+					resources = append(resources, singleStep.resources.releases...)
+				}
+			}
+		}
+		chainResources[i] = resources
+	}
+
+	// Find which chains conflict and group them.
+	groups := findConflictingChains(chainResources)
+
+	p.logger.Printf("Stage '%s': Found %d conflict groups from %d chains", stage.name, len(groups), len(stage.chains))
+	for i, group := range groups {
+		p.logger.Printf("  Group %d: %d chains to merge", i, len(group))
+	}
+
+	// Merge each group using smart interleaving
+	newChains := make([]chain, 0, len(groups))
+	for _, group := range groups {
+		if len(group) == 1 {
+			// No conflict, keep as-is
+			newChains = append(newChains, stage.chains[group[0]])
+		} else {
+			// Collect all chains to merge
+			chainsToMerge := make([]chain, len(group))
+			for i, idx := range group {
+				chainsToMerge[i] = stage.chains[idx]
+			}
+
+			merged, err := p.mergeChains(chainsToMerge)
+			if err != nil {
+				return Stage{}, err
+			}
+			newChains = append(newChains, merged)
+		}
+	}
+
+	return Stage{
+		name:                     stage.name,
+		chains:                   newChains,
+		maxStepConcurrency:       stage.maxStepConcurrency,
+		failureInjectionDisabled: stage.failureInjectionDisabled,
+	}, nil
+}
+
+// mergeChains merges multiple chains by doing pairwise merges.
+// Each merge takes one chain as a base and inserts stepGroups from the second
+// chain at random positions, using rejection sampling to ensure valid lock sequences.
+func (p *TestPlanner) mergeChains(chains []chain) (chain, error) {
+	result := chains[0]
+	for i := 1; i < len(chains); i++ {
+		var err error
+		result, err = p.mergeTwoChains(result, chains[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+// mergeTwoChains merges two chains while respecting locks and step ordering.
+func (p *TestPlanner) mergeTwoChains(c1, c2 chain) (chain, error) {
+	maxAttempts := 1000
+
+	p.logger.Printf("Merging two chains: c1 has %d stepGroups, c2 has %d stepGroups", len(c1), len(c2))
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt%100 == 0 && attempt > 0 {
+			p.logger.Printf("  Merge attempt %d/%d", attempt, maxAttempts)
+		}
+		// We want to interleave our two chains with a uniform distribution.
+		// A naive approach is to randomly pick with 50% probability the next
+		// stepGroup from either chain. However, this skews the distribution
+		// if the chains are of different lengths, e.g. consider if chain 1
+		// is length 10 and chain 2 is length 1, chain 2 will be skewed toward
+		// the start of the merged chain.
+		//
+		// Randomly shuffling both chains together would give us a uniform
+		// distribution, but the rejection sampling would be inefficient
+		// as we violate the ordering dependencies within each chain.
+		//
+		// Instead, we do something in between. We create a slice with an
+		// entry for each stepGroup in both chains, marking which chain the
+		// entry belongs to. This slice is then shuffled and drawn from, i.e.
+		// if we pull a 0, we take the next stepGroup from chain 1, if we pull a 1,
+		// we take the next stepGroup from chain 2.
+		order := make([]int, 0, len(c1)+len(c2))
+		for range c1 {
+			order = append(order, 0)
+		}
+		for range c2 {
+			order = append(order, 1)
+		}
+
+		// Shuffle the order to get a random interleaving
+		p.rng.Shuffle(len(order), func(i, j int) {
+			order[i], order[j] = order[j], order[i]
+		})
+
+		// Pull stepGroups from each chain according to the order
+		result := make(chain, 0, len(order))
+		c1Ptr, c2Ptr := 0, 0
+
+		for _, chainIdx := range order {
+			if chainIdx == 0 {
+				result = append(result, c1[c1Ptr])
+				c1Ptr++
+			} else {
+				result = append(result, c2[c2Ptr])
+				c2Ptr++
+			}
+		}
+
+		// Validate the lock sequence
+		if p.hasValidLockSequenceForChain(result) {
+			return result, nil
+		}
+	}
+
+	return nil, fmt.Errorf("failed to find valid interleaving after %d attempts when merging chains with %d and %d stepGroups",
+		maxAttempts, len(c1), len(c2))
+}
+
+// hasValidLockSequenceForChain validates a chain by flattening it to steps
+// and checking the lock sequence.
+func (p *TestPlanner) hasValidLockSequenceForChain(ch chain) bool {
+	var steps []testStep
+	for _, stepGroup := range ch {
+		steps = append(steps, stepGroup...)
+	}
+	return p.hasValidLockSequence(steps)
+}
+
+// hasValidLockSequence validates that a sequence of steps doesn't have
+// double-locks or double-unlocks, and that accesses don't conflict with held locks.
+func (p *TestPlanner) hasValidLockSequence(steps []testStep) bool {
+	// Track currently held resources (both exclusive locks and non-exclusive accesses)
+	heldResources := make(map[string]ResourceAccess)
+
+	for _, step := range steps {
+		singleStep, ok := step.StepProtocol.(*SingleStep)
+		if !ok {
+			continue
+		}
+
+		// Process accesses: check if they're exclusive locks or non-exclusive accesses
+		for _, access := range singleStep.resources.accesses {
+			if access.Lock {
+				// This is an exclusive lock acquisition
+				// Check if we're trying to acquire a lock that conflicts with any held resource
+				for _, heldResource := range heldResources {
+					if access.ConflictsWith(&heldResource) {
+						// Double-lock or overlapping lock detected
+						return false
+					}
+				}
+				// Add to held resources
+				heldResources[access.String()] = access
+			} else {
+				// This is a non-exclusive access
+				// Check it doesn't conflict with held resources (specifically exclusive locks)
+				for _, heldResource := range heldResources {
+					if access.ConflictsWith(&heldResource) {
+						// Trying to access a resource that's exclusively locked
+						return false
+					}
+				}
+				// Add to held resources (non-exclusive accesses also need to be tracked)
+				heldResources[access.String()] = access
+			}
+		}
+
+		// Process releases
+		for _, release := range singleStep.resources.releases {
+			// Verify we're releasing a resource we actually hold
+			key := release.String()
+			if heldResource, ok := heldResources[key]; !ok {
+				// Trying to release a resource we don't hold
+				return false
+			} else if release.Lock != heldResource.Lock {
+				// The Lock type we're releasing doesn't match what we acquired
+				return false
+			}
+			delete(heldResources, key)
+		}
+	}
+
+	return true
 }
 
 // CreateConcurrentSteps takes in a stagePlan of singleSteps and
@@ -175,22 +519,37 @@ func (p *TestPlanner) isValidConcurrentGroups(steps []testStep, spans []stepSpan
 	// A concurrent grouping of steps [i, j] is valid iff:
 	// - no step disables concurrency
 	// - if two steps are in the same Chain, they must be in the same step group (depth)
+	// - steps don't lock the same resources (no double locking)
 	for _, sp := range spans {
 		chains := make(map[int]int)
 		if sp.Size() == 1 {
 			continue
 		}
+
+		// Collect resource accesses from all steps in this concurrent group
+		groupSteps := make([]*SingleStep, 0, sp.Size())
+
 		for idx := sp.start; idx <= sp.end; idx++ {
 			step := steps[idx]
 			if ss, ok := step.StepProtocol.(*SingleStep); ok {
 				if ss.concurrencyDisabled {
 					return false
 				}
+				groupSteps = append(groupSteps, ss)
 			}
 			if d, ok := chains[step.position.chainID]; ok && d != step.position.depth {
 				return false
 			}
 			chains[step.position.chainID] = step.position.depth
+		}
+
+		// Check for lock conflicts within the concurrent group
+		for i := 0; i < len(groupSteps); i++ {
+			for j := i + 1; j < len(groupSteps); j++ {
+				if hasConcurrentConflict(groupSteps[i], groupSteps[j]) {
+					return false
+				}
+			}
 		}
 	}
 	return true

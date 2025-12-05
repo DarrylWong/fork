@@ -189,7 +189,38 @@ func (t *Test) AddOperation(stage *Stage, op Operation, opts ...StepOption) {
 	for _, group := range op.Chain() {
 		steps := make([]testStep, len(group))
 		for i, step := range group {
-			steps[i] = newTestStep(t.nextHookID(), step.Description(), step.Run, opts...)
+			// TODO: this is wrong, we shouldn't need to reconstruct steps
+			// Extract original step's options by creating StepOptions that recreate them
+			var stepOpts []StepOption
+
+			// Preserve the original step's properties if it's a SingleStep
+			if singleStep, ok := step.StepProtocol.(*SingleStep); ok {
+				// Preserve resource accesses
+				for _, access := range singleStep.resources.accesses {
+					accessCopy := access
+					stepOpts = append(stepOpts, func(s *SingleStep) {
+						s.resources.accesses = append(s.resources.accesses, accessCopy)
+					})
+				}
+
+				// Preserve resource releases
+				for _, release := range singleStep.resources.releases {
+					releaseCopy := release
+					stepOpts = append(stepOpts, func(s *SingleStep) {
+						s.resources.releases = append(s.resources.releases, releaseCopy)
+					})
+				}
+
+				// Preserve concurrency settings
+				if singleStep.concurrencyDisabled {
+					stepOpts = append(stepOpts, DisableConcurrency())
+				}
+			}
+
+			// Combine with new opts (new opts come after to allow overriding)
+			stepOpts = append(stepOpts, opts...)
+
+			steps[i] = newTestStep(t.nextHookID(), step.Description(), step.Run, stepOpts...)
 		}
 		newChain = append(newChain, steps)
 	}

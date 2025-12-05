@@ -2,6 +2,8 @@ package modular
 
 import (
 	"context"
+	"math/rand"
+
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
@@ -36,7 +38,7 @@ type TestOptions struct {
 	debugModules           debugModules
 	// cleanupOnFailure controls whether cluster state cleanup is performed on failure.
 	// Default false (no cleanup) since cleanup is primarily for testing purposes.
-	cleanupOnFailure       bool
+	cleanupOnFailure bool
 }
 
 // NewTest creates a new modular test.
@@ -92,14 +94,14 @@ func (t *Test) NewPlanner() TestPlanner {
 	rng, seed := randutil.NewLockedPseudoRand()
 
 	return TestPlanner{
-		seed:         seed,
-		rng:          rng,
-		stages:       combinedStages,
-		ctx:          t.ctx,
-		logger:       t.logger,
-		cluster:      t.cluster,
-		crdbNodes:    t.crdbNodes,
-		debugModules: t.options.debugModules,
+		seed:             seed,
+		rng:              rng,
+		stages:           combinedStages,
+		ctx:              t.ctx,
+		logger:           t.logger,
+		cluster:          t.cluster,
+		crdbNodes:        t.crdbNodes,
+		debugModules:     t.options.debugModules,
 		cleanupOnFailure: t.options.cleanupOnFailure,
 	}
 }
@@ -138,4 +140,49 @@ func (t *Test) nextHookID() int {
 // By default, cleanup is disabled since it's primarily for testing purposes.
 func (t *Test) EnableCleanupOnFailure() {
 	t.options.cleanupOnFailure = true
+}
+
+// InsertRandomOperations randomly selects and inserts operations into a stage.
+// This uses InsertOperation under the hood for each randomly selected operation.
+//
+// Parameters:
+//   - stage: The stage to insert operations into
+//   - candidateOps: Pool of operations to choose from
+//   - numToInsert: Number of operations to insert
+//   - rng: Random number generator for making random decisions
+//
+// Returns the list of operations that were successfully inserted.
+func (t *Test) InsertRandomOperations(
+	stage *Stage,
+	candidateOps []Operation,
+	numToInsert int,
+	rng *rand.Rand,
+) ([]Operation, error) {
+	if numToInsert <= 0 {
+		return nil, nil
+	}
+
+	if numToInsert > len(candidateOps) {
+		numToInsert = len(candidateOps)
+	}
+
+	// Randomly select operations
+	indices := rng.Perm(len(candidateOps))[:numToInsert]
+	selected := make([]Operation, numToInsert)
+	for i, idx := range indices {
+		selected[i] = candidateOps[idx]
+	}
+
+	// Shuffle for random insertion order
+	rng.Shuffle(len(selected), func(i, j int) {
+		selected[i], selected[j] = selected[j], selected[i]
+	})
+
+	var inserted []Operation
+	for _, op := range selected {
+		t.AddOperation(stage, op)
+		inserted = append(inserted, op)
+	}
+
+	return inserted, nil
 }

@@ -47,10 +47,6 @@ func (t *TPCCOp) Name() string {
 	return t.name
 }
 
-func (t *TPCCOp) Precondition() bool {
-	return true
-}
-
 func (t *TPCCOp) Timeout() time.Duration {
 	// TODO: lets make this dynamic?
 	return t.duration + 2*time.Hour

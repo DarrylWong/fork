@@ -8,7 +8,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/modular"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
-	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 )
 
@@ -46,12 +45,12 @@ type YCSBOptions struct {
 
 // YCSBOp implements the Operation interface for YCSB workload operations
 type YCSBOp struct {
-	name       string
-	builder    *modular.OperationBuilder
-	workload   YCSBWorkloadType
-	initOnly   bool
-	runOnly    bool
-	opts       YCSBOptions
+	name     string
+	builder  *modular.OperationBuilder
+	workload YCSBWorkloadType
+	initOnly bool
+	runOnly  bool
+	opts     YCSBOptions
 }
 
 // Chain returns the operation's chain of steps
@@ -62,10 +61,6 @@ func (y *YCSBOp) Chain() modular.Chain {
 // Name returns the operation's name
 func (y *YCSBOp) Name() string {
 	return y.name
-}
-
-func (y *YCSBOp) Precondition() bool {
-	return true
 }
 
 func (y *YCSBOp) Timeout() time.Duration {

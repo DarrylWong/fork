@@ -9,7 +9,6 @@ import (
 type Operation interface {
 	Chain() Chain
 	Name() string
-	Precondition() bool
 	Timeout() time.Duration
 }
 
