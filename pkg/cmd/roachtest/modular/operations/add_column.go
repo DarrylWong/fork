@@ -37,7 +37,8 @@ func (a *AddRandomColumnOp) Timeout() time.Duration {
 // It picks a random database, random table, and creates a column with a random type
 // and optional constraints.
 func AddRandomColumn() modular.Operation {
-	builder := modular.NewOperation("add random column", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+	builder := modular.NewOperation(
+		modular.NewStep("add random column", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
 		rng, _ := randutil.NewPseudoRand()
 
 		unlock := func() {}
@@ -110,10 +111,118 @@ func AddRandomColumn() modular.Operation {
 
 		l.Printf("Successfully added column %s to %s.%s", colName, dbName, tableName)
 		return nil
-	})
+	}),
+	)
 
 	return &AddRandomColumnOp{
 		name:    "add-random-column",
 		builder: builder,
+	}
+}
+
+// AddRandomColumnPlan contains the selected table and column details for the operation.
+type AddRandomColumnPlan struct {
+	Database   string
+	Table      string
+	ColumnName string
+	ColumnDef  string
+}
+
+// AddRandomColumnDynamic creates a dynamic operation that selects a random table
+// at PrePlan time and adds a random column to it. This enables proper chain merging
+// since the planner can see which table will be modified before execution.
+func AddRandomColumnDynamic() modular.Operation {
+	builder := modular.NewDynamicOperation[*AddRandomColumnPlan]("add random column (dynamic)").
+		PrePlan(func(ctx context.Context, l *logger.Logger, h *modular.Helper) (*AddRandomColumnPlan, error) {
+			rng, _ := randutil.NewPseudoRand()
+
+			// Search for a table to add a column to
+			dbName, tableName, err := h.SearchTable(func(dbName, tableName string) bool {
+				// Accept any table for column addition
+				return true
+			})
+			if err != nil {
+				return nil, fmt.Errorf("no suitable table found for column addition: %w", err)
+			}
+
+			// Pick a random column type
+			columnTypes := []*types.T{
+				types.Int,
+				types.String,
+				types.Bool,
+				types.Float,
+				types.Decimal,
+				types.Timestamp,
+				types.Uuid,
+				types.Bytes,
+				types.Jsonb,
+				types.MakeArray(types.Int),
+			}
+			colType := columnTypes[rng.Intn(len(columnTypes))]
+
+			// Generate column name
+			colName := fmt.Sprintf("col_%d", time.Now().UnixNano()%1000000)
+
+			// Build column definition
+			colDef := fmt.Sprintf("%s %s", colName, colType.SQLString())
+
+			// Add optional constraints/defaults
+			var constraints []string
+
+			// 30% chance of NULL constraint
+			if rng.Intn(10) < 3 {
+				constraints = append(constraints, "NULL")
+			}
+
+			// 20% chance of adding a default value
+			if rng.Intn(10) < 2 {
+				defaultValue := randgen.RandDatum(rng, colType, true)
+				if defaultValue != tree.DNull {
+					defaultStr := tree.AsStringWithFlags(defaultValue, tree.FmtParsable)
+					constraints = append(constraints, fmt.Sprintf("DEFAULT %s", defaultStr))
+				}
+			}
+
+			// Append constraints to column definition
+			if len(constraints) > 0 {
+				for _, constraint := range constraints {
+					colDef += " " + constraint
+				}
+			}
+
+			l.Printf("Selected table %s.%s for column addition: %s", dbName, tableName, colDef)
+
+			return &AddRandomColumnPlan{
+				Database:   dbName,
+				Table:      tableName,
+				ColumnName: colName,
+				ColumnDef:  colDef,
+			}, nil
+		}).
+		WithRun(func(ctx context.Context, l *logger.Logger, h *modular.Helper, plan *AddRandomColumnPlan) error {
+			l.Printf("Adding column to table %s.%s: %s", plan.Database, plan.Table, plan.ColumnDef)
+
+			query := fmt.Sprintf("ALTER TABLE %s.%s ADD COLUMN %s", plan.Database, plan.Table, plan.ColumnDef)
+			if err := h.Exec(query); err != nil {
+				return fmt.Errorf("failed to add column: %w", err)
+			}
+
+			l.Printf("Successfully added column %s to %s.%s", plan.ColumnName, plan.Database, plan.Table)
+			return nil
+		}).
+		WithDynamicResourceCallback(func(plan *AddRandomColumnPlan) ([]modular.ResourceAccess, []modular.ResourceAccess) {
+			access := modular.SchemaChangeAccess{
+				Database: plan.Database,
+				Table:    plan.Table,
+			}.Resource(true)
+			return []modular.ResourceAccess{access}, []modular.ResourceAccess{access}
+		}).
+		WithDynamicName(func(plan *AddRandomColumnPlan) string {
+			return fmt.Sprintf("add random column to %s.%s", plan.Database, plan.Table)
+		})
+
+	return &AddRandomColumnOp{
+		name:    "add-random-column-dynamic",
+		builder: modular.NewOperation(builder),
 	}
 }

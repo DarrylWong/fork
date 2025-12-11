@@ -35,7 +35,8 @@ func (i *InspectTableOp) Timeout() time.Duration {
 // to verify consistency between the primary index and secondary indexes.
 // This is similar to the post-test INSPECT validation but runs during test execution.
 func InspectTable() modular.Operation {
-	builder := modular.NewOperation("INSPECT table", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+	builder := modular.NewOperation(
+		modular.NewStep("INSPECT table", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
 		// Find a random table to inspect
 		// TODO: replace with h.RandomTable
 		dbName, tableName, err := h.SearchTable(func(dbName, tableName string) bool {
@@ -133,7 +134,8 @@ func InspectTable() modular.Operation {
 		}
 
 		return fmt.Errorf("INSPECT job %d did not complete within %s", jobID, maxWait)
-	})
+	}),
+	)
 
 	return &InspectTableOp{
 		name:    "inspect-table",
@@ -186,4 +188,141 @@ func isStatementTimeoutError(err error) bool {
 	errMsg := err.Error()
 	return errMsg == "pq: query execution canceled due to statement timeout" ||
 		errMsg == "query execution canceled due to statement timeout"
+}
+
+// InspectTablePlan contains the selected table for the INSPECT operation.
+type InspectTablePlan struct {
+	Database string
+	Table    string
+}
+
+// InspectTableDynamic creates a dynamic operation that selects a random table
+// at PrePlan time and runs INSPECT TABLE on it. This enables proper chain merging
+// since the planner can see which table will be inspected before execution.
+func InspectTableDynamic() modular.Operation {
+	builder := modular.NewDynamicOperation[*InspectTablePlan]("INSPECT random table (dynamic)").
+		PrePlan(func(ctx context.Context, l *logger.Logger, h *modular.Helper) (*InspectTablePlan, error) {
+			// Search for a table to inspect
+			dbName, tableName, err := h.SearchTable(func(dbName, tableName string) bool {
+				// Accept any table for inspection
+				return true
+			})
+			if err != nil {
+				return nil, fmt.Errorf("no suitable table found for inspection: %w", err)
+			}
+
+			l.Printf("Selected table %s.%s for INSPECT", dbName, tableName)
+
+			return &InspectTablePlan{
+				Database: dbName,
+				Table:    tableName,
+			}, nil
+		}).
+		WithRun(func(ctx context.Context, l *logger.Logger, h *modular.Helper, plan *InspectTablePlan) error {
+			l.Printf("Running INSPECT on table %s.%s", plan.Database, plan.Table)
+
+			// Get a DB connection that we'll use for all subsequent operations
+			db := h.RandomDBConn()
+
+			// Enable INSPECT command on this connection
+			if _, err := db.Exec("SET enable_inspect_command = true"); err != nil {
+				return fmt.Errorf("failed to enable INSPECT command: %w", err)
+			}
+
+			// Run INSPECT TABLE - this will check consistency between primary and secondary indexes
+			inspectSQL := fmt.Sprintf("INSPECT TABLE %s.%s", plan.Database, plan.Table)
+
+			// Use a short statement timeout to force background job execution
+			if _, err := db.Exec("SET statement_timeout = '5s'"); err != nil {
+				return fmt.Errorf("failed to set statement timeout: %w", err)
+			}
+			defer func() {
+				if _, resetErr := db.Exec("RESET statement_timeout"); resetErr != nil {
+					l.Printf("Warning: failed to reset statement timeout: %v", resetErr)
+				}
+			}()
+
+			// Execute INSPECT - may timeout and run as background job
+			_, err := db.Exec(inspectSQL)
+			if err != nil && !isStatementTimeoutError(err) {
+				return fmt.Errorf("INSPECT TABLE failed: %w", err)
+			}
+
+			// Get the most recent INSPECT job
+			var jobID int64
+			getJobIDSQL := `
+				SELECT job_id
+				FROM [SHOW JOBS]
+				WHERE job_type = 'INSPECT'
+				ORDER BY created DESC
+				LIMIT 1`
+			if err := db.QueryRow(getJobIDSQL).Scan(&jobID); err != nil {
+				l.Printf("Warning: failed to get INSPECT job ID: %v", err)
+				// If we can't get the job ID, assume the INSPECT ran successfully inline
+				l.Printf("INSPECT TABLE %s.%s completed inline (no job created)", plan.Database, plan.Table)
+				return nil
+			}
+
+			l.Printf("INSPECT job ID: %d", jobID)
+
+			// Poll the job until it completes
+			const pollInterval = 5 * time.Second
+			const maxWait = 10 * time.Minute
+			deadline := time.Now().Add(maxWait)
+
+			for time.Now().Before(deadline) {
+				var status jobs.State
+				var fractionCompleted float64
+				checkJobSQL := `
+					SELECT status, fraction_completed
+					FROM [SHOW JOBS]
+					WHERE job_id = $1`
+				if err := db.QueryRow(checkJobSQL, jobID).Scan(&status, &fractionCompleted); err != nil {
+					return fmt.Errorf("failed to query job %d status: %w", jobID, err)
+				}
+
+				// Check if job is complete
+				switch status {
+				case jobs.StateSucceeded:
+					l.Printf("INSPECT job %d completed successfully (100%%)", jobID)
+
+					// Check for any errors found by INSPECT
+					if err := checkInspectErrors(db, jobID); err != nil {
+						return err
+					}
+
+					l.Printf("INSPECT validation passed: no consistency errors found")
+					return nil
+
+				case jobs.StateFailed, jobs.StateCanceled:
+					return fmt.Errorf("INSPECT job %d finished with status: %s", jobID, status)
+				}
+
+				// Log progress
+				if int(fractionCompleted*100)%20 == 0 && fractionCompleted > 0 {
+					l.Printf("INSPECT job %d: %.0f%% complete", jobID, fractionCompleted*100)
+				}
+
+				time.Sleep(pollInterval)
+			}
+
+			return fmt.Errorf("INSPECT job %d did not complete within %s", jobID, maxWait)
+		}).
+		WithDynamicResourceCallback(func(plan *InspectTablePlan) ([]modular.ResourceAccess, []modular.ResourceAccess) {
+			// Use SchemaChangeAccess with read-only lock since INSPECT reads table data
+			// but doesn't modify the schema
+			access := modular.SchemaChangeAccess{
+				Database: plan.Database,
+				Table:    plan.Table,
+			}.Resource(false) // false = read lock, not write lock
+			return []modular.ResourceAccess{access}, []modular.ResourceAccess{access}
+		}).
+		WithDynamicName(func(plan *InspectTablePlan) string {
+			return fmt.Sprintf("INSPECT table %s.%s", plan.Database, plan.Table)
+		})
+
+	return &InspectTableOp{
+		name:    "inspect-table-dynamic",
+		builder: modular.NewOperation(builder),
+	}
 }

@@ -186,8 +186,19 @@ func (h *Helper) CreateUserPassword(namePrefix, password string, args ...string)
 
 // TOOD: InjectFailure
 
-// CreateDatabase creates a database with automatic name generation and tracking.
-func (h *Helper) CreateDatabase(namePrefix string, args ...string) (string, error) {
+// CreateDatabase creates a database with the exact name specified and tracking.
+func (h *Helper) CreateDatabase(dbName string, args ...string) error {
+	query := fmt.Sprintf("CREATE DATABASE %s %s", dbName, joinArgs(args...))
+	err := h.Exec(strings.TrimSpace(query))
+	if err != nil {
+		return err
+	}
+	h.stateTracker.TrackDatabase(dbName)
+	return nil
+}
+
+// CreateRandomDatabase creates a database with automatic name generation (timestamp appended) and tracking.
+func (h *Helper) CreateRandomDatabase(namePrefix string, args ...string) (string, error) {
 	dbName := h.stateTracker.NewDatabaseName(namePrefix)
 	query := fmt.Sprintf("CREATE DATABASE %s %s", dbName, joinArgs(args...))
 	return dbName, h.Exec(strings.TrimSpace(query))
@@ -205,7 +216,31 @@ func (h *Helper) CreateIndex(namePrefix, database, table string, columns []strin
 	indexName := h.stateTracker.NewIndexName(namePrefix)
 	columnsStr := strings.Join(columns, ", ")
 	tableRef := fmt.Sprintf("%s.%s", database, table)
-	query := fmt.Sprintf("CREATE INDEX %s ON %s (%s) %s", indexName, tableRef, columnsStr, joinArgs(args...))
+
+	// Handle special index types that must appear before the index name
+	// (INVERTED, UNIQUE) vs. options that appear after the column list
+	// (USING HASH, WHERE, STORING, etc.)
+	var indexType string
+	var afterColArgs []string
+
+	for _, arg := range args {
+		if arg == "INVERTED" || arg == "UNIQUE" {
+			indexType = arg
+		} else {
+			afterColArgs = append(afterColArgs, arg)
+		}
+	}
+
+	// Build the query with proper syntax
+	var query string
+	if indexType != "" {
+		query = fmt.Sprintf("CREATE %s INDEX %s ON %s (%s) %s",
+			indexType, indexName, tableRef, columnsStr, joinArgs(afterColArgs...))
+	} else {
+		query = fmt.Sprintf("CREATE INDEX %s ON %s (%s) %s",
+			indexName, tableRef, columnsStr, joinArgs(afterColArgs...))
+	}
+
 	return indexName, h.Exec(strings.TrimSpace(query))
 }
 

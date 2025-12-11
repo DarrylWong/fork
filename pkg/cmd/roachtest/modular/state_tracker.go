@@ -43,6 +43,9 @@ type ClusterStateTracker struct {
 	// indexesCreated tracks indexes created during the test
 	indexesCreated map[string]struct{}
 
+	// indexCounter is incremented for each index created to ensure unique names
+	indexCounter int
+
 	// debugLogger logs debug information for tracking operations
 	debugLogger *logger.Logger
 }
@@ -84,6 +87,13 @@ func (c *ClusterStateTracker) NewDatabaseName(namePrefix string) string {
 	return dbName
 }
 
+// TrackDatabase tracks an existing database name without generating a new name.
+func (c *ClusterStateTracker) TrackDatabase(dbName string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.databasesCreated[dbName] = struct{}{}
+}
+
 func (c *ClusterStateTracker) NewSchemaName(namePrefix string) string {
 	schemaName := fmt.Sprintf("%s_%d", namePrefix, time.Now().Unix())
 	c.mu.Lock()
@@ -93,9 +103,10 @@ func (c *ClusterStateTracker) NewSchemaName(namePrefix string) string {
 }
 
 func (c *ClusterStateTracker) NewIndexName(namePrefix string) string {
-	indexName := fmt.Sprintf("%s_%d", namePrefix, time.Now().Unix())
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.indexCounter++
+	indexName := fmt.Sprintf("%s_%d", namePrefix, c.indexCounter)
 	c.indexesCreated[indexName] = struct{}{}
 	return indexName
 }

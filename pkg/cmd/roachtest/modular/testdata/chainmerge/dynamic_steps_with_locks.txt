@@ -1,0 +1,60 @@
+echo
+----
+----
+Before merge:
+                                                 [test]
+   ┌───────────────────┐     ┌───────────────────┐     ┌───────────────────┐     ┌───────────────────┐
+   │   chain 1: noop   │     │ chain 1 dynamic:  │     │ chain 2 dynamic:  │     │ chain 3 dynamic:  │
+   │      before       │     │plan index creation│     │  modify cluster   │     │ modify different  │
+   │                   │     │                   │     │      setting      │     │      setting      │
+   └───────────────────┘     └───────────────────┘     └───────────────────┘     └───────────────────┘
+             │                         │                         │
+             │                         │                         │
+             │                         │                         │
+             │                         │                         │
+             ▼                         ▼                         ▼
+   ┌───────────────────┐     ┌───────────────────┐     ┌───────────────────┐
+   │   chain 1: noop   │     │ chain 1 dynamic:  │     │chain 2: noop after│
+   │      middle       │     │ create index with │     │                   │
+   │                   │     │       lock        │     │                   │
+   └───────────────────┘     └───────────────────┘     └───────────────────┘
+
+After merge:
+                                    [test]
+   ┌───────────────────┐     ┌───────────────────┐     ┌───────────────────┐
+   │   chain 1: noop   │     │ chain 1 dynamic:  │     │ chain 3 dynamic:  │
+   │      before       │     │plan index creation│     │ modify different  │
+   │                   │     │                   │     │      setting      │
+   └───────────────────┘     └───────────────────┘     └───────────────────┘
+             │                         │
+             │                         │
+             │                         │
+             │                         │
+             ▼                         ▼
+   ┌───────────────────┐     ┌───────────────────┐
+   │   chain 1: noop   │     │ chain 1 dynamic:  │
+   │      middle       │     │ create index with │
+   │                   │     │       lock        │
+   └───────────────────┘     └───────────────────┘
+                                       │
+                                       │
+                                       │
+                                       │
+                                       ▼
+                             ┌───────────────────┐
+                             │ chain 2 dynamic:  │
+                             │  modify cluster   │
+                             │      setting      │
+                             └───────────────────┘
+                                       │
+                                       │
+                                       │
+                                       │
+                                       ▼
+                             ┌───────────────────┐
+                             │chain 2: noop after│
+                             │                   │
+                             │                   │
+                             └───────────────────┘
+----
+----

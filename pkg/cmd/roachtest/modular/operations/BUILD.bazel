@@ -3,7 +3,9 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library")
 go_library(
     name = "operations",
     srcs = [
+        "add_column.go",
         "add_index.go",
+        "add_index_dynamic.go",
         "backup_restore.go",
         "cluster_setting.go",
         "inspect.go",

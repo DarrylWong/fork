@@ -123,26 +123,32 @@ func ChangeClusterSetting(c cluster.Cluster, opts ClusterSettingOptions) modular
 	willRevert := rng.Float64() < opts.RevertProbability
 
 	// Build the operation chain
-	builder := modular.NewOperation("change cluster setting", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		l.Printf("setting cluster setting %s to %v", selectedSetting.Name, selectedValue)
-		return h.SetClusterSetting(selectedSetting.Name, fmt.Sprintf("%v", selectedValue))
-	})
+	builder := modular.NewOperation(
+		modular.NewStep("change cluster setting", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+			l.Printf("setting cluster setting %s to %v", selectedSetting.Name, selectedValue)
+			return h.SetClusterSetting(selectedSetting.Name, fmt.Sprintf("%v", selectedValue))
+		}),
+	)
 
 	// Add optional sleep before reverting (only if we're going to revert)
 	if willRevert && opts.SleepDuration > 0 {
-		builder = builder.Then("sleep before reverting", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-			l.Printf("sleeping %s before reverting", opts.SleepDuration)
-			time.Sleep(opts.SleepDuration)
-			return nil
-		})
+		builder = builder.Then(
+			modular.NewStep("sleep before reverting", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+				l.Printf("sleeping %s before reverting", opts.SleepDuration)
+				time.Sleep(opts.SleepDuration)
+				return nil
+			}),
+		)
 	}
 
 	// Conditionally add revert step
 	if willRevert {
-		builder = builder.Then("revert cluster setting", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-			l.Printf("reverting cluster setting %s to default", selectedSetting.Name)
-			return h.ResetClusterSetting(selectedSetting.Name)
-		})
+		builder = builder.Then(
+			modular.NewStep("revert cluster setting", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+				l.Printf("reverting cluster setting %s to default", selectedSetting.Name)
+				return h.ResetClusterSetting(selectedSetting.Name)
+			}),
+		)
 	}
 
 	opName := fmt.Sprintf("cluster-setting/%s=%v", selectedSetting.Name, selectedValue)

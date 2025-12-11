@@ -113,19 +113,27 @@ func createYCSBOp(c cluster.Cluster, workload YCSBWorkloadType, initOnly, runOnl
 	var builder *modular.OperationBuilder
 
 	if initOnly {
-		builder = modular.NewOperation("initialize ycsb workload", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-			return runYCSBCommand(ctx, l, c, workload, opts, true, false)
-		})
+		builder = modular.NewOperation(
+			modular.NewStep("initialize ycsb workload", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+				return runYCSBCommand(ctx, l, c, workload, opts, true, false)
+			}),
+		)
 	} else if runOnly {
-		builder = modular.NewOperation(fmt.Sprintf("run ycsb workload %s", workload), func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-			return runYCSBCommand(ctx, l, c, workload, opts, false, true)
-		})
+		builder = modular.NewOperation(
+			modular.NewStep(fmt.Sprintf("run ycsb workload %s", workload), func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+				return runYCSBCommand(ctx, l, c, workload, opts, false, true)
+			}),
+		)
 	} else {
-		builder = modular.NewOperation(fmt.Sprintf("initialize ycsb workload %s", workload), func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-			return runYCSBCommand(ctx, l, c, workload, opts, true, false)
-		}).Then(fmt.Sprintf("run ycsb workload %s", workload), func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-			return runYCSBCommand(ctx, l, c, workload, opts, false, true)
-		})
+		builder = modular.NewOperation(
+			modular.NewStep(fmt.Sprintf("initialize ycsb workload %s", workload), func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+				return runYCSBCommand(ctx, l, c, workload, opts, true, false)
+			}),
+		).Then(
+			modular.NewStep(fmt.Sprintf("run ycsb workload %s", workload), func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+				return runYCSBCommand(ctx, l, c, workload, opts, false, true)
+			}),
+		)
 	}
 
 	var opType string

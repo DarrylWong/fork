@@ -77,6 +77,9 @@ type testStep struct {
 	stepID int
 	// hookID is a unique identifier determined when a testStep is added by the step builder.
 	hookID int
+	// planResult stores the result from PrePlan() for dynamic steps.
+	// Set during planning phase, used during execution.
+	planResult interface{}
 }
 
 // stepPosition encodes the position of the step in the graph, such that we can

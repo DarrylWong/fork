@@ -24,20 +24,20 @@ var (
 	invalidChars = regexp.MustCompile(`[^a-zA-Z0-9 \-_.]`)
 )
 
-// Runner executes a generated test plan from the modular framework.
-type Runner struct {
+// StaticPlanRunner executes a generated test plan from the modular framework.
+type StaticPlanRunner struct {
 	testPlan     *TestPlan
 	helper       *Helper
 	stateTracker *ClusterStateTracker
 	lockManager  *RuntimeLockManager
 }
 
-// NewRunner creates a new runner for executing a test plan.
-func NewRunner(testPlan *TestPlan) *Runner {
+// NewStaticRunner creates a new runner for executing a test plan.
+func NewStaticRunner(testPlan *TestPlan) *StaticPlanRunner {
 	clusterStateLogger := testPlan.debugModules.NewLogger(testPlan.logger, ClusterStateDebug)
 	lockManager := NewRuntimeLockManager()
 
-	return &Runner{
+	return &StaticPlanRunner{
 		testPlan:     testPlan,
 		helper:       &Helper{rng: testPlan.rng, lockManager: lockManager},
 		stateTracker: NewClusterStateTracker(clusterStateLogger),
@@ -45,15 +45,15 @@ func NewRunner(testPlan *TestPlan) *Runner {
 	}
 }
 
-// RunTestPlan executes the test plan using the provided roachtest.Test interface.
+// RunStaticTestPlan executes the test plan using the provided roachtest.Test interface.
 // It logs the DAG and test plan, then executes all steps in position.
-func RunTestPlan(ctx context.Context, t test.Test, testPlan *TestPlan) error {
-	runner := NewRunner(testPlan)
+func RunStaticTestPlan(ctx context.Context, t test.Test, testPlan *TestPlan) error {
+	runner := NewStaticRunner(testPlan)
 	return runner.Run(ctx, t)
 }
 
 // Run executes the test plan, logging the DAG and test plan before execution.
-func (r *Runner) Run(ctx context.Context, t test.Test) error {
+func (r *StaticPlanRunner) Run(ctx context.Context, t test.Test) error {
 	l := t.L()
 
 	// Initialize the helper with test context
@@ -79,7 +79,7 @@ func (r *Runner) Run(ctx context.Context, t test.Test) error {
 }
 
 // initializeHelper sets up the helper with the necessary context and dependencies.
-func (r *Runner) initializeHelper(ctx context.Context, t test.Test) {
+func (r *StaticPlanRunner) initializeHelper(ctx context.Context, t test.Test) {
 	// Initialize helper with context and cluster information
 	r.helper.ctx = ctx
 	r.helper.logger = t.L()
@@ -154,7 +154,7 @@ func (tm *testTaskManager) CompletedEvents() <-chan task.Event {
 }
 
 // extractStages extracts Stage objects from the test plan for DAG generation.
-func (r *Runner) extractStages() []Stage {
+func (r *StaticPlanRunner) extractStages() []Stage {
 	var stages []Stage
 	for _, stagePlan := range r.testPlan.stagePlans {
 		if stagePlan.stage != nil {
@@ -165,7 +165,7 @@ func (r *Runner) extractStages() []Stage {
 }
 
 // executeSteps executes all steps in the test plan sequentially by stage.
-func (r *Runner) executeSteps(ctx context.Context, l *logger.Logger) error {
+func (r *StaticPlanRunner) executeSteps(ctx context.Context, l *logger.Logger) error {
 	for stageIdx, stagePlan := range r.testPlan.stagePlans {
 		stageName := stagePlan.stage.name
 		if stageName == "" {
@@ -204,7 +204,7 @@ func (r *Runner) executeSteps(ctx context.Context, l *logger.Logger) error {
 }
 
 // executeStage executes all steps within a single stage.
-func (r *Runner) executeStage(ctx context.Context, l *logger.Logger, stagePlan stagePlan) error {
+func (r *StaticPlanRunner) executeStage(ctx context.Context, l *logger.Logger, stagePlan stagePlan) error {
 	for _, step := range stagePlan.steps {
 		stepLogger, err := r.loggerForStep(l, step.stepID, step.Description())
 		if err != nil {
@@ -220,7 +220,7 @@ func (r *Runner) executeStage(ctx context.Context, l *logger.Logger, stagePlan s
 			return err
 		}
 
-		// Execute the step
+		// Execute the step - DynamicStep.Run() will call PrePlan if needed
 		err = step.Run(ctx, stepLogger, r.helper)
 
 		r.releaseStepLocks(step, unlocks, stepLogger)
@@ -242,33 +242,33 @@ func (r *Runner) executeStage(ctx context.Context, l *logger.Logger, stagePlan s
 }
 
 // logStage logs stage start/finish messages with consistent formatting.
-func (r *Runner) logStage(prefix, stageName string, l *logger.Logger) {
+func (r *StaticPlanRunner) logStage(prefix, stageName string, l *logger.Logger) {
 	dashes := strings.Repeat("=", 10)
 	l.Printf("%[1]s %s: %s %[1]s", dashes, prefix, stageName)
 }
 
 // logStep logs step start/finish messages with consistent formatting.
-func (r *Runner) logStep(prefix string, stepID int, stepDesc string, l *logger.Logger) {
+func (r *StaticPlanRunner) logStep(prefix string, stepID int, stepDesc string, l *logger.Logger) {
 	dashes := strings.Repeat("-", 10)
 	l.Printf("%[1]s %s (%d): %s %[1]s", dashes, prefix, stepID, stepDesc)
 }
 
 // loggerForStage creates a logger instance for a stage.
-func (r *Runner) loggerForStage(parent *logger.Logger, stageIdx int, stageName string) (*logger.Logger, error) {
+func (r *StaticPlanRunner) loggerForStage(parent *logger.Logger, stageIdx int, stageName string) (*logger.Logger, error) {
 	name := invalidChars.ReplaceAllString(strings.ToLower(stageName), "")
 	name = fmt.Sprintf("stage_%d_%s", stageIdx, name)
 	return parent.ChildLogger(name)
 }
 
 // loggerForStep creates a logger instance for a step, similar to mixed-version runner.
-func (r *Runner) loggerForStep(parent *logger.Logger, stepID int, stepDesc string) (*logger.Logger, error) {
+func (r *StaticPlanRunner) loggerForStep(parent *logger.Logger, stepID int, stepDesc string) (*logger.Logger, error) {
 	name := invalidChars.ReplaceAllString(strings.ToLower(stepDesc), "")
 	name = fmt.Sprintf("%d_%s", stepID, name)
 	return parent.ChildLogger(name)
 }
 
 // stepError generates a detailed error for step failures.
-func (r *Runner) stepError(ctx context.Context, err error, stepID int, stepDesc string, l *logger.Logger) error {
+func (r *StaticPlanRunner) stepError(ctx context.Context, err error, stepID int, stepDesc string, l *logger.Logger) error {
 	stepErr := fmt.Errorf("modular test failure while running step %d (%s): %w", stepID, stepDesc, err)
 
 	// Log the error for convenience
@@ -283,7 +283,7 @@ func (r *Runner) stepError(ctx context.Context, err error, stepID int, stepDesc 
 }
 
 // stageError generates a detailed error for stage failures.
-func (r *Runner) stageError(ctx context.Context, err error, stageName string, l *logger.Logger) error {
+func (r *StaticPlanRunner) stageError(ctx context.Context, err error, stageName string, l *logger.Logger) error {
 	stageErr := fmt.Errorf("modular test failure while running stage %s: %w", stageName, err)
 
 	// Log the error for convenience
@@ -299,7 +299,7 @@ func (r *Runner) stageError(ctx context.Context, err error, stageName string, l 
 
 // restoreClusterState attempts to restore the cluster to its original state by
 // reversing all tracked changes. This should be called on test failure.
-func (r *Runner) restoreClusterState(ctx context.Context, l *logger.Logger) error {
+func (r *StaticPlanRunner) restoreClusterState(ctx context.Context, l *logger.Logger) error {
 	l.Printf("Starting cluster state restoration...")
 
 	// Get all tracked state from the state tracker
@@ -366,7 +366,7 @@ func (r *Runner) restoreClusterState(ctx context.Context, l *logger.Logger) erro
 }
 
 // restoreClusterSetting restores a cluster setting to its original value.
-func (r *Runner) restoreClusterSetting(ctx context.Context, l *logger.Logger, setting, originalValue string) error {
+func (r *StaticPlanRunner) restoreClusterSetting(ctx context.Context, l *logger.Logger, setting, originalValue string) error {
 	l.Printf("Restoring cluster setting %s to original value: %s", setting, originalValue)
 	// Use parameterized query for the value but format the setting name
 	query := fmt.Sprintf("SET CLUSTER SETTING %s = $1", setting)
@@ -374,44 +374,44 @@ func (r *Runner) restoreClusterSetting(ctx context.Context, l *logger.Logger, se
 }
 
 // restoreZoneConfig restores a zone configuration to its original value.
-func (r *Runner) restoreZoneConfig(ctx context.Context, l *logger.Logger, rangeName, originalConfig string) error {
+func (r *StaticPlanRunner) restoreZoneConfig(ctx context.Context, l *logger.Logger, rangeName, originalConfig string) error {
 	l.Printf("Restoring zone config for %s to original value", rangeName)
 
 	return r.helper.Exec(originalConfig)
 }
 
 // dropTable drops a table that was created during the test.
-func (r *Runner) dropTable(ctx context.Context, l *logger.Logger, table string) error {
+func (r *StaticPlanRunner) dropTable(ctx context.Context, l *logger.Logger, table string) error {
 	l.Printf("Dropping table %s", table)
 	return r.helper.Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s", table))
 }
 
 // dropSchema drops a schema that was created during the test.
-func (r *Runner) dropSchema(ctx context.Context, l *logger.Logger, schema string) error {
+func (r *StaticPlanRunner) dropSchema(ctx context.Context, l *logger.Logger, schema string) error {
 	l.Printf("Dropping schema %s", schema)
 	return r.helper.Exec(fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", schema))
 }
 
 // dropUser drops a user that was created during the test.
-func (r *Runner) dropUser(ctx context.Context, l *logger.Logger, user string) error {
+func (r *StaticPlanRunner) dropUser(ctx context.Context, l *logger.Logger, user string) error {
 	l.Printf("Dropping user %s", user)
 	return r.helper.Exec(fmt.Sprintf("DROP USER IF EXISTS %s", user))
 }
 
 // dropDatabase drops a database that was created during the test.
-func (r *Runner) dropDatabase(ctx context.Context, l *logger.Logger, db string) error {
+func (r *StaticPlanRunner) dropDatabase(ctx context.Context, l *logger.Logger, db string) error {
 	l.Printf("Dropping database %s", db)
 	return r.helper.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s CASCADE", db))
 }
 
 // recoverFromFailure attempts to recover from an injected failure.
-func (r *Runner) recoverFromFailure(ctx context.Context, l *logger.Logger, failureID string, failer *failures.Failer) error {
+func (r *StaticPlanRunner) recoverFromFailure(ctx context.Context, l *logger.Logger, failureID string, failer *failures.Failer) error {
 	l.Printf("Recovering from failure %s: %s", failureID, failer.Description())
 	return failer.Recover(ctx, l)
 }
 
 // renameFailedLogger renames the log file to include "FAILED" prefix.
-func (r *Runner) renameFailedLogger(l *logger.Logger) error {
+func (r *StaticPlanRunner) renameFailedLogger(l *logger.Logger) error {
 	if l.File == nil {
 		return nil
 	}
@@ -426,18 +426,19 @@ func (r *Runner) renameFailedLogger(l *logger.Logger) error {
 
 // acquireStepLocks acquires all locks declared by a step.
 // Returns unlock functions that should be called when the step completes.
-func (r *Runner) acquireStepLocks(step testStep, l *logger.Logger) ([]func(), error) {
+func (r *StaticPlanRunner) acquireStepLocks(step testStep, l *logger.Logger) ([]func(), error) {
 	var unlocks []func()
 
-	// Get resources from the step if it's a SingleStep
-	singleStep, ok := step.StepProtocol.(*SingleStep)
+	// Check if the step implements ResourceAware interface
+	resourceAware, ok := step.StepProtocol.(ResourceAware)
 	if !ok {
 		// concurrentStep or other types don't have direct resource declarations
 		return unlocks, nil
 	}
 
 	// Acquire all declared accesses
-	for _, access := range singleStep.resources.accesses {
+	accesses := resourceAware.GetResourceAccesses()
+	for _, access := range accesses {
 		l.Printf("Acquiring lock: %s", access.String())
 		unlock, ok := r.lockManager.Acquire(access)
 		if !ok {
@@ -454,19 +455,19 @@ func (r *Runner) acquireStepLocks(step testStep, l *logger.Logger) ([]func(), er
 }
 
 // releaseStepLocks releases locks acquired by a step and processes any release declarations.
-func (r *Runner) releaseStepLocks(step testStep, unlocks []func(), l *logger.Logger) {
+func (r *StaticPlanRunner) releaseStepLocks(step testStep, unlocks []func(), l *logger.Logger) {
 	// Release locks that were acquired at step start
 	for _, unlock := range unlocks {
 		unlock()
 	}
 
 	// Process explicit release declarations
-	singleStep, ok := step.StepProtocol.(*SingleStep)
+	resourceAware, ok := step.StepProtocol.(ResourceAware)
 	if !ok {
 		return
 	}
 
-	for _, release := range singleStep.resources.releases {
+	for _, release := range resourceAware.GetResourceReleases() {
 		l.Printf("Processed release: %s", release.String())
 		// The release should already be handled by the unlock functions above,
 		// but this logs the explicit releases for debugging

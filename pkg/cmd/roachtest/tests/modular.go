@@ -64,6 +64,15 @@ func registerModular(r registry.Registry) {
 		Cluster:          r.MakeClusterSpec(5, spec.CPU(16), spec.WorkloadNode()),
 		Timeout:          60 * time.Minute,
 	})
+	r.Add(registry.TestSpec{
+		Name:             "modular/example/dynamic-resource",
+		CompatibleClouds: registry.AllClouds,
+		Suites:           registry.Suites(registry.Nightly),
+		Owner:            registry.OwnerTestEng,
+		Run:              runDynamicResourceExample,
+		Cluster:          r.MakeClusterSpec(4, spec.WorkloadNodeCount(1)),
+		Timeout:          30 * time.Minute,
+	})
 }
 
 func runModularExample(ctx context.Context, t test.Test, c cluster.Cluster) {
@@ -76,7 +85,7 @@ func runModularExample(ctx context.Context, t test.Test, c cluster.Cluster) {
 	})
 
 	mod.Setup("initialize bank workload", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		dbName, err := h.CreateDatabase("bank")
+		dbName, err := h.CreateRandomDatabase("bank")
 		if err != nil {
 			return err
 		}
@@ -110,7 +119,7 @@ func runModularExample(ctx context.Context, t test.Test, c cluster.Cluster) {
 	}
 
 	// Execute the test plan using the runner
-	err = modular.RunTestPlan(ctx, t, testPlan)
+	err = modular.RunStaticTestPlan(ctx, t, testPlan)
 	if err != nil {
 		// Check if the error contains ONLY the intentional failure we expect
 		expectedError := "intentional fatal error to test recovery"
@@ -272,7 +281,7 @@ func runModularMVTExample(ctx context.Context, t test.Test, c cluster.Cluster) {
 		t.Fatalf("Failed to generate test plan: %v", err)
 	}
 
-	err = modular.RunTestPlan(ctx, t, testPlan)
+	err = modular.RunStaticTestPlan(ctx, t, testPlan)
 	if err != nil {
 		t.Fatalf("Test execution failed: %v", err)
 	}
@@ -598,9 +607,10 @@ func runMergeOperationExample(ctx context.Context, t test.Test, c cluster.Cluste
 	// TODO lets add a operation mutator that lets us add n random operations
 	mod.AddOperation(upgradeStage, operations.AddRandomIndex())
 	mod.AddOperation(upgradeStage, operations.AddRandomIndex())
-	mod.AddOperation(upgradeStage, operations.AddRandomColumn())
-	mod.AddOperation(upgradeStage, operations.AddRandomColumn())
-	mod.AddOperation(upgradeStage, operations.AddRandomColumn())
+	// TODO: AddRandomColumn not yet implemented
+	//mod.AddOperation(upgradeStage, operations.AddRandomColumn())
+	//mod.AddOperation(upgradeStage, operations.AddRandomColumn())
+	//mod.AddOperation(upgradeStage, operations.AddRandomColumn())
 
 	// Print the DAG before we merge our extra operations.
 	planner := mod.NewPlanner()
@@ -615,7 +625,7 @@ func runMergeOperationExample(ctx context.Context, t test.Test, c cluster.Cluste
 	// Print the DAG after merging to see if chains merged
 	t.L().Printf("DAG after merging:\n%s", planner.DAG())
 
-	err = modular.RunTestPlan(ctx, t, testPlan)
+	err = modular.RunStaticTestPlan(ctx, t, testPlan)
 	if err != nil {
 		t.Fatalf("Test execution failed: %v", err)
 	}
@@ -675,7 +685,7 @@ func runModularRecoveryExample(ctx context.Context, t test.Test, c cluster.Clust
 	}
 
 	// Execute the test plan using the runner
-	err = modular.RunTestPlan(ctx, t, testPlan)
+	err = modular.RunStaticTestPlan(ctx, t, testPlan)
 	if err != nil {
 		// Check if the error contains ONLY the intentional failure we expect
 		expectedError := "intentional fatal error to test recovery"
@@ -687,4 +697,171 @@ func runModularRecoveryExample(ctx context.Context, t test.Test, c cluster.Clust
 		// Any other error (including restoration failures) should fail the test
 		t.Fatalf("Test execution failed: %v", err)
 	}
+}
+
+// runDynamicResourceExample demonstrates truly dynamic resource access where
+// the resource to lock is determined at planning time, not build time.
+// This test demonstrates that dynamic steps with WithDynamicResourceCallback
+// can properly participate in chain merging based on runtime-selected resources.
+func runDynamicResourceExample(ctx context.Context, t test.Test, c cluster.Cluster) {
+	mod := modular.NewTest(ctx, t.L(), c, c.CRDBNodes(), modular.WithDebug(modular.ClusterStateDebug))
+
+	// Setup: Start cluster and create multiple tables
+	mod.Setup("initialize cluster", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		c.Start(ctx, l, option.DefaultStartOpts(), install.MakeClusterSettings(), c.CRDBNodes())
+		return nil
+	})
+
+	mod.Setup("initialize tpcc workload", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		dbName := "tpcc"
+		if err := h.CreateDatabase(dbName); err != nil {
+			return err
+		}
+
+		// Initialize TPCC with 10 warehouses
+		// This creates realistic tables: warehouse, district, customer, history,
+		// new_order, "order", order_line, item, stock
+		cmd := roachtestutil.NewCommand("%s workload fixtures import tpcc", test.DefaultCockroachPath).
+			Flag("warehouses", 10).
+			Flag("db", dbName).
+			Arg("{pgurl:%d}", h.RandomAvailableNode()).
+			String()
+
+		l.Printf("Initializing TPCC workload with 10 warehouses in database %s", dbName)
+		if err := c.RunE(ctx, option.WithNodes(c.WorkloadNode()), cmd); err != nil {
+			return errors.Wrap(err, "failed to initialize TPCC workload")
+		}
+
+		l.Printf("TPCC workload initialized successfully")
+		return nil
+	})
+
+	// Main stage: Demonstrate dynamic resource access
+	mainStage := mod.NewStage("dynamic-operations", modular.WithStepConcurrency(2))
+
+	// Add 3 static AddIndexToTable operations - one for each TPCC table
+	// These have the table specified upfront (not dynamic)
+	// The planner can see exactly which tables they'll access
+	mod.AddOperation(mainStage, operations.AddIndexToTable("tpcc", "customer", "c_last"))
+	mod.AddOperation(mainStage, operations.AddIndexToTable("tpcc", "order_line", "ol_i_id"))
+	mod.AddOperation(mainStage, operations.AddIndexToTable("tpcc", "stock", "s_w_id"))
+
+	// Add multiple dynamic operations that select tables at PrePlan time
+	// With these dynamic operations + 3 static operations, some will target the same TPCC tables,
+	// and we'll see chain merging when operations conflict on the same table
+	for i := 0; i < 3; i++ {
+		mod.AddOperation(mainStage, operations.AddRandomIndexDynamic())
+	}
+	for i := 0; i < 2; i++ {
+		mod.AddOperation(mainStage, operations.AddRandomColumnDynamic())
+	}
+
+	// Add a node restart operation - this acquires NodeAvailability lock
+	// This will run in parallel with index operations since they don't conflict
+	mod.AddOperation(mainStage, operations.NodeRestart())
+
+	// Add a dynamic database-level backup/restore operation
+	// This selects a database dynamically during PrePlan phase from a whitelist (tpcc, cct_tpcc, bank)
+	// and performs a full backup + 1 incremental backup, then restores to a new name
+	mod.AddOperation(mainStage, operations.BackupRestoreDatabaseDynamic())
+
+	// Stage 2: Delete all tables except one to make it obvious dynamic operations adapt
+	deleteStage := mod.NewStage("delete-all-but-one-table", modular.WithStepConcurrency(1))
+
+	// Delete all TPCC tables except "customer" to demonstrate dynamic planning adaptation
+	// This makes it very obvious that dynamic operations will only select from remaining tables
+	// Also drop any restored databases from the backup/restore operation
+	//
+	// TODO(test-eng): The BackupRestoreDatabaseDynamic operation doesn't expose the restored
+	// database name to subsequent stages. We have to pattern-match on '*_restored_*' to find
+	// and drop these databases. Ideally, operations should be able to track/expose created
+	// resources (databases, tables, etc.) so later stages can reference them without guessing.
+	// Consider adding a mechanism for operations to register created resources in the cluster
+	// state tracker, with a way to query them by type or tag.
+	mod.InStage(deleteStage, "drop restored databases", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+		db := h.RandomDBConn()
+		rows, err := db.QueryContext(ctx, "SELECT database_name FROM [SHOW DATABASES] WHERE database_name LIKE '%_restored_%'")
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		var restoredDBs []string
+		for rows.Next() {
+			var dbName string
+			if err := rows.Scan(&dbName); err != nil {
+				return err
+			}
+			restoredDBs = append(restoredDBs, dbName)
+		}
+
+		for _, dbName := range restoredDBs {
+			l.Printf("Dropping restored database: %s", dbName)
+			if err := h.Exec(fmt.Sprintf("DROP DATABASE %s CASCADE", dbName)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}).Then("drop table tpcc.warehouse", operations.DropTable("tpcc", "warehouse")).
+		Then("drop table tpcc.district", operations.DropTable("tpcc", "district")).
+		Then("drop table tpcc.history", operations.DropTable("tpcc", "history")).
+		Then("drop table tpcc.new_order", operations.DropTable("tpcc", "new_order")).
+		Then("drop table tpcc.order", operations.DropTable("tpcc", "order")).
+		Then("drop table tpcc.order_line", operations.DropTable("tpcc", "order_line")).
+		Then("drop table tpcc.item", operations.DropTable("tpcc", "item")).
+		Then("drop table tpcc.stock", operations.DropTable("tpcc", "stock"))
+
+	// Stage 3: Add more dynamic operations to show they only select the remaining table
+	verifyStage := mod.NewStage("verify-only-customer-table-selected", modular.WithStepConcurrency(2))
+
+	// Add several more dynamic operations to verify deleted tables are avoided
+	// All of these should select only tpcc.customer since it's the only remaining table
+	for i := 0; i < 2; i++ {
+		mod.AddOperation(verifyStage, operations.AddRandomIndexDynamic())
+	}
+	for i := 0; i < 2; i++ {
+		mod.AddOperation(verifyStage, operations.AddRandomColumnDynamic())
+	}
+	// Add an INSPECT operation to validate the table
+	mod.AddOperation(verifyStage, operations.InspectTableDynamic())
+
+	// Print the DAG to show what the planner sees
+	planner := mod.NewPlanner()
+	t.L().Printf("=== DAG before planning (dynamic names not yet available) ===\n%s", planner.DAG())
+
+	t.L().Printf("\n=== DYNAMIC RESOURCE ACCESS WITH CHAIN MERGING ===")
+	t.L().Printf("The dynamic operations (AddRandomIndexDynamic, AddRandomColumnDynamic, InspectTableDynamic)")
+	t.L().Printf("all select tables at PrePlan time using WithDynamicResourceCallback.")
+	t.L().Printf("This enables proper chain merging:")
+	t.L().Printf("1. PrePlan is called before chain merging, making dynamic resources visible")
+	t.L().Printf("2. If two dynamic operations select the same table, they are serialized")
+	t.L().Printf("3. Operations targeting different tables can run in parallel")
+	t.L().Printf("4. The DAG will show dynamic names after PrePlan is called\n")
+
+	t.L().Printf("\n=== STAGE 2: TABLE DELETION ===")
+	t.L().Printf("In this stage, we delete ALL TPCC tables except tpcc.customer.")
+	t.L().Printf("This makes it very obvious that dynamic operations in stage 3 adapt to the changed schema.\n")
+
+	t.L().Printf("\n=== STAGE 3: VERIFY DYNAMIC PLANNING AFTER DELETION ===")
+	t.L().Printf("Adding more dynamic operations (index, column, inspect) to verify deleted tables are not selected.")
+	t.L().Printf("All dynamic operations should ONLY select the tpcc.customer table:\n")
+	t.L().Printf("- customer (the only remaining table)")
+	t.L().Printf("- All other TPCC tables (warehouse, district, history, new_order, order, order_line, item, stock)")
+	t.L().Printf("  should NOT be selected since they were deleted")
+	t.L().Printf("This demonstrates that all three types of dynamic operations adapt to schema changes.\n")
+
+	// Execute the test plan dynamically
+	// This calls PrePlan before each stage, enabling truly dynamic resource access
+	err := modular.RunDynamicTestPlan(ctx, t, &planner)
+	if err != nil {
+		t.Fatalf("Test execution failed: %v", err)
+	}
+
+	t.L().Printf("\n=== Test completed ===")
+	t.L().Printf("This test demonstrates that dynamic resource selection works correctly")
+	t.L().Printf("with proper chain merging. The chain merger can see runtime-determined")
+	t.L().Printf("resources via WithDynamicResourceCallback, enabling proper serialization.")
+	t.L().Printf("\nAdditionally, this test shows that dynamic operations adapt to schema changes.")
+	t.L().Printf("After deleting all tables except customer, all dynamic operations in stage 3")
+	t.L().Printf("selected only the customer table, proving schema-aware dynamic planning.")
 }

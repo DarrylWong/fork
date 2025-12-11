@@ -60,43 +60,48 @@ func TPCC(c cluster.Cluster, warehouses int, duration time.Duration, opts TPCCEx
 		binaryPath = opts.binaryPath
 	}
 
-	builder := modular.NewOperation("init tpcc workload", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		var err error
-		if dbName == "" {
-			dbName, err = h.CreateDatabase("tpcc")
-		}
+	builder := modular.NewOperation(
+		modular.NewStep("init tpcc workload", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+			var err error
+			if dbName == "" {
+				dbName, err = h.CreateRandomDatabase("tpcc")
+				if err != nil {
+					return err
+				}
+			}
+			cmd := roachtestutil.NewCommand("%s workload fixtures import tpcc", binaryPath).
+				Flag("warehouses", warehouses).
+				Flag("db", dbName).
+				Arg("%s", opts.extraInitArgs).
+				Arg("{pgurl:%d}", h.RandomAvailableNode()).
+				String()
 
-		if err != nil {
-			return err
-		}
-		cmd := roachtestutil.NewCommand("%s workload fixtures import tpcc", binaryPath).
-			Flag("warehouses", warehouses).
-			Flag("db", dbName).
-			Arg("%s", opts.extraInitArgs).
-			Arg("{pgurl:%d}", h.RandomAvailableNode()).
-			String()
+			return c.RunE(ctx, option.WithNodes(c.WorkloadNode()), cmd)
+		}),
+	).Then(
+		modular.NewStep("run tpcc workload", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+			cmd := roachtestutil.NewCommand("%s workload run tpcc", binaryPath).
+				Flag("warehouses", warehouses).
+				Flag("db", dbName).
+				MaybeFlag(opts.rampDuration > 0, "ramp", opts.rampDuration).
+				Flag("duration", duration).
+				Arg("%s", opts.extraRunArgs).
+				Arg("{pgurl%s}", h.AvailableNodes()).
+				String()
 
-		return c.RunE(ctx, option.WithNodes(c.WorkloadNode()), cmd)
-	}).Then("run tpcc workload", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		cmd := roachtestutil.NewCommand("%s workload run tpcc", binaryPath).
-			Flag("warehouses", warehouses).
-			Flag("db", dbName).
-			MaybeFlag(opts.rampDuration > 0, "ramp", opts.rampDuration).
-			Flag("duration", duration).
-			Arg("%s", opts.extraRunArgs).
-			Arg("{pgurl%s}", h.AvailableNodes()).
-			String()
+			return c.RunE(ctx, option.WithNodes(c.WorkloadNode()), cmd)
+		}),
+	).MaybeThen(!opts.skipConsistencyCheck,
+		modular.NewStep("check tpcc workload", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+			cmd := roachtestutil.NewCommand("%s workload check tpcc", binaryPath).
+				Flag("warehouses", warehouses).
+				Flag("db", dbName).
+				Arg("{pgurl:%d}", h.RandomAvailableNode()).
+				String()
 
-		return c.RunE(ctx, option.WithNodes(c.WorkloadNode()), cmd)
-	}).MaybeThen(!opts.skipConsistencyCheck, "check tpcc workload", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		cmd := roachtestutil.NewCommand("%s workload check tpcc", binaryPath).
-			Flag("warehouses", warehouses).
-			Flag("db", dbName).
-			Arg("{pgurl:%d}", h.RandomAvailableNode()).
-			String()
-
-		return c.RunE(ctx, option.WithNodes(c.WorkloadNode()), cmd)
-	})
+			return c.RunE(ctx, option.WithNodes(c.WorkloadNode()), cmd)
+		}),
+	)
 
 	return &TPCCOp{
 		name:       fmt.Sprintf("tpcc/warehouses=%d/duration=%d", warehouses, duration),

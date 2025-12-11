@@ -34,23 +34,35 @@ func (r *ReplicationFactorCycleOp) Timeout() time.Duration {
 // ReplicationFactorCycle creates an operation that increases replication factor to 5,
 // waits for replication to complete, then reduces it back to 3.
 func ReplicationFactorCycle() modular.Operation {
-	builder := modular.NewOperation("increase rebalance snapshot rate", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		return h.SetClusterSetting("kv.snapshot_rebalance.max_rate", "2 GiB")
-	}).Then("increase replication factor to 5", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		return h.AlterAllRanges("num_replicas = 5")
-	}).Then("wait for replication factor of 5", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		_, db := h.RandomDB()
-		defer db.Close()
-		return roachtestutil.WaitForReplication(ctx, l, db, 5, roachprod.AtLeastReplicationFactor)
-	}).Then("decrease replication factor to 3", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		return h.AlterAllRanges("num_replicas = 3")
-	}).Then("wait for replication factor of 3", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		_, db := h.RandomDB()
-		defer db.Close()
-		return roachtestutil.WaitForReplication(ctx, l, db, 3, roachprod.AtLeastReplicationFactor)
-	}).Then("restore rebalance snapshot rate", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		return h.ResetClusterSetting("kv.snapshot_rebalance.max_rate")
-	})
+	builder := modular.NewOperation(
+		modular.NewStep("increase rebalance snapshot rate", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+			return h.SetClusterSetting("kv.snapshot_rebalance.max_rate", "2 GiB")
+		}),
+	).Then(
+		modular.NewStep("increase replication factor to 5", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+			return h.AlterAllRanges("num_replicas = 5")
+		}),
+	).Then(
+		modular.NewStep("wait for replication factor of 5", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+			_, db := h.RandomDB()
+			defer db.Close()
+			return roachtestutil.WaitForReplication(ctx, l, db, 5, roachprod.AtLeastReplicationFactor)
+		}),
+	).Then(
+		modular.NewStep("decrease replication factor to 3", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+			return h.AlterAllRanges("num_replicas = 3")
+		}),
+	).Then(
+		modular.NewStep("wait for replication factor of 3", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+			_, db := h.RandomDB()
+			defer db.Close()
+			return roachtestutil.WaitForReplication(ctx, l, db, 3, roachprod.AtLeastReplicationFactor)
+		}),
+	).Then(
+		modular.NewStep("restore rebalance snapshot rate", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+			return h.ResetClusterSetting("kv.snapshot_rebalance.max_rate")
+		}),
+	)
 
 	return &ReplicationFactorCycleOp{
 		name:    "replication-factor-cycle",

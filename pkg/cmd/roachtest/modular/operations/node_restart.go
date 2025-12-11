@@ -7,6 +7,7 @@ package operations
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/modular"
@@ -33,39 +34,45 @@ func (n *NodeRestartOp) Timeout() time.Duration {
 	return 10 * time.Minute
 }
 
+// NodeRestartPlan contains the selected node for the restart operation.
+type NodeRestartPlan struct {
+	NodeID int
+}
+
 // NodeRestart creates an operation that randomly selects a node, shuts it down,
-// and then restarts it. The first step acquires a lock on node availability,
-// and the second step releases the lock.
+// and then restarts it. Uses DynamicStep to select the node during PrePlan.
 func NodeRestart() modular.Operation {
-	// Variable to store the selected node across steps
-	var selectedNode int
+	builder := modular.NewDynamicOperation[*NodeRestartPlan]("restart random node").
+		PrePlan(func(ctx context.Context, l *logger.Logger, h *modular.Helper) (*NodeRestartPlan, error) {
+			nodeID := h.RandomAvailableNode()
+			l.Printf("Selected node %d for restart", nodeID)
+			return &NodeRestartPlan{NodeID: nodeID}, nil
+		}).
+		WithRun(func(ctx context.Context, l *logger.Logger, h *modular.Helper, plan *NodeRestartPlan) error {
+			l.Printf("Stopping node %d", plan.NodeID)
+			if err := h.StopNode(plan.NodeID); err != nil {
+				return err
+			}
 
-	nodeAvailability := modular.NodeAvailability{}
-
-	builder := modular.NewOperation("shut down random node",
-		func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-			// Pick a random available node
-			selectedNode = h.RandomAvailableNode()
-			l.Printf("Stopping node %d", selectedNode)
-
-			// Stop the selected node using the helper
-			return h.StopNode(selectedNode)
-		},
-		modular.AcquireLock(nodeAvailability),
-		modular.DisableConcurrency(),
-	).Then("restart node",
-		func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-			l.Printf("Restarting node %d", selectedNode)
-
-			// Restart the previously stopped node using the helper
-			return h.StartNode(selectedNode)
-		},
-		modular.ReleaseLock(nodeAvailability),
-		modular.DisableConcurrency(),
-	)
+			l.Printf("Restarting node %d", plan.NodeID)
+			return h.StartNode(plan.NodeID)
+		}).
+		WithDynamicResourceCallback(func(plan *NodeRestartPlan) ([]modular.ResourceAccess, []modular.ResourceAccess) {
+			access := modular.ResourceAccess{
+				Action: modular.ActionNodeAvailability,
+				Path: modular.NodeAvailabilityResource{
+					NodeID: plan.NodeID,
+				},
+				Lock: true,
+			}
+			return []modular.ResourceAccess{access}, []modular.ResourceAccess{access}
+		}).
+		WithDynamicName(func(plan *NodeRestartPlan) string {
+			return fmt.Sprintf("restart node %d", plan.NodeID)
+		})
 
 	return &NodeRestartOp{
-		name:    "node-restart",
-		builder: builder,
+		name:    "node-restart-dynamic",
+		builder: modular.NewOperation(builder),
 	}
 }

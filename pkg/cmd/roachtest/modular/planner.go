@@ -10,8 +10,14 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 )
+
+// Runner is an interface for executing test plans from the modular framework.
+type Runner interface {
+	Run(ctx context.Context, t test.Test) error
+}
 
 type TestPlanner struct {
 	seed   int64
@@ -39,6 +45,8 @@ func (p *TestPlanner) DAG() string {
 func (p *TestPlanner) Plan() (*TestPlan, error) {
 	// First, analyze all stages and merge chains with conflicting resource
 	// accesses.
+	// Note: PrePlan is NOT called here because it requires a running database.
+	// Instead, runners call PrePlan during execution when database is available.
 	mergedStages := make([]Stage, len(p.stages))
 	for i, stage := range p.stages {
 		mergedStage, err := p.maybeMergeChains(stage)
@@ -256,9 +264,10 @@ func (p *TestPlanner) maybeMergeChains(stage Stage) (Stage, error) {
 		var resources []ResourceAccess
 		for _, stepGroup := range ch {
 			for _, step := range stepGroup {
-				if singleStep, ok := step.StepProtocol.(*SingleStep); ok {
-					resources = append(resources, singleStep.resources.accesses...)
-					resources = append(resources, singleStep.resources.releases...)
+				// Try to get resources from any ResourceAware step (SingleStep or DynamicStep)
+				if resourceAware, ok := step.StepProtocol.(ResourceAware); ok {
+					resources = append(resources, resourceAware.GetResourceAccesses()...)
+					resources = append(resources, resourceAware.GetResourceReleases()...)
 				}
 			}
 		}
@@ -323,6 +332,7 @@ func (p *TestPlanner) mergeTwoChains(c1, c2 chain) (chain, error) {
 
 	p.logger.Printf("Merging two chains: c1 has %d stepGroups, c2 has %d stepGroups", len(c1), len(c2))
 
+	// TODO (darryl): we could record plans and early reject if taken already
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt%100 == 0 && attempt > 0 {
 			p.logger.Printf("  Merge attempt %d/%d", attempt, maxAttempts)

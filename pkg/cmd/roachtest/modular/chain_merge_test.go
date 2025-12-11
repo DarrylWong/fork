@@ -17,6 +17,33 @@ var noop = func(context.Context, *logger.Logger, *Helper) error {
 	return nil
 }
 
+// noopPrePlan is a no-op PrePlan function for dynamic steps in tests
+var noopPrePlan = func(context.Context, *logger.Logger, *Helper) (string, error) {
+	return "plan-result", nil
+}
+
+// noopRun is a no-op Run function for dynamic steps in tests
+var noopRun = func(ctx context.Context, l *logger.Logger, h *Helper, plan string) error {
+	return nil
+}
+
+// testOpBuilder wraps OperationBuilder to provide the old API for backward compatibility in tests.
+type testOpBuilder struct {
+	*OperationBuilder
+}
+
+// testNewOperation is a test helper that creates an operation using the old API signature.
+// This is a temporary bridge to avoid updating all test cases.
+func testNewOperation(name string, fn stepFunc, opts ...StepOption) *testOpBuilder {
+	return &testOpBuilder{NewOperation(NewStep(name, fn, opts...))}
+}
+
+// Then adds a step using the old API signature.
+func (tob *testOpBuilder) Then(name string, fn stepFunc, opts ...StepOption) *testOpBuilder {
+	tob.OperationBuilder = tob.OperationBuilder.Then(NewStep(name, fn, opts...))
+	return tob
+}
+
 func TestChainMerging(t *testing.T) {
 	testCases := []struct {
 		name   string
@@ -25,7 +52,7 @@ func TestChainMerging(t *testing.T) {
 		{
 			name: "two_conflicting_chains",
 			chains: []chain{
-				NewOperation("chain 1: noop before", noop).
+				testNewOperation("chain 1: noop before", noop).
 					Then("chain 1: modify storage.sstable.compression_algorithm", noop,
 						AcquireLock(ClusterSettingAccess{
 							Name: "storage.sstable.compression_algorithm",
@@ -38,7 +65,7 @@ func TestChainMerging(t *testing.T) {
 					Then("chain 1: noop after", noop).
 					Chain,
 
-				NewOperation("chain 2: noop before", noop).
+				testNewOperation("chain 2: noop before", noop).
 					Then("chain 2: acquire cluster_setting", noop,
 						AcquireLock(ClusterSettingAccess{
 							Name: "storage.sstable.compression_algorithm",
@@ -55,7 +82,7 @@ func TestChainMerging(t *testing.T) {
 		{
 			name: "transitive_conflict",
 			chains: []chain{
-				NewOperation("chain 1: noop before", noop).
+				testNewOperation("chain 1: noop before", noop).
 					Then("chain 1: acquire cluster_setting", noop,
 						AcquireLock(ClusterSettingAccess{
 							Name: "kv.bulk_io_write.concurrent_export_requests",
@@ -67,7 +94,7 @@ func TestChainMerging(t *testing.T) {
 						})).
 					Then("chain 1: noop after", noop).
 					Chain,
-				NewOperation("chain 2: noop before", noop).
+				testNewOperation("chain 2: noop before", noop).
 					Then("chain 2: acquire schema", noop,
 						AcquireLock(SchemaChangeAccess{
 							Database: "public",
@@ -81,7 +108,7 @@ func TestChainMerging(t *testing.T) {
 						})).
 					Then("chain 2: noop after", noop).
 					Chain,
-				NewOperation("chain 3: noop before", noop).
+				testNewOperation("chain 3: noop before", noop).
 					Then("chain 3: acquire cluster_setting, schema", noop,
 						AcquireLock(ClusterSettingAccess{
 							Name: "kv.bulk_io_write.concurrent_export_requests",
@@ -106,7 +133,7 @@ func TestChainMerging(t *testing.T) {
 		{
 			name: "no_conflict",
 			chains: []chain{
-				NewOperation("chain 1: noop before", noop).
+				testNewOperation("chain 1: noop before", noop).
 					Then("chain 1: acquire cluster_setting", noop,
 						AcquireLock(ClusterSettingAccess{
 							Name: "kv.bulk_io_write.concurrent_export_requests",
@@ -118,7 +145,7 @@ func TestChainMerging(t *testing.T) {
 						})).
 					Then("chain 1: noop after", noop).
 					Chain,
-				NewOperation("chain 2: noop before", noop).
+				testNewOperation("chain 2: noop before", noop).
 					Then("chain 2: acquire schema", noop,
 						AcquireLock(SchemaChangeAccess{
 							Database: "public",
@@ -137,7 +164,7 @@ func TestChainMerging(t *testing.T) {
 		{
 			name: "partial_conflict",
 			chains: []chain{
-				NewOperation("chain 1: noop before", noop).
+				testNewOperation("chain 1: noop before", noop).
 					Then("chain 1: acquire cluster_setting", noop,
 						AcquireLock(ClusterSettingAccess{
 							Name: "kv.bulk_io_write.concurrent_export_requests",
@@ -149,7 +176,7 @@ func TestChainMerging(t *testing.T) {
 						})).
 					Then("chain 1: noop after", noop).
 					Chain,
-				NewOperation("chain 2: noop before", noop).
+				testNewOperation("chain 2: noop before", noop).
 					Then("chain 2: acquire schema", noop,
 						AcquireLock(SchemaChangeAccess{
 							Database: "public",
@@ -163,7 +190,7 @@ func TestChainMerging(t *testing.T) {
 						})).
 					Then("chain 2: noop after", noop).
 					Chain,
-				NewOperation("chain 3: noop before", noop).
+				testNewOperation("chain 3: noop before", noop).
 					Then("chain 3: acquire cluster_setting", noop,
 						AcquireLock(ClusterSettingAccess{
 							Name: "kv.bulk_io_write.concurrent_export_requests",
@@ -175,7 +202,7 @@ func TestChainMerging(t *testing.T) {
 						})).
 					Then("chain 3: noop after", noop).
 					Chain,
-				NewOperation("chain 4: noop 1", noop).
+				testNewOperation("chain 4: noop 1", noop).
 					Then("chain 4: noop 2", noop).
 					Then("chain 4: noop 3", noop).
 					Chain,
@@ -184,7 +211,7 @@ func TestChainMerging(t *testing.T) {
 		{
 			name: "merge_interleaved",
 			chains: []chain{
-				NewOperation("chain 1: noop before", noop).
+				testNewOperation("chain 1: noop before", noop).
 					Then("chain 1: acquire cluster_setting", noop,
 						AcquireLock(ClusterSettingAccess{
 							Name: "kv.bulk_io_write.concurrent_export_requests",
@@ -196,7 +223,7 @@ func TestChainMerging(t *testing.T) {
 						})).
 					Then("chain 1: noop after", noop).
 					Chain,
-				NewOperation("chain 2: noop before", noop).
+				testNewOperation("chain 2: noop before", noop).
 					Then("chain 2: acquire cluster_setting", noop,
 						AcquireLock(ClusterSettingAccess{
 							Name: "kv.bulk_io_write.concurrent_export_requests",
@@ -216,7 +243,7 @@ func TestChainMerging(t *testing.T) {
 			// a table lock and a database lock.
 			name: "hierarchical_conflict",
 			chains: []chain{
-				NewOperation("chain 1: backup table A", noop).
+				testNewOperation("chain 1: backup table A", noop).
 					Then("chain 1: restore table A", noop,
 						AcquireAndReleaseLock(RestoreAccess{
 							Database: "default_db",
@@ -224,7 +251,7 @@ func TestChainMerging(t *testing.T) {
 						})).
 					Then("chain 1: noop after", noop).
 					Chain,
-				NewOperation("chain 2: backup default_db", noop).
+				testNewOperation("chain 2: backup default_db", noop).
 					Then("chain 2: restore default_db", noop,
 						AcquireAndReleaseLock(RestoreAccess{
 							Database: "default_db",
@@ -237,20 +264,20 @@ func TestChainMerging(t *testing.T) {
 			// Test that we can lock an entire table.
 			name: "lock_entire_table",
 			chains: []chain{
-				NewOperation("chain 1: backup db1", noop).
+				testNewOperation("chain 1: backup db1", noop).
 					Then("chain 1: restore db1", noop,
 						AcquireAndReleaseLock(RestoreAccess{
 							Database: "db1",
 						})).
 					Chain,
-				NewOperation("chain 2: backup db2.table1", noop).
+				testNewOperation("chain 2: backup db2.table1", noop).
 					Then("chain 2: restore db2.table1", noop,
 						AcquireAndReleaseLock(RestoreAccess{
 							Database: "db2",
 							Table:    "table1",
 						})).
 					Chain,
-				NewOperation("chain 3: drop db1", noop,
+				testNewOperation("chain 3: drop db1", noop,
 					AcquireLock(DatabaseAccess{
 						Database: "db1",
 					})).
@@ -265,10 +292,10 @@ func TestChainMerging(t *testing.T) {
 			// Test that two accesses to the same resource don't conflict.
 			name: "two_database_access",
 			chains: []chain{
-				NewOperation("chain 1: run TPCC workload", noop,
+				testNewOperation("chain 1: run TPCC workload", noop,
 					AcquireAndReleaseAccess(DatabaseAccess{Database: "TPCC"}),
 				).Chain,
-				NewOperation("chain 2: backup TPCC database", noop,
+				testNewOperation("chain 2: backup TPCC database", noop,
 					AcquireAndReleaseAccess(DatabaseAccess{Database: "TPCC"}),
 				).Chain,
 			},
@@ -277,10 +304,10 @@ func TestChainMerging(t *testing.T) {
 			// Test that access conflicts with a lock on the same resource.
 			name: "database_access_and_lock",
 			chains: []chain{
-				NewOperation("chain 1: run TPCC workload", noop,
+				testNewOperation("chain 1: run TPCC workload", noop,
 					AcquireAndReleaseAccess(DatabaseAccess{Database: "TPCC"}),
 				).Chain,
-				NewOperation("chain 2: DROP TPCC database", noop,
+				testNewOperation("chain 2: DROP TPCC database", noop,
 					AcquireAndReleaseLock(DatabaseAccess{Database: "TPCC"}),
 				).Chain,
 			},

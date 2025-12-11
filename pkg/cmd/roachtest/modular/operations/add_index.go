@@ -38,7 +38,8 @@ func (a *AddRandomIndexOp) Timeout() time.Duration {
 // It picks a random database, random table with multiple columns, and creates
 // various types of indexes (standard, inverted, hash, partial).
 func AddRandomIndex() modular.Operation {
-	builder := modular.NewOperation("add random index", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
+	builder := modular.NewOperation(
+		modular.NewStep("add random index", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
 		rng, _ := randutil.NewPseudoRand()
 		unlock := func() {}
 		defer unlock()
@@ -118,7 +119,8 @@ func AddRandomIndex() modular.Operation {
 
 		l.Printf("Successfully created random index %s on %s.%s(%s)", indexName, dbName, tableName, colName)
 		return nil
-	})
+	}),
+	)
 
 	return &AddRandomIndexOp{
 		name:    "add-random-index",
