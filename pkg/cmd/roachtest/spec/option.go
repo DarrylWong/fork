@@ -218,6 +218,11 @@ func DisableLocalSSD() Option {
 // - IBM: 10iops-tier
 // Note: this option has no effect if VolumeType is explicitly set
 // or PreferLocalSSD/DisableLocalSSD is used.
+//
+// When using RandomizeVolumeType, disk counts are automatically synchronized:
+// if only SSD(n) is specified, VolumeCount will be set to n; if only
+// VolumeCount(n) is specified, SSDs will be set to n. This ensures consistent
+// disk counts regardless of which volume type is randomly selected.
 func RandomizeVolumeType() Option {
 	return func(spec *ClusterSpec) {
 		spec.RandomizeVolumeType = true

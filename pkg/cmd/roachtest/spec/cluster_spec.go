@@ -710,6 +710,22 @@ func (s *ClusterSpec) RoachprodOpts(
 		selectedVolumeType = "local-ssd"
 	}
 
+	// For metamorphic volume testing, sync disk counts to ensure consistency
+	// regardless of which volume type is randomly selected.
+	if s.RandomizeVolumeType {
+		if s.SSDs > 0 && s.VolumeCount <= 1 {
+			// Test specified SSD count but not volume count - sync them
+			s.VolumeCount = s.SSDs
+		} else if s.VolumeCount > 1 && s.SSDs == 0 {
+			// Test specified volume count but not SSD count - sync them
+			s.SSDs = s.VolumeCount
+		}
+		// If both are explicitly set to different values, respect both
+
+		// Update local variable to reflect any sync that occurred
+		ssdCount = s.SSDs
+	}
+
 	// Local SSD will be used if selected (either by preference or randomly), and
 	// - if no particular volume size is requested, and,
 	// - on AWS, if the machine type supports it.

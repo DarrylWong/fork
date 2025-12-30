@@ -65,3 +65,78 @@ func TestClustersRetainClearedInfo(t *testing.T) {
 		require.Equal(t, "gp3", s2.ExposedMetamorphicInfo["VolumeType"])
 	})
 }
+
+func TestRandomizeVolumeTypeSyncsDiskCounts(t *testing.T) {
+	params := RoachprodClusterConfig{
+		Cloud: GCE,
+	}
+
+	t.Run("SSD count syncs to VolumeCount when only SSD is set", func(t *testing.T) {
+		spec := ClusterSpec{
+			NodeCount:           3,
+			CPUs:                4,
+			SSDs:                4,
+			RandomizeVolumeType: true,
+			ExposedMetamorphicInfo: make(map[string]string),
+		}
+
+		_, _, _, _, err := spec.RoachprodOpts(params)
+		require.NoError(t, err)
+
+		// Both should be synced to 4
+		require.Equal(t, 4, spec.SSDs)
+		require.Equal(t, 4, spec.VolumeCount)
+	})
+
+	t.Run("VolumeCount syncs to SSD when only VolumeCount is set", func(t *testing.T) {
+		spec := ClusterSpec{
+			NodeCount:           3,
+			CPUs:                4,
+			VolumeCount:         4,
+			RandomizeVolumeType: true,
+			ExposedMetamorphicInfo: make(map[string]string),
+		}
+
+		_, _, _, _, err := spec.RoachprodOpts(params)
+		require.NoError(t, err)
+
+		// Both should be synced to 4
+		require.Equal(t, 4, spec.SSDs)
+		require.Equal(t, 4, spec.VolumeCount)
+	})
+
+	t.Run("Both values respected when both are explicitly set", func(t *testing.T) {
+		spec := ClusterSpec{
+			NodeCount:           3,
+			CPUs:                4,
+			SSDs:                2,
+			VolumeCount:         4,
+			RandomizeVolumeType: true,
+			ExposedMetamorphicInfo: make(map[string]string),
+		}
+
+		_, _, _, _, err := spec.RoachprodOpts(params)
+		require.NoError(t, err)
+
+		// Both should remain unchanged when explicitly set differently
+		require.Equal(t, 2, spec.SSDs)
+		require.Equal(t, 4, spec.VolumeCount)
+	})
+
+	t.Run("No sync when RandomizeVolumeType is not set", func(t *testing.T) {
+		spec := ClusterSpec{
+			NodeCount:              3,
+			CPUs:                   4,
+			SSDs:                   4,
+			RandomizeVolumeType:    false,
+			ExposedMetamorphicInfo: make(map[string]string),
+		}
+
+		_, _, _, _, err := spec.RoachprodOpts(params)
+		require.NoError(t, err)
+
+		// VolumeCount should remain at default (0) when RandomizeVolumeType is false
+		require.Equal(t, 4, spec.SSDs)
+		require.Equal(t, 0, spec.VolumeCount)
+	})
+}
