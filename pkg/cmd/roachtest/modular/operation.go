@@ -58,3 +58,8 @@ func (r *OperationRegistry) Get(name string) (Operation, bool) {
 func GetOperation(name string) (Operation, bool) {
 	return registeredOperations.Get(name)
 }
+
+// RegisterOperation registers an operation to the global registry.
+func RegisterOperation(op Operation) {
+	registeredOperations.Register(op)
+}

@@ -336,6 +336,11 @@ func (h *Helper) StartNode(node int) error {
 	return h.cluster.StartE(h.ctx, h.logger, option.DefaultStartOpts(), install.MakeClusterSettings(), h.cluster.Node(node))
 }
 
+// Cluster returns the underlying cluster object for advanced operations.
+func (h *Helper) Cluster() cluster.Cluster {
+	return h.cluster
+}
+
 // SearchTable finds a random database and table that satisfies the given predicate.
 // It exhaustively searches all database+table combinations, collects matches,
 // and returns a random one. This ensures we don't miss valid tables due to randomness.

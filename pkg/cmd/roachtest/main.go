@@ -230,10 +230,76 @@ Check --parallelism, --run-forever and --wait-before-next-execution flags`,
 	}
 	roachtestflags.AddRunOpsFlags(runOperationCmd.Flags())
 
+	var modularCmd = &cobra.Command{
+		SilenceUsage: true,
+		Use:          "modular [clusterName]",
+		Short:        "run modular scheduler on an existing cluster",
+		Long: `Run the modular scheduler on an existing roachprod cluster.
+
+The modular scheduler generates random test plans by combining base DAGs (directed acyclic graphs)
+with random operations, then executes them on the cluster. This enables continuous randomized testing
+on long-running clusters.
+
+The provided cluster name must already exist in roachprod; this command does no setup/teardown.
+
+Examples:
+  roachtest modular my-cluster --seed=12345
+  roachtest modular my-cluster --base-dags=upgrade,restore --operations-per-stage=3-7
+  roachtest modular my-cluster --exclude-operations=".*tpcc.*,.*import.*"
+`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runModularScheduler(cmd, args[0])
+		},
+	}
+
+	var modularDemoCmd = &cobra.Command{
+		SilenceUsage: true,
+		Use:          "modular-demo",
+		Short:        "run modular scheduler demo on a temporary local cluster",
+		Long: `Create a temporary local cluster, run 3 iterations of the modular scheduler, and destroy the cluster.
+
+The modular scheduler generates random test plans by combining base DAGs (directed acyclic graphs)
+with random operations, then executes them on the cluster. This demo mode is useful for testing
+and demonstrating the scheduler's capabilities.
+
+Examples:
+  roachtest modular-demo
+  roachtest modular-demo --nodes=5
+  roachtest modular-demo --seed=12345 --operations-per-stage=3-7
+`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runModularDemo(cmd)
+		},
+	}
+
+	// Modular scheduler flags (shared by both commands)
+	var (
+		modularSeed        int64
+		modularBaseDAGs    []string
+		modularExcludeOps  []string
+		modularOpsPerStage string
+		modularDemoNodes   int
+	)
+	modularCmd.Flags().Int64Var(&modularSeed, "seed", 0, "RNG seed (default: time-based)")
+	modularCmd.Flags().StringSliceVar(&modularBaseDAGs, "base-dags", nil, "Base DAG names to select from (default: all)")
+	modularCmd.Flags().StringSliceVar(&modularExcludeOps, "exclude-operations", nil, "Exclude operation patterns (regex)")
+	modularCmd.Flags().StringVar(&modularOpsPerStage, "operations-per-stage", "2-5", "Range of operations per stage (e.g., '3-7')")
+
+	// Demo-specific flags
+	modularDemoCmd.Flags().Int64Var(&modularSeed, "seed", 0, "RNG seed (default: time-based)")
+	modularDemoCmd.Flags().StringSliceVar(&modularBaseDAGs, "base-dags", nil, "Base DAG names to select from (default: all)")
+	modularDemoCmd.Flags().StringSliceVar(&modularExcludeOps, "exclude-operations", nil, "Exclude operation patterns (regex)")
+	modularDemoCmd.Flags().StringVar(&modularOpsPerStage, "operations-per-stage", "2-5", "Range of operations per stage (e.g., '3-7')")
+	modularDemoCmd.Flags().IntVar(&modularDemoNodes, "nodes", 4, "Number of nodes for demo cluster")
+
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(benchCmd)
 	rootCmd.AddCommand(runOperationCmd)
+	rootCmd.AddCommand(modularCmd)
+	rootCmd.AddCommand(modularDemoCmd)
 
 	var listOperationCmd = &cobra.Command{
 		Use:   "list-operations",

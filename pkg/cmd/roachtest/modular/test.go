@@ -186,3 +186,9 @@ func (t *Test) InsertRandomOperations(
 
 	return inserted, nil
 }
+
+// GetStages returns all non-setup stages in the test.
+// This allows the scheduler to augment stages with random operations.
+func (t *Test) GetStages() []*Stage {
+	return t.stages
+}

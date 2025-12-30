@@ -85,10 +85,22 @@ func gridDimensions(stages []Stage) (int, int) {
 
 		// The height of a stage is determined by the longest Chain in that stage.
 		// Each Chain requires one node's height plus spacing, except the last one.
-		height += stage.LongestChain()*(nodeHeight+verticalNodeSpacing) - verticalNodeSpacing
+		longestChain := stage.LongestChain()
+		if longestChain > 0 {
+			height += longestChain*(nodeHeight+verticalNodeSpacing) - verticalNodeSpacing
+		}
 	}
 
 	width = maxTotalWidth
+
+	// Ensure minimum dimensions to prevent panic with empty stages
+	if width < 1 {
+		width = 1
+	}
+	if height < 1 {
+		height = 1
+	}
+
 	return width, height
 }
 
@@ -144,6 +156,11 @@ func centerText(text string, width int) string {
 
 // drawStageLabel draws a stage label at the given x, y position.
 func (g *dagGrid) drawStageLabel(stageName string, x, y int) {
+	// Handle empty stages with minimal dimensions
+	if g.width < 3 || g.height < 1 {
+		return
+	}
+
 	label := fmt.Sprintf("[%s]", stageName)
 	// Truncate the label if it's too long
 	if len(label) > g.width {
@@ -354,9 +371,12 @@ func (g *dagGrid) drawStageTransition(currentStage Stage, connectionPoints [][2]
 			g.runes[lowestConnectionY+2][x] = '┼'
 		}
 	}
-	for x := connectionPoints[0][0]; x < connectionPoints[len(connectionPoints)-1][0]; x++ {
-		if g.runes[lowestConnectionY+2][x] == ' ' {
-			g.runes[lowestConnectionY+2][x] = '─'
+	// Draw horizontal line connecting all connection points (if there are multiple)
+	if len(connectionPoints) > 1 {
+		for x := connectionPoints[0][0]; x < connectionPoints[len(connectionPoints)-1][0]; x++ {
+			if g.runes[lowestConnectionY+2][x] == ' ' {
+				g.runes[lowestConnectionY+2][x] = '─'
+			}
 		}
 	}
 
@@ -378,6 +398,13 @@ func (g *dagGrid) drawStageTransition(currentStage Stage, connectionPoints [][2]
 		}
 		return false
 	})
+
+	// Handle empty stages (no nodes)
+	if len(nodeXMidpoints) == 0 {
+		g.runes[lowestConnectionY+6][xMidpoint] = '│'
+		g.runes[lowestConnectionY+7][xMidpoint] = '▼'
+		return
+	}
 
 	if len(nodeXMidpoints) == 1 {
 		g.runes[lowestConnectionY+6][xMidpoint] = '│'

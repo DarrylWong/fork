@@ -99,6 +99,11 @@ func (s *Stage) LongestChain() int {
 	return longestChainLength
 }
 
+// Name returns the name of the stage.
+func (s *Stage) Name() string {
+	return s.name
+}
+
 // MaxConcurrentSteps returns the maximum number of steps that can be run concurrently in this stage.
 func (s *Stage) MaxConcurrentSteps() int {
 	maxSteps := 0

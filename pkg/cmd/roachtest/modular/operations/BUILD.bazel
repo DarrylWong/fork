@@ -10,6 +10,7 @@ go_library(
         "cluster_setting.go",
         "inspect.go",
         "node_restart.go",
+        "register.go",
         "replication.go",
         "schema_change.go",
         "tpcc.go",

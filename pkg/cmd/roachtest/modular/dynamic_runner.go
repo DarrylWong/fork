@@ -10,6 +10,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 )
 
@@ -385,6 +386,10 @@ func (r *DynamicPlanRunner) initializeHelper(ctx context.Context, t test.Test) {
 	var connFunc func(int) *gosql.DB
 	if c != nil {
 		connFunc = func(node int) *gosql.DB {
+			// Use root certificate authentication for secure clusters
+			if c.IsSecure() {
+				return c.Conn(ctx, t.L(), node, option.AuthMode(install.AuthRootCert))
+			}
 			return c.Conn(ctx, t.L(), node)
 		}
 	}
