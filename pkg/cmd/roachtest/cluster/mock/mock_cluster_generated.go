@@ -1022,6 +1022,21 @@ func (mr *MockClusterMockRecorder) StartGrafana(arg0, arg1, arg2 interface{}) *g
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StartGrafana", reflect.TypeOf((*MockCluster)(nil).StartGrafana), arg0, arg1, arg2)
 }
 
+// StartProxy mocks base method.
+func (m *MockCluster) StartProxy(arg0 context.Context, arg1 *logger.Logger, arg2 install.SQLProxyOpts, arg3 option.NodeListOption) (*sql.DB, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "StartProxy", arg0, arg1, arg2, arg3)
+	ret0, _ := ret[0].(*sql.DB)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// StartProxy indicates an expected call of StartProxy.
+func (mr *MockClusterMockRecorder) StartProxy(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StartProxy", reflect.TypeOf((*MockCluster)(nil).StartProxy), arg0, arg1, arg2, arg3)
+}
+
 // StartServiceForVirtualCluster mocks base method.
 func (m *MockCluster) StartServiceForVirtualCluster(arg0 context.Context, arg1 *logger.Logger, arg2 option.StartOpts, arg3 install.ClusterSettings) {
 	m.ctrl.T.Helper()
@@ -1096,6 +1111,20 @@ func (m *MockCluster) StopGrafana(arg0 context.Context, arg1 *logger.Logger, arg
 func (mr *MockClusterMockRecorder) StopGrafana(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StopGrafana", reflect.TypeOf((*MockCluster)(nil).StopGrafana), arg0, arg1, arg2)
+}
+
+// StopProxy mocks base method.
+func (m *MockCluster) StopProxy(arg0 context.Context, arg1 *logger.Logger, arg2 install.SQLProxyOpts) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "StopProxy", arg0, arg1, arg2)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// StopProxy indicates an expected call of StopProxy.
+func (mr *MockClusterMockRecorder) StopProxy(arg0, arg1, arg2 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StopProxy", reflect.TypeOf((*MockCluster)(nil).StopProxy), arg0, arg1, arg2)
 }
 
 // StopServiceForVirtualCluster mocks base method.

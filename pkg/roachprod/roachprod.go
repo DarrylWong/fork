@@ -978,6 +978,9 @@ type StopOpts struct {
 	VirtualClusterID   int
 	VirtualClusterName string
 	SQLInstance        int
+
+	// Options that only apply to StopSQLProxy
+	ProxyInstance int
 }
 
 // DefaultStopOpts returns StopOpts populated with the default values used by Stop.

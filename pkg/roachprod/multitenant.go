@@ -7,9 +7,9 @@ package roachprod
 
 import (
 	"context"
-
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
+	"github.com/cockroachdb/errors"
 )
 
 // StartServiceForVirtualCluster starts SQL/HTTP instances for a
@@ -66,4 +66,67 @@ func StopServiceForVirtualCluster(
 
 	label := install.VirtualClusterLabel(stopOpts.VirtualClusterName, stopOpts.SQLInstance)
 	return c.Stop(ctx, l, stopOpts.Sig, stopOpts.Wait, stopOpts.GracePeriod, label)
+}
+
+// StartSQLProxy starts a SQL proxy process on the specified node. The proxy
+// routes connections to virtual clusters based on the provided routing rules.
+// This is useful for testing multi-tenant scenarios with connection pooling
+// and routing. Returns a database connection to the proxy.
+func StartSQLProxy(
+	ctx context.Context,
+	l *logger.Logger,
+	clusterName string,
+	node install.Node,
+	proxyOpts install.SQLProxyOpts,
+	// TODO: think about if we actuall need to pass this.
+	clusterSettingsOpts ...install.ClusterSettingOption,
+) error {
+	c, err := newCluster(l, clusterName, clusterSettingsOpts...)
+	if err != nil {
+		return err
+	}
+
+	return c.StartSQLProxy(ctx, l, node, proxyOpts)
+}
+
+// StopSQLProxy stops the SQL proxy process on all nodes in the cluster.
+func StopSQLProxy(
+	ctx context.Context,
+	l *logger.Logger,
+	clusterName string,
+	secure install.SecureOption,
+	opts install.SQLProxyOpts,
+) error {
+	c, err := newCluster(l, clusterName, secure)
+	if err != nil {
+		return err
+	}
+
+	// Stop the proxy on all nodes in the cluster
+	// The StopSQLProxy implementation will only stop processes on nodes where it's running
+	for _, node := range c.Nodes {
+		if err := c.StopSQLProxy(ctx, l, node, opts); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func SQLProxyURL(
+	l *logger.Logger,
+	clusterName string,
+	secure install.SecureOption,
+	opts install.SQLProxyOpts,
+) (string, error) {
+	c, err := GetClusterFromCache(l, clusterName, secure)
+	if err != nil {
+		return "", err
+	}
+
+	if len(c.Nodes) != 1 {
+		return "", errors.Errorf("expected 1 node, got %d", len(c.Nodes))
+	}
+
+	return c.SQLProxyURL(c.Nodes[0], opts), nil
 }

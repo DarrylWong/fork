@@ -434,3 +434,64 @@ func ToMarkdownTable(data [][]string) (string, error) {
 	}
 	return sb.String(), nil
 }
+
+// TenantID retrieves the tenant ID for a given virtual cluster name from the
+// system.tenants table. It creates a connection to the system virtual cluster,
+// queries the tenant ID, and closes the connection.
+func TenantID(
+	ctx context.Context, l *logger.Logger, c cluster.Cluster, virtualClusterName string,
+) (int, error) {
+	systemDB := c.Conn(ctx, l, 1, option.VirtualClusterName("system"))
+	defer systemDB.Close()
+
+	var tenantID int
+	err := systemDB.QueryRowContext(ctx, "SELECT id FROM system.tenants WHERE name = $1", virtualClusterName).Scan(&tenantID)
+	if err != nil {
+		return 0, err
+	}
+	return tenantID, nil
+}
+
+// MakeProxyRoutingRules builds the SQL proxy routing rules string for the specified
+// virtual cluster. It constructs routing rules for a single SQL instance across the
+// given nodes by discovering their internal addresses and SQL ports.
+//
+// The routing rule is passed to the SQL proxy's --routing-rule flag, which expects
+// just the backend address(es) in the format "IP:PORT" or "IP1:PORT1,IP2:PORT2,..."
+// The virtual cluster name should NOT be included in the routing rule; it is specified
+// in the client connection string via --cluster=<virtualcluster>-<tenantid>
+func MakeProxyRoutingRules(
+	ctx context.Context,
+	l *logger.Logger,
+	c cluster.Cluster,
+	nodes option.NodeListOption,
+	virtualClusterName string,
+	sqlInstance int,
+) (string, error) {
+	// Get IPs without ports
+	internalIPs, err := c.InternalIP(ctx, l, nodes)
+	if err != nil {
+		return "", err
+	}
+
+	sqlPorts, err := c.SQLPorts(ctx, l, nodes, virtualClusterName, sqlInstance)
+	if err != nil {
+		return "", err
+	}
+
+	if len(sqlPorts) != len(internalIPs) {
+		return "", fmt.Errorf("SQL ports and IPs count mismatch: %d ports, %d IPs",
+			len(sqlPorts), len(internalIPs))
+	}
+
+	var addrs []string
+	for i := range internalIPs {
+		addr := fmt.Sprintf("%s:%d", internalIPs[i], sqlPorts[i])
+		addrs = append(addrs, addr)
+	}
+
+	// Format: addr1,addr2,...
+	// NOTE: The routing rule is just the backend address(es), NOT prefixed with virtual cluster name.
+	// The virtual cluster is specified in the connection string via --cluster=<virtualcluster>-<tenantid>
+	return strings.Join(addrs, ","), nil
+}

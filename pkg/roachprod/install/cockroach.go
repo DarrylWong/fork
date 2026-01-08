@@ -40,6 +40,9 @@ import (
 //go:embed scripts/start.sh
 var startScript string
 
+//go:embed scripts/start_sqlproxy.sh
+var startSQLProxyScript string
+
 //go:embed files/cockroachdb-logging.yaml
 var loggingConfig string
 
@@ -315,8 +318,8 @@ func (c *SyncedCluster) maybeRegisterServices(
 			ctx, l, startOpts, ServiceModeExternal, serviceMap, portFunc,
 		)
 	default:
-		// For shared-process virtual clusters, we don't need to register
-		// services as these will be resolved to the system interface process.
+		// For shared-process virtual clusters and proxies, we don't need to register
+		// services through this path. Proxies use a dedicated StartProxy() method.
 	}
 
 	if err != nil {
@@ -877,6 +880,200 @@ func (c *SyncedCluster) NodeUIPort(
 	return desc.Port, nil
 }
 
+// SQLProxyOpts contains options for starting or stopping a SQL proxy.
+type SQLProxyOpts struct {
+	// ProxyInstance is the instance number for the proxy.
+	ProxyInstance int
+	// RoutingRules is a static routing rule (tenant:addr format, required).
+	RoutingRules string
+	// Insecure disables TLS to backend (optional, default false).
+	Insecure bool
+	// SkipVerify skips identity verification of backend (optional, default false).
+	SkipVerify bool
+	// ListenPort is the port the proxy listens on (optional, default 46257).
+	ListenPort int
+	// VirtualClusterName is the name of the virtual cluster (optional, for connection URL).
+	VirtualClusterName string
+	// VirtualClusterTenantID is the tenant ID of the virtual cluster (optional, for connection URL).
+	VirtualClusterTenantID int
+}
+
+// StartSQLProxy starts a SQL proxy process on the specified node. The proxy routes
+// SQL connections to virtual clusters based on the provided routing rules.
+// Returns a database connection to the proxy.
+func (c *SyncedCluster) StartSQLProxy(
+	ctx context.Context,
+	l *logger.Logger,
+	node Node,
+	proxyOpts SQLProxyOpts,
+) error {
+	label := SQLProxyLabel(proxyOpts.ProxyInstance)
+	logDir := c.LogDir(node, label, proxyOpts.ProxyInstance)
+
+	// Determine listen address
+	var listenHost string
+	if c.IsLocal() {
+		listenHost = "127.0.0.1"
+	} else {
+		listenHost = "0.0.0.0"
+	}
+	listenAddr := fmt.Sprintf("%s:%d", listenHost, SQLProxyPort(proxyOpts))
+
+	// Build the proxy command arguments
+	var args []string
+	args = append(args, "mt", "start-proxy")
+	// TODO(darryl):
+
+	args = append(args, fmt.Sprintf("--listen-addr=%s", listenAddr))
+	args = append(args, fmt.Sprintf("--routing-rule=%s", proxyOpts.RoutingRules))
+	if proxyOpts.Insecure {
+		args = append(args, "--insecure")
+	}
+	// TODO: if secure mode, we need to add certs path and key
+
+	// TODO: whats the difference between skip verify and insecure, why do we need both?
+	if proxyOpts.SkipVerify {
+		args = append(args, "--skip-verify")
+	}
+
+	// Generate the start script content using the SQL proxy template
+	scriptContent, err := execSQLProxyStartTemplate(startTemplateData{
+		LogDir:              logDir,
+		Binary:              cockroachNodeBinary(c, node),
+		Args:                args,
+		VirtualClusterLabel: label,
+		Local:               c.IsLocal(),
+		MemoryMax:           config.MemoryMax,
+		NumFilesLimit:       config.DefaultNumFilesLimit,
+		EnvVars: append(append([]string{
+			fmt.Sprintf("ROACHPROD=%s", c.roachprodEnvValue(node)),
+		}, c.Env...), getEnvVars()...),
+	})
+	if err != nil {
+		return err
+	}
+
+	scriptPath := fmt.Sprintf("sqlproxy-%d.sh", proxyOpts.ProxyInstance)
+
+	var uploadCmd string
+	if c.IsLocal() {
+		uploadCmd = fmt.Sprintf(`cd %s ; `, c.localVMDir(node))
+	}
+	uploadCmd += fmt.Sprintf(`cat > %[1]s && chmod +x %[1]s`, scriptPath)
+
+	uploadOpts := defaultCmdOpts("upload-sql-proxy-script")
+	uploadOpts.stdin = strings.NewReader(scriptContent)
+	result, err := c.runCmdOnSingleNode(ctx, l, node, uploadCmd, uploadOpts)
+	if err != nil {
+		return err
+	}
+	if result.Err != nil {
+		return result.Err
+	}
+
+	// Execute the start script
+	var runScriptCmd string
+	if c.IsLocal() {
+		runScriptCmd = fmt.Sprintf(`cd %s ; `, c.localVMDir(node))
+	}
+	runScriptCmd += "./" + scriptPath
+	result, err = c.runCmdOnSingleNode(ctx, l, node, runScriptCmd, defaultCmdOpts("run-sql-proxy-script"))
+	if err != nil {
+		return err
+	}
+	if result.Err != nil {
+		return result.Err
+	}
+
+	l.Printf("SQL proxy started on node %d (instance %d)", node, proxyOpts.ProxyInstance)
+	return nil
+}
+
+// StopSQLProxy stops a SQL proxy process on the specified node.
+func (c *SyncedCluster) StopSQLProxy(
+	ctx context.Context,
+	l *logger.Logger,
+	node Node,
+	proxyOpts SQLProxyOpts,
+) error {
+	// Use the same label that was set during start
+	label := SQLProxyLabel(proxyOpts.ProxyInstance)
+
+	l.Printf("Stopping SQL proxy on node %d (instance %d)", node, proxyOpts.ProxyInstance)
+
+	// Find and kill the proxy process using the label
+	// We use SIGTERM (15) for graceful shutdown, wait for it to exit, with a 30s grace period
+	virtualClusterFilter := fmt.Sprintf(
+		"grep -E '%s' |",
+		envVarRegex("ROACHPROD_VIRTUAL_CLUSTER", label),
+	)
+
+	cmd := fmt.Sprintf(`
+pids=$(ps axeww -o pid -o command | \
+  %s \
+  sed 's/export ROACHPROD=//g' | \
+  awk '/%s/ { print $1 }')
+if [ -n "${pids}" ]; then
+  echo "Stopping proxy processes: ${pids}"
+  kill -15 ${pids}
+  # Wait for process to exit (up to 30 seconds)
+  for pid in ${pids}; do
+    waitcnt=0
+    while kill -0 ${pid} 2>/dev/null; do
+      if [ $waitcnt -gt 30 ]; then
+        echo "Process ${pid} did not stop after 30s, sending SIGKILL"
+        kill -9 ${pid}
+        break
+      fi
+      sleep 1
+      waitcnt=$(expr $waitcnt + 1)
+    done
+    echo "Process ${pid} stopped"
+  done
+else
+  echo "No proxy process found with label: %s"
+fi`,
+		virtualClusterFilter,
+		c.roachprodEnvRegex(node),
+		label,
+	)
+
+	result, err := c.runCmdOnSingleNode(ctx, l, node, cmd, defaultCmdOpts("stop-proxy"))
+	if err != nil {
+		return err
+	}
+	if result.Err != nil {
+		return result.Err
+	}
+
+	l.Printf("SQL proxy stopped on node %d", node)
+	return nil
+}
+
+func SQLProxyPort(proxyOpts SQLProxyOpts) int {
+	// N.B. For now, we hardcode the sql proxy port as the default of 46257.
+	// TODO(darryl): support service registration for sql proxy and dynamically assign ports.
+	return 46257
+}
+
+func (c *SyncedCluster) SQLProxyURL(
+	node Node,
+	opts SQLProxyOpts,
+) string {
+	// Build cluster identifier for connection URL
+	// Format: virtualclustername-tenantid (e.g., "testcluster-3")
+	clusterIdentifier := fmt.Sprintf("%s-%d", opts.VirtualClusterName, opts.VirtualClusterTenantID)
+	host := c.Host(node)
+	port := SQLProxyPort(opts)
+
+	// Build connection URL for the virtual cluster through the proxy
+	// Format: postgres://root@proxyhost:proxyport/defaultdb?sslmode=disable&options=-ccluster=virtualclustername-tenantid
+	// For insecure mode, no password is needed
+	// TODO: support secure mode
+	return fmt.Sprintf("postgres://root@%s:%d/?sslmode=disable&options=-ccluster=%s",
+		host, port, clusterIdentifier)
+}
+
 // ExecOrInteractiveSQL ssh's onto a single node and executes `./ cockroach sql`
 // with the provided args, potentially opening an interactive session. Note
 // that the caller can pass the `--e` flag to execute sql cmds and exit the
@@ -1045,6 +1242,13 @@ func VirtualClusterLabel(virtualClusterName string, sqlInstance int) string {
 	return fmt.Sprintf("cockroach-%s_%d", virtualClusterName, sqlInstance)
 }
 
+// SQLProxyLabel is the value used to "label" SQL proxy processes
+// running locally or in a VM. This is used by roachprod to identify
+// and monitor such processes.
+func SQLProxyLabel(proxyInstance int) string {
+	return fmt.Sprintf("sql-proxy-%d", proxyInstance)
+}
+
 // VirtualClusterInfoFromLabel takes as parameter a tenant label
 // produced with `VirtuaLClusterLabel()` and returns the corresponding
 // tenant name and instance.
@@ -1098,6 +1302,23 @@ func execStartTemplate(data startTemplateData) (string, error) {
 		}}).
 		Delims("#{", "#}").
 		Parse(startScript)
+	if err != nil {
+		return "", err
+	}
+	var buf strings.Builder
+	if err := tpl.Execute(&buf, data); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+func execSQLProxyStartTemplate(data startTemplateData) (string, error) {
+	tpl, err := template.New("start-sqlproxy").
+		Funcs(template.FuncMap{"shesc": func(i interface{}) string {
+			return shellescape.Quote(fmt.Sprint(i))
+		}}).
+		Delims("#{", "#}").
+		Parse(startSQLProxyScript)
 	if err != nil {
 		return "", err
 	}

@@ -22,6 +22,7 @@ go_library(
         "files/cockroachdb-logging.yaml",
         "scripts/download.sh",
         "scripts/start.sh",
+        "scripts/start_sqlproxy.sh",
         "scripts/open_ports.sh",
         "scripts/monitor_remote.sh",
         "scripts/monitor_local.sh",

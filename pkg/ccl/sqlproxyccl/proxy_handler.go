@@ -249,13 +249,27 @@ func newProxyHandler(
 		}
 	} else {
 		// If no directory address was specified, assume routing rule, and
-		// start an in-memory simple directory server.
-		directoryServer, grpcServer := tenantdirsvr.NewTestSimpleDirectoryServer(handler.RoutingRule)
+		// start an in-memory directory server.
+		// Use multi-backend directory server if routing rule contains multiple addresses.
+		var directoryServer tenant.DirectoryServer
+		var grpcServer *grpc.Server
+		if strings.Contains(handler.RoutingRule, ",") {
+			// Multiple backend addresses - use multi-backend directory server
+			// for load balancing.
+			podAddrs := strings.Split(handler.RoutingRule, ",")
+			for i := range podAddrs {
+				podAddrs[i] = strings.TrimSpace(podAddrs[i])
+			}
+			directoryServer, grpcServer = tenantdirsvr.NewTestMultiBackendDirectoryServer(podAddrs)
+		} else {
+			// Single backend address - use simple directory server.
+			directoryServer, grpcServer = tenantdirsvr.NewTestSimpleDirectoryServer(handler.RoutingRule)
+		}
+		handler.testingKnobs.directoryServer = directoryServer
 		ln, err := tenantdirsvr.ListenAndServeInMemGRPC(ctx, stopper, grpcServer)
 		if err != nil {
 			return nil, err
 		}
-		handler.testingKnobs.directoryServer = directoryServer
 
 		dialerFunc := func(ctx context.Context, addr string) (net.Conn, error) {
 			return ln.DialContext(ctx)

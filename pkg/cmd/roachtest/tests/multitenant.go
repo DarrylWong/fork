@@ -7,6 +7,7 @@ package tests
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"math/rand"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/task"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
@@ -408,4 +410,115 @@ func registerMultiTenantMultiregion(r registry.Registry) {
 			runMultiTenantMultiRegion(ctx, t, c)
 		},
 	})
+
+	r.Add(registry.TestSpec{
+		Name:              "multitenant/sqlproxy",
+		Owner:             registry.OwnerTestEng,
+		Cluster:           r.MakeClusterSpec(3),
+		EncryptionSupport: registry.EncryptionMetamorphic,
+		CompatibleClouds:  registry.AllClouds,
+		Leases:            registry.MetamorphicLeases,
+		Suites:            registry.Suites(registry.Nightly),
+		Run:               runMultitenantSQLProxy,
+	})
+}
+
+// runMultitenantSQLProxyu demonstrates starting a SQL proxy that routes
+// connections to a virtual cluster.
+func runMultitenantSQLProxy(ctx context.Context, t test.Test, c cluster.Cluster) {
+	// Start the storage layer on all nodes in insecure mode (no TLS)
+	t.L().Printf("starting storage cluster")
+	storageNodes := c.All()
+	storageSettings := install.MakeClusterSettings(
+		install.SimpleSecureOption(false),
+		// TODO: figure out what and why we do this?
+		install.EnvOption([]string{"COCKROACH_TRUST_CLIENT_PROVIDED_SQL_REMOTE_ADDR=true"}),
+	)
+	c.Start(ctx, t.L(), option.DefaultStartOpts(), storageSettings, storageNodes)
+
+	const virtualClusterName = "tenant"
+	virtualClusterNodes := c.All()
+	// Start virtual cluster in insecure mode (no TLS)
+	virtualClusterSettings := install.MakeClusterSettings(
+		install.SimpleSecureOption(false),
+		install.EnvOption([]string{"COCKROACH_TRUST_CLIENT_PROVIDED_SQL_REMOTE_ADDR=true"}),
+	)
+	c.StartServiceForVirtualCluster(
+		ctx, t.L(),
+		option.StartVirtualClusterOpts(virtualClusterName, virtualClusterNodes),
+		virtualClusterSettings,
+	)
+
+	// Get the tenant ID for the virtual cluster
+	tenantID, err := roachtestutil.TenantID(ctx, t.L(), c, virtualClusterName)
+	require.NoError(t, err)
+	t.L().Printf("virtual cluster %s has tenant ID %d", virtualClusterName, tenantID)
+
+	// Build routing rules for SQL instance 0 on node 1
+	// Note: The test directory server only supports a single backend address,
+	// so we only route to one node instead of all nodes.
+	routingRule, err := roachtestutil.MakeProxyRoutingRules(ctx, t.L(), c, c.All(), virtualClusterName, 0 /* sqlInstance */)
+	require.NoError(t, err)
+	t.L().Printf("proxy routing rules: %s", routingRule)
+
+	proxyNode := c.Node(1)
+	t.L().Printf("starting SQL proxy on node %v", proxyNode)
+	proxyOpts := install.SQLProxyOpts{
+		RoutingRules:           routingRule,
+		Insecure:               true,
+		VirtualClusterName:     virtualClusterName,
+		VirtualClusterTenantID: tenantID,
+	}
+	err = c.StartProxy(ctx, t.L(), proxyNode, proxyOpts)
+	require.NoError(t, err)
+
+	url, err := c.ProxyURL(t.L(), proxyNode, proxyOpts)
+	require.NoError(t, err)
+
+	// Check that the url is constructed properly by using it in a tpcc workload.
+	initCmd := fmt.Sprintf("./cockroach workload init tpcc --warehouses=10 '%s'", url)
+	c.Run(ctx, option.WithNodes(c.Node(3)), initCmd)
+	require.NoError(t, err)
+
+	runCmd := fmt.Sprintf("./cockroach workload run tpcc --warehouses=10 --duration=10s '%s'", url)
+	c.Run(ctx, option.WithNodes(c.Node(3)), runCmd)
+	require.NoError(t, err)
+
+	// Verify that the proxy is load balancing across multiple sql pods.
+	// Since it's a SQL pod, we don't have access to information such as node_id
+	// or sql_addr. This is a bit hacky, but we get around this by parsing the session id
+	// which is suffixed by a unique id per SQL pod.
+	sqlPodsHit := make(map[string]bool)
+	dbConns := make([]*sql.DB, 0)
+
+	// The SQL proxy will route connections to the pod with the least amount of
+	// connections, so we need to keep the connections alive until we are done
+	// connecting to all 3 pods.
+	defer func() {
+		for _, db := range dbConns {
+			db.Close()
+		}
+	}()
+
+	for i := range len(c.All()) * 3 {
+		testDB, err := c.ProxyConn(t.L(), proxyNode, proxyOpts)
+		require.NoError(t, err)
+		dbConns = append(dbConns, testDB)
+
+		// Query which backend node this connection landed on
+		// Use crdb_internal.node_id() which works in virtual clusters
+		var sessionID string
+		err = testDB.QueryRow("SHOW session_id").Scan(&sessionID)
+		require.NoError(t, err)
+		podID := string(sessionID[len(sessionID)-1])
+
+		sqlPodsHit[podID] = true
+		t.L().Printf("%d: connection routed to session ID %s, pod ID %s", i, sessionID, podID)
+
+		// We expect that the first len(c.All()) connections are evenly distributed across every
+		// pod, as well that subsequent connections after that don't connect to unexpected podIDs.
+		if i >= len(c.All())-1 {
+			require.Equal(t, len(c.All()), len(sqlPodsHit))
+		}
+	}
 }

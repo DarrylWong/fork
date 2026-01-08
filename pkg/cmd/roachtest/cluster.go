@@ -2340,6 +2340,52 @@ func (c *clusterImpl) StopServiceForVirtualCluster(
 	}
 }
 
+// StartProxy starts a SQL proxy process on the specified node and
+// returns the pgurl for the proxy.
+func (c *clusterImpl) StartProxy(
+	ctx context.Context,
+	l *logger.Logger,
+	nodes option.NodeListOption,
+	opts install.SQLProxyOpts,
+) error {
+	// StartSQLProxy only supports a single node
+	if len(nodes) != 1 {
+		return fmt.Errorf("StartProxy requires exactly one node, got %d", len(nodes))
+	}
+
+	node := install.Node(nodes[0])
+	l.Printf("starting SQL proxy on node %d", node)
+
+	return roachprod.StartSQLProxy(
+		ctx, l, c.Name(), node, opts,
+	)
+}
+
+// StopProxy stops SQL proxy processes.
+func (c *clusterImpl) StopProxy(
+	ctx context.Context, l *logger.Logger, opts install.SQLProxyOpts,
+) error {
+	l.Printf("stopping SQL proxy")
+
+	return roachprod.StopSQLProxy(
+		ctx, l, c.Name(), install.SimpleSecureOption(c.IsSecure()), opts,
+	)
+}
+
+func (c *clusterImpl) ProxyURL(l *logger.Logger, proxyNode option.NodeListOption, opts install.SQLProxyOpts) (string, error) {
+	return roachprod.SQLProxyURL(
+		l, c.MakeNodes(proxyNode), install.SimpleSecureOption(c.IsSecure()), opts,
+	)
+}
+
+func (c *clusterImpl) ProxyConn(l *logger.Logger, proxyNode option.NodeListOption, opts install.SQLProxyOpts) (*gosql.DB, error) {
+	url, err := c.ProxyURL(l, proxyNode, opts)
+	if err != nil {
+		return nil, err
+	}
+	return gosql.Open("postgres", url)
+}
+
 func (c *clusterImpl) RefetchCertsFromNode(ctx context.Context, node int) error {
 	var err error
 	c.localCertsDir, err = os.MkdirTemp("", "roachtest-certs")

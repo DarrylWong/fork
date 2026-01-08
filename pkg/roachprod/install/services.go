@@ -32,6 +32,8 @@ const (
 	ServiceTypeSQL ServiceType = "sql"
 	// ServiceTypeUI is the service type for UI services on a node.
 	ServiceTypeUI ServiceType = "ui"
+	// ServiceTypeProxy is the service type for SQL proxy services on a node.
+	ServiceTypeProxy ServiceType = "proxy"
 )
 
 // SystemInterfaceName is the virtual cluster name to use to access the

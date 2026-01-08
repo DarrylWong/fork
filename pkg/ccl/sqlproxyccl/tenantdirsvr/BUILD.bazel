@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "in_mem_listener.go",
         "test_directory_svr.go",
+        "test_multi_backend_directory_svr.go",
         "test_simple_directory_svr.go",
         "test_static_directory_svr.go",
         "testutils.go",
