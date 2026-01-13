@@ -506,7 +506,7 @@ type TenantControlInterface interface {
 	// StartSharedProcessTenant starts the service for a virtual cluster
 	// using the special configuration we define for shared-process deployments.
 	//
-	// args.TenantName must be specified. If a tenant with that name already
+	// args.VirtualClusterName must be specified. If a tenant with that name already
 	// exists, its ID is checked against args.TenantID (if set), and, if it
 	// matches, new tenant metadata is not created in the system.tenants table.
 	//

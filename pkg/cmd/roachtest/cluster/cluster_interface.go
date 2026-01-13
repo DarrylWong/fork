@@ -82,10 +82,12 @@ type Cluster interface {
 	StopServiceForVirtualClusterE(ctx context.Context, l *logger.Logger, stopOpts option.StopOpts) error
 	StopServiceForVirtualCluster(ctx context.Context, l *logger.Logger, stopOpts option.StopOpts)
 
+	StartProxyDirectory(ctx context.Context, l *logger.Logger, nodes option.NodeListOption, opts install.DirectoryServerOpts) error
+	StopProxyDirectory(ctx context.Context, l *logger.Logger, nodes option.NodeListOption, opts install.DirectoryServerOpts) error
 	StartProxy(ctx context.Context, l *logger.Logger, nodes option.NodeListOption, opts install.SQLProxyOpts) error
-	StopProxy(ctx context.Context, l *logger.Logger, opts install.SQLProxyOpts) error
-	ProxyURL(l *logger.Logger, proxyNode option.NodeListOption, opts install.SQLProxyOpts) (string, error)
-	ProxyConn(l *logger.Logger, proxyNode option.NodeListOption, opts install.SQLProxyOpts) (*gosql.DB, error)
+	StopProxy(ctx context.Context, l *logger.Logger, nodes option.NodeListOption, opts install.SQLProxyOpts) error
+	ProxyURL(l *logger.Logger, proxyNode option.NodeListOption, virtualClusterName string, tenantID int, opts install.SQLProxyOpts) (string, error)
+	ProxyConn(l *logger.Logger, proxyNode option.NodeListOption, virtualClusterName string, tenantID int, opts install.SQLProxyOpts) (*gosql.DB, error)
 
 	// Hostnames and IP addresses of the nodes.
 

@@ -2317,7 +2317,7 @@ func (c *clusterImpl) StartServiceForVirtualCluster(
 func (c *clusterImpl) StopServiceForVirtualClusterE(
 	ctx context.Context, l *logger.Logger, stopOpts option.StopOpts,
 ) error {
-	l.Printf("stoping virtual cluster")
+	l.Printf("stopping virtual cluster")
 
 	nodes := c.All()
 	if len(stopOpts.SeparateProcessNodes) > 0 {
@@ -2363,27 +2363,58 @@ func (c *clusterImpl) StartProxy(
 
 // StopProxy stops SQL proxy processes.
 func (c *clusterImpl) StopProxy(
-	ctx context.Context, l *logger.Logger, opts install.SQLProxyOpts,
+	ctx context.Context, l *logger.Logger, nodes option.NodeListOption, opts install.SQLProxyOpts,
 ) error {
 	l.Printf("stopping SQL proxy")
 
 	return roachprod.StopSQLProxy(
-		ctx, l, c.Name(), install.SimpleSecureOption(c.IsSecure()), opts,
+		ctx, l, c.MakeNodes(nodes), install.SimpleSecureOption(c.IsSecure()), opts,
 	)
 }
 
-func (c *clusterImpl) ProxyURL(l *logger.Logger, proxyNode option.NodeListOption, opts install.SQLProxyOpts) (string, error) {
+func (c *clusterImpl) ProxyURL(l *logger.Logger, proxyNode option.NodeListOption, virtualClusterName string, tenantID int, opts install.SQLProxyOpts) (string, error) {
 	return roachprod.SQLProxyURL(
-		l, c.MakeNodes(proxyNode), install.SimpleSecureOption(c.IsSecure()), opts,
+		l, c.MakeNodes(proxyNode), install.SimpleSecureOption(c.IsSecure()), virtualClusterName, tenantID, opts,
 	)
 }
 
-func (c *clusterImpl) ProxyConn(l *logger.Logger, proxyNode option.NodeListOption, opts install.SQLProxyOpts) (*gosql.DB, error) {
-	url, err := c.ProxyURL(l, proxyNode, opts)
+func (c *clusterImpl) ProxyConn(l *logger.Logger, proxyNode option.NodeListOption, virtualClusterName string, tenantID int, opts install.SQLProxyOpts) (*gosql.DB, error) {
+	url, err := c.ProxyURL(l, proxyNode, virtualClusterName, tenantID, opts)
 	if err != nil {
 		return nil, err
 	}
 	return gosql.Open("postgres", url)
+}
+
+// StartProxyDirectory starts a directory server process on the specified node.
+func (c *clusterImpl) StartProxyDirectory(
+	ctx context.Context,
+	l *logger.Logger,
+	nodes option.NodeListOption,
+	opts install.DirectoryServerOpts,
+) error {
+	if len(nodes) != 1 {
+		return errors.Errorf("StartProxyDirectory requires exactly one node, got %d", len(nodes))
+	}
+
+	node := install.Node(nodes[0])
+	l.Printf("starting directory server on node %d", node)
+
+	return roachprod.StartProxyDirectory(ctx, l, c.Name(), node, opts)
+}
+
+// StopProxyDirectory stops directory server processes.
+func (c *clusterImpl) StopProxyDirectory(
+	ctx context.Context, l *logger.Logger, nodes option.NodeListOption, opts install.DirectoryServerOpts,
+) error {
+	if len(nodes) != 1 {
+		return fmt.Errorf("StopProxyDirectory requires exactly one node, got %d", len(nodes))
+	}
+
+	node := install.Node(nodes[0])
+	l.Printf("stopping directory server on node %d", node)
+
+	return roachprod.StopProxyDirectory(ctx, l, c.Name(), node, opts)
 }
 
 func (c *clusterImpl) RefetchCertsFromNode(ctx context.Context, node int) error {

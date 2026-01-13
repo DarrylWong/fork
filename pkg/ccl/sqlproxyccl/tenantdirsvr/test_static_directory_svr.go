@@ -568,6 +568,39 @@ func (d *TestStaticDirectoryServer) WatchTenantsListenersCount() int {
 	return d.mu.tenantEventListeners.Len()
 }
 
+// GetState returns the current state of all tenants and pods for debugging.
+func (d *TestStaticDirectoryServer) GetState() map[string]interface{} {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	state := make(map[string]interface{})
+	tenants := make([]map[string]interface{}, 0, len(d.mu.tenants))
+
+	for tenantID, tenant := range d.mu.tenants {
+		tenantInfo := map[string]interface{}{
+			"tenant_id":    tenantID.ToUint64(),
+			"cluster_name": tenant.ClusterName,
+			"pods":         []map[string]interface{}{},
+		}
+
+		if pods, ok := d.mu.tenantPods[tenantID]; ok {
+			podsList := make([]map[string]interface{}, 0, len(pods))
+			for _, pod := range pods {
+				podsList = append(podsList, map[string]interface{}{
+					"addr":  pod.Addr,
+					"state": pod.State.String(),
+				})
+			}
+			tenantInfo["pods"] = podsList
+		}
+
+		tenants = append(tenants, tenantInfo)
+	}
+
+	state["tenants"] = tenants
+	return state
+}
+
 // notifyPodUpdateLocked sends a pod update event to all WatchPods listeners.
 func (d *TestStaticDirectoryServer) notifyPodUpdateLocked(pod *tenant.Pod) {
 	// Make a copy of the pod to prevent race issues.

@@ -2234,7 +2234,7 @@ func (m *CommonSharedServiceEventDetails) AppendJSONFields(printComma bool, b re
 			b = append(b, ',')
 		}
 		printComma = true
-		b = append(b, "\"TenantName\":\""...)
+		b = append(b, "\"VirtualClusterName\":\""...)
 		b = append(b, redact.StartMarker()...)
 		b = redact.RedactableBytes(jsonbytes.EncodeString([]byte(b), string(redact.EscapeMarkers([]byte(m.TenantName)))))
 		b = append(b, redact.EndMarker()...)

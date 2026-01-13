@@ -509,7 +509,8 @@ func (c *SyncedCluster) Stop(
 		}
 
 		if !IsSystemInterface(name) {
-			isExternal, err := c.IsExternalService(ctx, name)
+			virtualClusterName = name
+			isExternal, err := c.IsExternalService(ctx, virtualClusterName)
 			if err != nil {
 				return err
 			}

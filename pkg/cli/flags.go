@@ -207,7 +207,7 @@ func (t tenantNameSetter) String() string {
 }
 
 // Type implements the pflag.Value interface.
-func (t tenantNameSetter) Type() string { return "<[]TenantName>" }
+func (t tenantNameSetter) Type() string { return "<[]VirtualClusterName>" }
 
 // Set implements the pflag.Value interface.
 func (t tenantNameSetter) Set(v string) error {

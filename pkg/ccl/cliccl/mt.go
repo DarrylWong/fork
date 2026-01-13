@@ -12,4 +12,6 @@ func init() {
 	cli.RegisterCommandWithCustomLogging(mtStartSQLProxyCmd)
 	cli.MTCmd.AddCommand(mtTestDirectorySvr)
 	cli.RegisterCommandWithCustomLogging(mtTestDirectorySvr)
+	cli.MTCmd.AddCommand(mtStaticTestDirectoryCmd)
+	cli.RegisterCommandWithCustomLogging(mtStaticTestDirectoryCmd)
 }

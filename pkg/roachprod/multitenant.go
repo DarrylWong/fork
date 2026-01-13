@@ -117,6 +117,8 @@ func SQLProxyURL(
 	l *logger.Logger,
 	clusterName string,
 	secure install.SecureOption,
+	virtualClusterName string,
+	tenantID int,
 	opts install.SQLProxyOpts,
 ) (string, error) {
 	c, err := GetClusterFromCache(l, clusterName, secure)
@@ -128,5 +130,40 @@ func SQLProxyURL(
 		return "", errors.Errorf("expected 1 node, got %d", len(c.Nodes))
 	}
 
-	return c.SQLProxyURL(c.Nodes[0], opts), nil
+	return c.SQLProxyURL(c.Nodes[0], virtualClusterName, tenantID, opts), nil
+}
+
+// StartProxyDirectory starts a directory server process on the specified node.
+// The directory server provides a static pod registry for SQL proxies to discover tenant pods.
+func StartProxyDirectory(
+	ctx context.Context,
+	l *logger.Logger,
+	clusterName string,
+	node install.Node,
+	dirOpts install.DirectoryServerOpts,
+	clusterSettingsOpts ...install.ClusterSettingOption,
+) error {
+	c, err := newCluster(l, clusterName, clusterSettingsOpts...)
+	if err != nil {
+		return err
+	}
+
+	return c.StartDirectoryServer(ctx, l, node, dirOpts)
+}
+
+// StopProxyDirectory stops the directory server process on the specified node.
+func StopProxyDirectory(
+	ctx context.Context,
+	l *logger.Logger,
+	clusterName string,
+	node install.Node,
+	dirOpts install.DirectoryServerOpts,
+	clusterSettingsOpts ...install.ClusterSettingOption,
+) error {
+	c, err := newCluster(l, clusterName, clusterSettingsOpts...)
+	if err != nil {
+		return err
+	}
+
+	return c.StopDirectoryServer(ctx, l, node, dirOpts)
 }

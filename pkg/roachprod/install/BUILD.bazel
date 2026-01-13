@@ -23,6 +23,7 @@ go_library(
         "scripts/download.sh",
         "scripts/start.sh",
         "scripts/start_sqlproxy.sh",
+        "scripts/start_directory_server.sh",
         "scripts/open_ports.sh",
         "scripts/monitor_remote.sh",
         "scripts/monitor_local.sh",

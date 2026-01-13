@@ -665,7 +665,7 @@ func waitUntilTenantServerStopped(
 	// 		return err
 	// 	}
 	// 	for _, tenant := range resp.Tenants {
-	// 		if tenant.TenantName == tenantName {
+	// 		if tenant.VirtualClusterName == tenantName {
 	// 			t.Logf("tenant %q is still running", tenantName)
 	// 			return errors.Newf("tenant %q still running")
 	// 		}
