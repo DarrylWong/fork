@@ -933,8 +933,11 @@ func (c *SyncedCluster) StartSQLProxy(
 
 	if proxyOpts.Insecure {
 		args = append(args, "--insecure")
+	} else {
+		certsDir := c.CertsDir(node)
+		args = append(args, fmt.Sprintf("--listen-cert=%s/node.crt", certsDir))
+		args = append(args, fmt.Sprintf("--listen-key=%s/node.key", certsDir))
 	}
-	// TODO: if secure mode, we need to add certs path and key
 
 	// TODO: whats the difference between skip verify and insecure, why do we need both?
 	if proxyOpts.SkipVerify {
@@ -1193,19 +1196,41 @@ func (c *SyncedCluster) SQLProxyURL(
 	virtualClusterName string,
 	tenantID int,
 	opts SQLProxyOpts,
+	certsDir string,
 ) string {
 	// Build cluster identifier for connection URL
 	// Format: virtualclustername-tenantid (e.g., "testcluster-3")
 	clusterIdentifier := fmt.Sprintf("%s-%d", virtualClusterName, tenantID)
-	host := c.Host(node)
-	port := SQLProxyPort(opts)
 
-	// Build connection URL for the virtual cluster through the proxy
-	// Format: postgres://root@proxyhost:proxyport/defaultdb?sslmode=disable&options=-ccluster=virtualclustername-tenantid
-	// For insecure mode, no password is needed
-	// TODO: support secure mode
-	return fmt.Sprintf("postgres://root@%s:%d/?sslmode=disable&options=-ccluster=%s",
-		host, port, clusterIdentifier)
+	var u url.URL
+	u.Scheme = "postgres"
+	u.Host = fmt.Sprintf("%s:%d", c.Host(node), SQLProxyPort(opts))
+	u.Path = "/"
+
+	v := url.Values{}
+	if opts.Insecure {
+		u.User = url.User("root")
+		v.Add("sslmode", "disable")
+	} else {
+		// In secure mode, use password authentication with client certificates.
+		// certsDir contains either:
+		// - CockroachNodeCertsDir ("certs") for internal connections from cluster nodes
+		// - Downloaded certs directory for external connections from roachtest runner
+		user := DefaultUser
+		password := DefaultPassword
+		u.User = url.UserPassword(user, password)
+
+		v.Add("sslcert", fmt.Sprintf("%s/client.%s.crt", certsDir, user))
+		v.Add("sslkey", fmt.Sprintf("%s/client.%s.key", certsDir, user))
+		v.Add("sslrootcert", fmt.Sprintf("%s/ca.crt", certsDir))
+		v.Add("sslmode", "verify-full")
+	}
+
+	// Add cluster identifier to route to the correct virtual cluster
+	v.Add("options", fmt.Sprintf("-ccluster=%s", clusterIdentifier))
+
+	u.RawQuery = v.Encode()
+	return u.String()
 }
 
 // ExecOrInteractiveSQL ssh's onto a single node and executes `./ cockroach sql`

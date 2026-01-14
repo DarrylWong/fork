@@ -200,6 +200,29 @@ func (p *SQLProxy) RemovePod(ctx context.Context, nodes option.NodeListOption, v
 }
 
 func (p *SQLProxy) DrainPod(ctx context.Context, nodes option.NodeListOption, virtualClusterName string, sqlInstance int) error {
+	// TODO(darryl): CRITICAL BUG - The proxy's directory cache does not refresh when pod states
+	// change via the HTTP API. After calling DrainPod here, the directory server correctly
+	// marks pods as DRAINING (confirmed via /info endpoint), but the proxy's balancer still
+	// sees them as RUNNING because:
+	//
+	// 1. The static directory server has no pod watcher mechanism
+	// 2. The proxy's directory cache (pkg/ccl/sqlproxyccl/tenant/directory_cache.go) only
+	//    refreshes when ReportFailure() is called (on connection failures)
+	// 3. There's no TTL or periodic refresh for the cache entries
+	//
+	// Evidence from logs (balancer.go:298):
+	//   "REBALANCE TENANT: Found pod 10.142.0.198:29000 for tenant 3, state=RUNNING"
+	//   (even after DrainPod was called and /info shows state=DRAINING)
+	//
+	// As a result, the balancer never collects draining pod assignments
+	// (collectDrainingPodAssignments returns 0), and session migration never happens.
+	//
+	// Possible fixes:
+	// 1. Add InvalidateCache() method that calls ReportFailure() to force cache refresh
+	// 2. Add a notification/callback mechanism to the static directory server
+	// 3. Implement periodic cache refresh with TTL
+	// 4. Add pod watcher support to the static directory server
+
 	tenantID, err := TenantID(ctx, p.l, p.c, virtualClusterName)
 	if err != nil {
 		return err
@@ -286,7 +309,8 @@ func (p *SQLProxy) URL(ctx context.Context, virtualClusterName string) (string, 
 	if err != nil {
 		return "", err
 	}
-	return p.c.ProxyURL(p.l, p.proxyNode, virtualClusterName, tenantID, p.proxyOpts)
+	// Use external=false since this URL is for workloads running on cluster nodes
+	return p.c.ProxyURL(p.l, p.proxyNode, virtualClusterName, tenantID, p.proxyOpts, false /* external */)
 }
 
 func (p *SQLProxy) Conn(ctx context.Context, virtualClusterName string) (*gosql.DB, error) {

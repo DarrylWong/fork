@@ -430,16 +430,13 @@ func runMultitenantSQLProxy(ctx context.Context, t test.Test, c cluster.Cluster)
 	t.L().Printf("starting storage cluster")
 	storageNodes := c.All()
 	storageSettings := install.MakeClusterSettings(
-		install.SimpleSecureOption(false),
 		install.EnvOption([]string{"COCKROACH_TRUST_CLIENT_PROVIDED_SQL_REMOTE_ADDR=true"}),
 	)
 	c.Start(ctx, t.L(), option.DefaultStartOpts(), storageSettings, storageNodes)
 
 	const virtualClusterName = "tenant"
 	virtualClusterNodes := c.All()
-	// Start virtual cluster in insecure mode (no TLS)
 	virtualClusterSettings := install.MakeClusterSettings(
-		install.SimpleSecureOption(false),
 		install.EnvOption([]string{"COCKROACH_TRUST_CLIENT_PROVIDED_SQL_REMOTE_ADDR=true"}),
 	)
 	c.StartServiceForVirtualCluster(
@@ -485,6 +482,19 @@ func runMultitenantSQLProxy(ctx context.Context, t test.Test, c cluster.Cluster)
 		id := string(sessionID[len(sessionID)-1])
 		l.Printf("session ID %s -> pod ID %s", sessionID, id)
 		return id
+	}
+
+	// nodeIDForSession queries the virtual cluster to find which node_id
+	// the given session_id is connected to.
+	nodeIDForSession := func(db *sql.DB, sessionID string) (int, error) {
+		var nodeID int
+		err := db.QueryRow("SELECT node_id FROM crdb_internal.cluster_sessions WHERE session_id = $1", sessionID).Scan(&nodeID)
+		if err != nil {
+			return 0, err
+		}
+
+		t.L().Printf("session ID %s -> node ID %d", sessionID, nodeID)
+		return nodeID, nil
 	}
 
 	// Verify that the proxy is load balancing across multiple sql pods.
@@ -601,6 +611,18 @@ func runMultitenantSQLProxy(ctx context.Context, t test.Test, c cluster.Cluster)
 			err = db.QueryRow("SHOW session_id").Scan(&sessionID)
 			require.NoError(t, err)
 			sqlPodsHit[podID(t.L(), sessionID)] = true
+		}
+
+		// Check which nodes our sessions are actually connected to
+		t.L().Printf("Checking node IDs for all test sessions...")
+		for i, db := range dbConns {
+			var sessionID string
+			err = db.QueryRow("SHOW session_id").Scan(&sessionID)
+			require.NoError(t, err)
+
+			nodeID, err := nodeIDForSession(db, sessionID)
+			require.NoError(t, err)
+			t.L().Printf("Connection %d: session %s is on node %d", i, sessionID, nodeID)
 		}
 
 		require.Equal(t, 1, len(sqlPodsHit))

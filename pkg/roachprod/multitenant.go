@@ -120,6 +120,7 @@ func SQLProxyURL(
 	virtualClusterName string,
 	tenantID int,
 	opts install.SQLProxyOpts,
+	certsDir string,
 ) (string, error) {
 	c, err := GetClusterFromCache(l, clusterName, secure)
 	if err != nil {
@@ -130,7 +131,7 @@ func SQLProxyURL(
 		return "", errors.Errorf("expected 1 node, got %d", len(c.Nodes))
 	}
 
-	return c.SQLProxyURL(c.Nodes[0], virtualClusterName, tenantID, opts), nil
+	return c.SQLProxyURL(c.Nodes[0], virtualClusterName, tenantID, opts, certsDir), nil
 }
 
 // StartProxyDirectory starts a directory server process on the specified node.

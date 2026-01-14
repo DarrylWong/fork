@@ -86,7 +86,7 @@ type Cluster interface {
 	StopProxyDirectory(ctx context.Context, l *logger.Logger, nodes option.NodeListOption, opts install.DirectoryServerOpts) error
 	StartProxy(ctx context.Context, l *logger.Logger, nodes option.NodeListOption, opts install.SQLProxyOpts) error
 	StopProxy(ctx context.Context, l *logger.Logger, nodes option.NodeListOption, opts install.SQLProxyOpts) error
-	ProxyURL(l *logger.Logger, proxyNode option.NodeListOption, virtualClusterName string, tenantID int, opts install.SQLProxyOpts) (string, error)
+	ProxyURL(l *logger.Logger, proxyNode option.NodeListOption, virtualClusterName string, tenantID int, opts install.SQLProxyOpts, external bool) (string, error)
 	ProxyConn(l *logger.Logger, proxyNode option.NodeListOption, virtualClusterName string, tenantID int, opts install.SQLProxyOpts) (*gosql.DB, error)
 
 	// Hostnames and IP addresses of the nodes.

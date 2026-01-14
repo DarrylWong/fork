@@ -270,9 +270,17 @@ func NewBalancer(
 // pod exists for the given tenant, or the tenant has been recently rebalanced,
 // this is a no-op.
 func (b *Balancer) RebalanceTenant(ctx context.Context, tenantID roachpb.TenantID) {
+	log.Dev.Errorf(ctx, "REBALANCE TENANT: Starting rebalance for tenant %s, disableRebalancing=%v", tenantID, b.disableRebalancing)
+
 	// If rebalancing is disabled, or tenant was rebalanced recently, then
 	// RebalanceTenant is a no-op.
-	if b.disableRebalancing || !b.canRebalanceTenant(tenantID) {
+	if b.disableRebalancing {
+		log.Dev.Errorf(ctx, "REBALANCE TENANT: Rebalancing is disabled for tenant %s", tenantID)
+		return
+	}
+
+	if !b.canRebalanceTenant(tenantID) {
+		log.Dev.Errorf(ctx, "REBALANCE TENANT: Tenant %s was rebalanced recently, skipping", tenantID)
 		return
 	}
 
@@ -287,6 +295,7 @@ func (b *Balancer) RebalanceTenant(ctx context.Context, tenantID roachpb.TenantI
 	var hasRunningPod bool
 	for _, pod := range tenantPods {
 		podMap[pod.Addr] = pod
+		log.Dev.Errorf(ctx, "REBALANCE TENANT: Found pod %s for tenant %s, state=%v", pod.Addr, tenantID, pod.State)
 
 		if pod.State == tenant.RUNNING {
 			hasRunningPod = true
@@ -299,10 +308,12 @@ func (b *Balancer) RebalanceTenant(ctx context.Context, tenantID roachpb.TenantI
 	// never scale a tenant from 1 to 0 if there are still active
 	// connections, so this case should not occur.
 	if !hasRunningPod {
+		log.Dev.Errorf(ctx, "REBALANCE TENANT: No RUNNING pod found for tenant %s, skipping rebalance", tenantID)
 		return
 	}
 
 	activeList, idleList := b.connTracker.listAssignments(tenantID)
+	log.Dev.Errorf(ctx, "REBALANCE TENANT: Tenant %s has %d active and %d idle assignments", tenantID, len(activeList), len(idleList))
 	b.rebalancePartition(podMap, activeList)
 	b.rebalancePartition(podMap, idleList)
 }
@@ -401,6 +412,7 @@ func (b *Balancer) rebalanceLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.Ch():
+			log.Dev.Errorf(ctx, "REBALANCE LOOP: Running rebalance cycle")
 			b.rebalance(ctx)
 		}
 	}
@@ -424,6 +436,7 @@ func (b *Balancer) canRebalanceTenant(tenantID roachpb.TenantID) bool {
 func (b *Balancer) rebalance(ctx context.Context) {
 	// getTenantIDs ensures that tenants will have at least one connection.
 	tenantIDs := b.connTracker.getTenantIDs()
+	log.Dev.Errorf(ctx, "REBALANCE: Found %d tenants with connections: %v", len(tenantIDs), tenantIDs)
 	for _, tenantID := range tenantIDs {
 		b.RebalanceTenant(ctx, tenantID)
 	}
@@ -455,14 +468,18 @@ func (b *Balancer) rebalancePartition(
 //
 // NOTE: Elements in the list may be shuffled around once this method returns.
 func (b *Balancer) enqueueRebalanceRequests(list []*ServerAssignment) {
+	log.Dev.Errorf(context.Background(), "ENQUEUE: Enqueuing rebalance requests for %d assignments (rate=%v)", len(list), b.rebalanceRate)
 	toMoveCount := int(math.Ceil(float64(len(list)) * float64(b.rebalanceRate)))
+	log.Dev.Errorf(context.Background(), "ENQUEUE: Will enqueue %d requests (%d * %v)", toMoveCount, len(list), b.rebalanceRate)
 	partition, _ := partitionNRandom(list, toMoveCount)
 	for _, a := range partition {
+		log.Dev.Errorf(context.Background(), "ENQUEUE: Enqueuing rebalance request for assignment %s", a.Addr())
 		b.queue.enqueue(&rebalanceRequest{
 			createdAt: b.timeSource.Now(),
 			conn:      a.Owner(),
 		})
 	}
+	log.Dev.Errorf(context.Background(), "ENQUEUE: Finished enqueuing %d rebalance requests", toMoveCount)
 }
 
 // collectRunningPodAssignments returns a set of ServerAssignments that have to
@@ -582,15 +599,20 @@ func collectRunningPodAssignments(
 func collectDrainingPodAssignments(
 	pods map[string]*tenant.Pod, partition []*ServerAssignment, timeSource timeutil.TimeSource,
 ) []*ServerAssignment {
+	log.Dev.Errorf(context.Background(), "COLLECT DRAINING: Checking %d assignments across %d pods", len(partition), len(pods))
+
 	var collected []*ServerAssignment
 	for _, a := range partition {
 		pod, ok := pods[a.Addr()]
-		if !ok || pod.State != tenant.DRAINING {
-			// We have a connection to the pod, but the pod is not in the
-			// directory cache. This race case happens if the connection was
-			// transferred by a different goroutine to this new pod right after
-			// we fetch the list of pods from the directory cache. Ignore here,
-			// and this connection will be handled on the next rebalance loop.
+		if !ok {
+			log.Dev.Errorf(context.Background(), "COLLECT DRAINING: Assignment %s not found in pod map", a.Addr())
+			continue
+		}
+
+		log.Dev.Errorf(context.Background(), "COLLECT DRAINING: Assignment %s has pod state=%v, timestamp=%v",
+			a.Addr(), pod.State, pod.StateTimestamp)
+
+		if pod.State != tenant.DRAINING {
 			continue
 		}
 
@@ -599,11 +621,19 @@ func collectDrainingPodAssignments(
 		// forth between the DRAINING and RUNNING states. This check prevents us
 		// from moving connections around when that happens.
 		drainingFor := timeSource.Now().Sub(pod.StateTimestamp)
+		log.Dev.Errorf(context.Background(), "COLLECT DRAINING: Pod %s has been draining for %v (minDrainPeriod=%v)",
+			a.Addr(), drainingFor, minDrainPeriod)
+
 		if drainingFor < minDrainPeriod {
+			log.Dev.Errorf(context.Background(), "COLLECT DRAINING: Pod %s not draining long enough, skipping", a.Addr())
 			continue
 		}
+
+		log.Dev.Errorf(context.Background(), "COLLECT DRAINING: Adding assignment %s to be moved (draining for %v)", a.Addr(), drainingFor)
 		collected = append(collected, a)
 	}
+
+	log.Dev.Errorf(context.Background(), "COLLECT DRAINING: Collected %d assignments to be moved", len(collected))
 	return collected
 }
 

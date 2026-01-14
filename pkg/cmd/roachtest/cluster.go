@@ -2372,14 +2372,20 @@ func (c *clusterImpl) StopProxy(
 	)
 }
 
-func (c *clusterImpl) ProxyURL(l *logger.Logger, proxyNode option.NodeListOption, virtualClusterName string, tenantID int, opts install.SQLProxyOpts) (string, error) {
+func (c *clusterImpl) ProxyURL(l *logger.Logger, proxyNode option.NodeListOption, virtualClusterName string, tenantID int, opts install.SQLProxyOpts, external bool) (string, error) {
+	// Use CockroachNodeCertsDir if it's an internal url with access to the node.
+	certsDir := install.CockroachNodeCertsDir
+	if external {
+		certsDir = c.localCertsDir
+	}
 	return roachprod.SQLProxyURL(
-		l, c.MakeNodes(proxyNode), install.SimpleSecureOption(c.IsSecure()), virtualClusterName, tenantID, opts,
+		l, c.MakeNodes(proxyNode), install.SimpleSecureOption(c.IsSecure()), virtualClusterName, tenantID, opts, certsDir,
 	)
 }
 
 func (c *clusterImpl) ProxyConn(l *logger.Logger, proxyNode option.NodeListOption, virtualClusterName string, tenantID int, opts install.SQLProxyOpts) (*gosql.DB, error) {
-	url, err := c.ProxyURL(l, proxyNode, virtualClusterName, tenantID, opts)
+	url, err := c.ProxyURL(l, proxyNode, virtualClusterName, tenantID, opts, true /* external */)
+	l.Printf("connecting to SQL proxy on node %d, url: %s", proxyNode, url)
 	if err != nil {
 		return nil, err
 	}
