@@ -62,7 +62,9 @@ func registerCopy(r registry.Registry) {
 			}
 
 			t.Status("create copy of Bank schema")
-			c.Run(ctx, option.WithNodes(c.Node(1)), "./cockroach workload init bank --rows=0 --ranges=0 {pgurl:1}")
+			if _, err := db.Exec("CREATE TABLE bank.bank (LIKE bank.bank_orig)"); err != nil {
+				t.Fatalf("failed to create copy of Bank schema: %v", err)
+			}
 
 			rangeCount := func() int {
 				var count int
