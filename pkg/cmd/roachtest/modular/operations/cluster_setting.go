@@ -162,3 +162,80 @@ func ChangeClusterSetting(c cluster.Cluster, opts ClusterSettingOptions) modular
 		opts:    opts,
 	}
 }
+
+// ClusterSettingPlan contains the selected setting, value, and revert decision
+type ClusterSettingPlan struct {
+	Setting       ClusterSettingSpec
+	Value         interface{}
+	WillRevert    bool
+	SleepDuration time.Duration
+}
+
+// ChangeClusterSettingDynamic creates a dynamic operation that selects a random cluster setting
+// and value at PrePlan time and changes it during execution.
+func ChangeClusterSettingDynamic(opts ClusterSettingOptions) modular.Operation {
+	// Set defaults
+	if opts.RevertProbability == 0 {
+		opts.RevertProbability = 0.5 // 50% chance of reverting
+	}
+	if opts.Settings == nil {
+		opts.Settings = defaultClusterSettings()
+	}
+
+	builder := modular.NewDynamicOperation[*ClusterSettingPlan]("change cluster setting").
+		PrePlan(func(ctx context.Context, l *logger.Logger, h *modular.Helper) (*ClusterSettingPlan, error) {
+			rng, _ := randutil.NewPseudoRand()
+			selectedSetting := opts.Settings[rng.Intn(len(opts.Settings))]
+			selectedValue := selectedSetting.Values[rng.Intn(len(selectedSetting.Values))]
+			willRevert := rng.Float64() < opts.RevertProbability
+
+			l.Printf("Selected cluster setting %s=%v (revert=%v)", selectedSetting.Name, selectedValue, willRevert)
+
+			return &ClusterSettingPlan{
+				Setting:       selectedSetting,
+				Value:         selectedValue,
+				WillRevert:    willRevert,
+				SleepDuration: opts.SleepDuration,
+			}, nil
+		}).
+		WithRun(func(ctx context.Context, l *logger.Logger, h *modular.Helper, plan *ClusterSettingPlan) error {
+			// Set the cluster setting
+			l.Printf("Setting cluster setting %s to %v", plan.Setting.Name, plan.Value)
+			if err := h.SetClusterSetting(plan.Setting.Name, fmt.Sprintf("%v", plan.Value)); err != nil {
+				return err
+			}
+
+			// Sleep if configured and we're going to revert
+			if plan.WillRevert && plan.SleepDuration > 0 {
+				l.Printf("Sleeping %s before reverting", plan.SleepDuration)
+				time.Sleep(plan.SleepDuration)
+			}
+
+			// Revert if configured
+			if plan.WillRevert {
+				l.Printf("Reverting cluster setting %s to default", plan.Setting.Name)
+				return h.ResetClusterSetting(plan.Setting.Name)
+			}
+
+			return nil
+		}).
+		WithDynamicResourceCallback(func(plan *ClusterSettingPlan) ([]modular.ResourceAccess, []modular.ResourceAccess) {
+			access := modular.ClusterSettingAccess{
+				Name: plan.Setting.Name,
+			}.Resource(true)
+			return []modular.ResourceAccess{access}, []modular.ResourceAccess{access}
+		}).
+		WithDynamicName(func(plan *ClusterSettingPlan) string {
+			name := fmt.Sprintf("set cluster-setting %s to %v", plan.Setting.Name, plan.Value)
+			if plan.WillRevert {
+				name += "/revert"
+			}
+			return name
+		})
+
+	return &ClusterSettingOp{
+		name:    "cluster-setting-dynamic",
+		builder: modular.NewOperation(builder),
+		opts:    opts,
+	}
+}

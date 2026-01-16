@@ -53,7 +53,7 @@ func (a *AddRandomIndexDynamicOp) Timeout() time.Duration {
 // 1. PrePlan: Select a random table with suitable columns (without holding locks)
 // 2. Run: Create the index on the selected table (with proper schema change locks)
 func AddRandomIndexDynamic() modular.Operation {
-	builder := modular.NewDynamicOperation[*IndexPlan]("add random index (dynamic)").
+	builder := modular.NewDynamicOperation[*IndexPlan]("add index").
 		PrePlan(func(ctx context.Context, l *logger.Logger, h *modular.Helper) (*IndexPlan, error) {
 			rng, _ := randutil.NewPseudoRand()
 

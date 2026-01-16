@@ -132,7 +132,7 @@ type AddRandomColumnPlan struct {
 // at PrePlan time and adds a random column to it. This enables proper chain merging
 // since the planner can see which table will be modified before execution.
 func AddRandomColumnDynamic() modular.Operation {
-	builder := modular.NewDynamicOperation[*AddRandomColumnPlan]("add random column (dynamic)").
+	builder := modular.NewDynamicOperation[*AddRandomColumnPlan]("add column").
 		PrePlan(func(ctx context.Context, l *logger.Logger, h *modular.Helper) (*AddRandomColumnPlan, error) {
 			rng, _ := randutil.NewPseudoRand()
 

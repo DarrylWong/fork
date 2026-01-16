@@ -200,7 +200,7 @@ type InspectTablePlan struct {
 // at PrePlan time and runs INSPECT TABLE on it. This enables proper chain merging
 // since the planner can see which table will be inspected before execution.
 func InspectTableDynamic() modular.Operation {
-	builder := modular.NewDynamicOperation[*InspectTablePlan]("INSPECT random table (dynamic)").
+	builder := modular.NewDynamicOperation[*InspectTablePlan]("INSPECT table").
 		PrePlan(func(ctx context.Context, l *logger.Logger, h *modular.Helper) (*InspectTablePlan, error) {
 			// Search for a table to inspect
 			dbName, tableName, err := h.SearchTable(func(dbName, tableName string) bool {

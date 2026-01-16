@@ -16,7 +16,6 @@ import (
 
 // OperationPool manages a pool of operations with filtering and random selection capabilities.
 type OperationPool struct {
-	includePatterns []*regexp.Regexp
 	excludePatterns []*regexp.Regexp
 	rng             *rand.Rand
 }
@@ -25,18 +24,9 @@ type OperationPool struct {
 // Include and exclude patterns are regular expressions matched against operation names.
 // If includePatterns is empty, all operations are included by default.
 // Operations matching any exclude pattern are removed from the pool.
-func NewOperationPool(includePatterns, excludePatterns []string, seed int64) (*OperationPool, error) {
+func NewOperationPool(excludePatterns []string, seed int64) (*OperationPool, error) {
 	pool := &OperationPool{
 		rng: rand.New(rand.NewSource(seed)),
-	}
-
-	// Compile include patterns
-	for _, pattern := range includePatterns {
-		re, err := regexp.Compile(pattern)
-		if err != nil {
-			return nil, errors.Wrapf(err, "invalid include pattern: %s", pattern)
-		}
-		pool.includePatterns = append(pool.includePatterns, re)
 	}
 
 	// Compile exclude patterns
@@ -108,52 +98,8 @@ func (p *OperationPool) RandomSelect(n int) ([]Operation, error) {
 	return selected, nil
 }
 
-// RandomSelectUnique randomly selects n unique operations from the available pool.
-// If n is greater than the number of available operations, all operations are returned.
-// Each operation can only be selected once.
-func (p *OperationPool) RandomSelectUnique(n int) ([]Operation, error) {
-	available, err := p.GetAvailableOperations()
-	if err != nil {
-		return nil, err
-	}
-
-	if len(available) == 0 {
-		return nil, errors.New("no operations available after applying filters")
-	}
-
-	// If requesting more than available, return all
-	if n >= len(available) {
-		return available, nil
-	}
-
-	// Fisher-Yates shuffle to get n random elements
-	shuffled := make([]Operation, len(available))
-	copy(shuffled, available)
-
-	for i := 0; i < n; i++ {
-		j := i + p.rng.Intn(len(shuffled)-i)
-		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
-	}
-
-	return shuffled[:n], nil
-}
-
 // matchesFilters checks if an operation name matches the include/exclude filters.
 func (p *OperationPool) matchesFilters(name string) bool {
-	// If include patterns are specified, name must match at least one
-	if len(p.includePatterns) > 0 {
-		matched := false
-		for _, re := range p.includePatterns {
-			if re.MatchString(name) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return false
-		}
-	}
-
 	// Name must not match any exclude pattern
 	for _, re := range p.excludePatterns {
 		if re.MatchString(name) {

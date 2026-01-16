@@ -136,45 +136,45 @@ func BackupRestore(c cluster.Cluster, opts BackupRestoreOptions) modular.Operati
 
 	builder := modular.NewOperation(
 		modular.NewStep("find database and create full backup", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		// If Database is specified in options, use it directly
-		if opts.Database != "" {
-			dbName = opts.Database
-			l.Printf("using specified database: %s", dbName)
-		} else {
-			// Otherwise, search for a database from the whitelist
+			// If Database is specified in options, use it directly
+			if opts.Database != "" {
+				dbName = opts.Database
+				l.Printf("using specified database: %s", dbName)
+			} else {
+				// Otherwise, search for a database from the whitelist
+				db := h.RandomDBConn()
+
+				foundDB, err := findDatabaseToBackup(ctx, db, opts.DatabaseWhitelist)
+				if err != nil {
+					return fmt.Errorf("failed to find database: %w", err)
+				}
+				if foundDB == "" {
+					l.Printf("did not find a db in the whitelist %v, skipping backup/restore", opts.DatabaseWhitelist)
+					return nil
+				}
+
+				dbName = foundDB
+				l.Printf("found database to backup: %s", dbName)
+			}
+
+			// Create full backup
 			db := h.RandomDBConn()
+			bucket = fmt.Sprintf("gs://%s/operation-backup-restore/%d/?AUTH=implicit", testutils.BackupTestingBucket(), timeutil.Now().UnixNano())
+			backupTS = hlc.Timestamp{WallTime: timeutil.Now().Add(-10 * time.Second).UTC().UnixNano()}
 
-			foundDB, err := findDatabaseToBackup(ctx, db, opts.DatabaseWhitelist)
-			if err != nil {
-				return fmt.Errorf("failed to find database: %w", err)
+			l.Printf("backing up db %s (full) to %s", dbName, bucket)
+
+			var backupSQL string
+			if !opts.Online {
+				backupSQL = fmt.Sprintf("BACKUP DATABASE %s INTO '%s' AS OF SYSTEM TIME '%s' WITH revision_history", dbName, bucket, backupTS.AsOfSystemTime())
+			} else {
+				// Revision history doesn't work with online restore
+				backupSQL = fmt.Sprintf("BACKUP DATABASE %s INTO '%s' AS OF SYSTEM TIME '%s'", dbName, bucket, backupTS.AsOfSystemTime())
 			}
-			if foundDB == "" {
-				l.Printf("did not find a db in the whitelist %v, skipping backup/restore", opts.DatabaseWhitelist)
-				return nil
-			}
 
-			dbName = foundDB
-			l.Printf("found database to backup: %s", dbName)
-		}
-
-		// Create full backup
-		db := h.RandomDBConn()
-		bucket = fmt.Sprintf("gs://%s/operation-backup-restore/%d/?AUTH=implicit", testutils.BackupTestingBucket(), timeutil.Now().UnixNano())
-		backupTS = hlc.Timestamp{WallTime: timeutil.Now().Add(-10 * time.Second).UTC().UnixNano()}
-
-		l.Printf("backing up db %s (full) to %s", dbName, bucket)
-
-		var backupSQL string
-		if !opts.Online {
-			backupSQL = fmt.Sprintf("BACKUP DATABASE %s INTO '%s' AS OF SYSTEM TIME '%s' WITH revision_history", dbName, bucket, backupTS.AsOfSystemTime())
-		} else {
-			// Revision history doesn't work with online restore
-			backupSQL = fmt.Sprintf("BACKUP DATABASE %s INTO '%s' AS OF SYSTEM TIME '%s'", dbName, bucket, backupTS.AsOfSystemTime())
-		}
-
-		_, err := db.ExecContext(ctx, backupSQL)
-		return err
-	}),
+			_, err := db.ExecContext(ctx, backupSQL)
+			return err
+		}),
 	)
 
 	// Add incremental backups for offline restore
@@ -183,19 +183,19 @@ func BackupRestore(c cluster.Cluster, opts BackupRestoreOptions) modular.Operati
 			layer := i // Capture loop variable
 			builder = builder.Then(
 				modular.NewStep(fmt.Sprintf("create incremental backup (layer %d)", layer), func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-				if dbName == "" {
-					return nil // Skip if no database found
-				}
+					if dbName == "" {
+						return nil // Skip if no database found
+					}
 
-				db := h.RandomDBConn()
-				// Update backupTS to match the latest layer
-				backupTS = hlc.Timestamp{WallTime: timeutil.Now().Add(-10 * time.Second).UTC().UnixNano()}
+					db := h.RandomDBConn()
+					// Update backupTS to match the latest layer
+					backupTS = hlc.Timestamp{WallTime: timeutil.Now().Add(-10 * time.Second).UTC().UnixNano()}
 
-				l.Printf("backing up db %s (incremental layer %d)", dbName, layer)
-				backupSQL := fmt.Sprintf("BACKUP DATABASE %s INTO LATEST IN '%s' AS OF SYSTEM TIME '%s' WITH revision_history", dbName, bucket, backupTS.AsOfSystemTime())
-				_, err := db.ExecContext(ctx, backupSQL)
-				return err
-			}),
+					l.Printf("backing up db %s (incremental layer %d)", dbName, layer)
+					backupSQL := fmt.Sprintf("BACKUP DATABASE %s INTO LATEST IN '%s' AS OF SYSTEM TIME '%s' WITH revision_history", dbName, bucket, backupTS.AsOfSystemTime())
+					_, err := db.ExecContext(ctx, backupSQL)
+					return err
+				}),
 			)
 		}
 	}
@@ -209,77 +209,77 @@ func BackupRestore(c cluster.Cluster, opts BackupRestoreOptions) modular.Operati
 
 	builder = builder.Then(
 		modular.NewStep("restore database", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-		if dbName == "" {
-			return nil // Skip if no database found
-		}
-
-		db := h.RandomDBConn()
-		restoreDBName = fmt.Sprintf("backup_restore_op_%d", rng.Int63())
-
-		onlineStr := "offline"
-		if opts.Online {
-			onlineStr = "online"
-		}
-		l.Printf("restoring %s into db %s", onlineStr, restoreDBName)
-
-		startTime := timeutil.Now()
-		if !opts.Online {
-			l.Printf("beginning offline restore")
-			restoreSQL := fmt.Sprintf("RESTORE DATABASE %s FROM LATEST IN '%s' WITH OPTIONS (new_db_name = '%s')", dbName, bucket, restoreDBName)
-			_, err := db.ExecContext(ctx, restoreSQL)
-			if err != nil {
-				return err
-			}
-		} else {
-			l.Printf("beginning online restore")
-			restoreSQL := fmt.Sprintf("RESTORE DATABASE %s FROM LATEST IN '%s' WITH OPTIONS (new_db_name = '%s', EXPERIMENTAL DEFERRED COPY)", dbName, bucket, restoreDBName)
-
-			var id, tables, approxRows, approxBytes int64
-			var downloadJobID catpb.JobID
-			err := db.QueryRowContext(ctx, restoreSQL).Scan(&id, &tables, &approxRows, &approxBytes, &downloadJobID)
-			if err != nil {
-				return fmt.Errorf("failed to start online restore: %w", err)
+			if dbName == "" {
+				return nil // Skip if no database found
 			}
 
-			l.Printf("waiting for online restore download job %d", downloadJobID)
-			if err := waitForRestoreJob(ctx, l, db, downloadJobID, 24*time.Hour); err != nil {
-				return err
+			db := h.RandomDBConn()
+			restoreDBName = fmt.Sprintf("backup_restore_op_%d", rng.Int63())
+
+			onlineStr := "offline"
+			if opts.Online {
+				onlineStr = "online"
 			}
-		}
-		l.Printf("completed restore in %v", timeutil.Since(startTime))
-		return nil
-	}, restoreStepOpts...),
+			l.Printf("restoring %s into db %s", onlineStr, restoreDBName)
+
+			startTime := timeutil.Now()
+			if !opts.Online {
+				l.Printf("beginning offline restore")
+				restoreSQL := fmt.Sprintf("RESTORE DATABASE %s FROM LATEST IN '%s' WITH OPTIONS (new_db_name = '%s')", dbName, bucket, restoreDBName)
+				_, err := db.ExecContext(ctx, restoreSQL)
+				if err != nil {
+					return err
+				}
+			} else {
+				l.Printf("beginning online restore")
+				restoreSQL := fmt.Sprintf("RESTORE DATABASE %s FROM LATEST IN '%s' WITH OPTIONS (new_db_name = '%s', EXPERIMENTAL DEFERRED COPY)", dbName, bucket, restoreDBName)
+
+				var id, tables, approxRows, approxBytes int64
+				var downloadJobID catpb.JobID
+				err := db.QueryRowContext(ctx, restoreSQL).Scan(&id, &tables, &approxRows, &approxBytes, &downloadJobID)
+				if err != nil {
+					return fmt.Errorf("failed to start online restore: %w", err)
+				}
+
+				l.Printf("waiting for online restore download job %d", downloadJobID)
+				if err := waitForRestoreJob(ctx, l, db, downloadJobID, 24*time.Hour); err != nil {
+					return err
+				}
+			}
+			l.Printf("completed restore in %v", timeutil.Since(startTime))
+			return nil
+		}, restoreStepOpts...),
 	)
 
 	// Add validation step if requested (and release lock after validation)
 	if opts.Validate {
 		builder = builder.Then(
 			modular.NewStep("validate restored database", func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-			if dbName == "" || restoreDBName == "" {
-				return nil // Skip if no database found or restore didn't happen
-			}
+				if dbName == "" || restoreDBName == "" {
+					return nil // Skip if no database found or restore didn't happen
+				}
 
-			db := h.RandomDBConn()
-			l.Printf("verifying db %s matches %s", dbName, restoreDBName)
+				db := h.RandomDBConn()
+				l.Printf("verifying db %s matches %s", dbName, restoreDBName)
 
-			sourceFingerprints, err := fingerprintutils.FingerprintDatabase(ctx, db, dbName, fingerprintutils.AOST(backupTS), fingerprintutils.Stripped())
-			if err != nil {
-				return fmt.Errorf("failed to fingerprint source database: %w", err)
-			}
+				sourceFingerprints, err := fingerprintutils.FingerprintDatabase(ctx, db, dbName, fingerprintutils.AOST(backupTS), fingerprintutils.Stripped())
+				if err != nil {
+					return fmt.Errorf("failed to fingerprint source database: %w", err)
+				}
 
-			// No AOST here; the timestamps are rewritten on restore
-			destFingerprints, err := fingerprintutils.FingerprintDatabase(ctx, db, restoreDBName, fingerprintutils.Stripped())
-			if err != nil {
-				return fmt.Errorf("failed to fingerprint restored database: %w", err)
-			}
+				// No AOST here; the timestamps are rewritten on restore
+				destFingerprints, err := fingerprintutils.FingerprintDatabase(ctx, db, restoreDBName, fingerprintutils.Stripped())
+				if err != nil {
+					return fmt.Errorf("failed to fingerprint restored database: %w", err)
+				}
 
-			if !reflect.DeepEqual(sourceFingerprints, destFingerprints) {
-				return fmt.Errorf("backup and restore fingerprints do not match: %v != %v", sourceFingerprints, destFingerprints)
-			}
+				if !reflect.DeepEqual(sourceFingerprints, destFingerprints) {
+					return fmt.Errorf("backup and restore fingerprints do not match: %v != %v", sourceFingerprints, destFingerprints)
+				}
 
-			l.Printf("validation successful: fingerprints match")
-			return nil
-		}, modular.ReleaseLock(restoreRes)),
+				l.Printf("validation successful: fingerprints match")
+				return nil
+			}, modular.ReleaseLock(restoreRes)),
 		)
 	}
 
@@ -302,9 +302,9 @@ func BackupRestore(c cluster.Cluster, opts BackupRestoreOptions) modular.Operati
 
 // BackupRestorePlan contains the table selection and backup details from PrePlan
 type BackupRestorePlan struct {
-	DBName      string
-	TableName   string
-	BackupPath  string
+	DBName        string
+	TableName     string
+	BackupPath    string
 	RestoreDBName string
 }
 
@@ -325,7 +325,7 @@ func BackupRestoreDatabaseDynamic() modular.Operation {
 	var plan *DatabaseBackupPlan
 
 	// First step: Select database and perform full backup
-	dynamicStep := modular.NewDynamicOperation[*DatabaseBackupPlan]("backup random database (dynamic)").
+	dynamicStep := modular.NewDynamicOperation[*DatabaseBackupPlan]("backup database (full)").
 		PrePlan(func(ctx context.Context, l *logger.Logger, h *modular.Helper) (*DatabaseBackupPlan, error) {
 			db := h.RandomDBConn()
 
@@ -382,52 +382,68 @@ func BackupRestoreDatabaseDynamic() modular.Operation {
 	builder := modular.NewOperation(dynamicStep).
 		// Second step: Incremental backup
 		Then(
-		modular.NewStep("create incremental backup",
-			func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-				if plan == nil {
-					return fmt.Errorf("no backup plan available")
-				}
+			modular.NewDynamicStep(
+				"create incremental backup",
+				func(ctx context.Context, l *logger.Logger, h *modular.Helper) (*DatabaseBackupPlan, error) {
+					// Return the existing plan (idempotent)
+					return plan, nil
+				},
+				func(ctx context.Context, l *logger.Logger, h *modular.Helper, p *DatabaseBackupPlan) error {
+					if p == nil {
+						return fmt.Errorf("no backup plan available")
+					}
 
-				db := h.RandomDBConn()
-				newBackupTS := hlc.Timestamp{WallTime: timeutil.Now().Add(-10 * time.Second).UTC().UnixNano()}
+					db := h.RandomDBConn()
+					newBackupTS := hlc.Timestamp{WallTime: timeutil.Now().Add(-10 * time.Second).UTC().UnixNano()}
 
-				l.Printf("Backing up database %s (incremental) to %s", plan.DBName, plan.BackupPath)
-				backupSQL := fmt.Sprintf("BACKUP DATABASE %s INTO LATEST IN '%s' AS OF SYSTEM TIME '%s' WITH revision_history",
-					plan.DBName, plan.BackupPath, newBackupTS.AsOfSystemTime())
+					l.Printf("Backing up database %s (incremental) to %s", p.DBName, p.BackupPath)
+					backupSQL := fmt.Sprintf("BACKUP DATABASE %s INTO LATEST IN '%s' AS OF SYSTEM TIME '%s' WITH revision_history",
+						p.DBName, p.BackupPath, newBackupTS.AsOfSystemTime())
 
-				if _, err := db.ExecContext(ctx, backupSQL); err != nil {
-					return fmt.Errorf("incremental backup failed: %w", err)
-				}
+					if _, err := db.ExecContext(ctx, backupSQL); err != nil {
+						return fmt.Errorf("incremental backup failed: %w", err)
+					}
 
-				return nil
-			},
-		),
-	).
+					return nil
+				},
+				modular.WithDynamicName(func(p *DatabaseBackupPlan) string {
+					return fmt.Sprintf("backup database %s (incremental)", p.DBName)
+				}),
+			),
+		).
 		// Third step: Restore the database
 		Then(
-		modular.NewStep("restore database",
-			func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-				if plan == nil {
-					return fmt.Errorf("no backup plan available")
-				}
+			modular.NewDynamicStep(
+				"restore database",
+				func(ctx context.Context, l *logger.Logger, h *modular.Helper) (*DatabaseBackupPlan, error) {
+					// Return the existing plan (idempotent)
+					return plan, nil
+				},
+				func(ctx context.Context, l *logger.Logger, h *modular.Helper, p *DatabaseBackupPlan) error {
+					if p == nil {
+						return fmt.Errorf("no backup plan available")
+					}
 
-				db := h.RandomDBConn()
+					db := h.RandomDBConn()
 
-				l.Printf("Restoring database as %s", plan.RestoreDBName)
-				restoreSQL := fmt.Sprintf("RESTORE DATABASE %s FROM LATEST IN '%s' WITH new_db_name = '%s'",
-					plan.DBName, plan.BackupPath, plan.RestoreDBName)
+					l.Printf("Restoring database as %s", p.RestoreDBName)
+					restoreSQL := fmt.Sprintf("RESTORE DATABASE %s FROM LATEST IN '%s' WITH new_db_name = '%s'",
+						p.DBName, p.BackupPath, p.RestoreDBName)
 
-				if _, err := db.ExecContext(ctx, restoreSQL); err != nil {
-					return fmt.Errorf("restore failed: %w", err)
-				}
+					if _, err := db.ExecContext(ctx, restoreSQL); err != nil {
+						return fmt.Errorf("restore failed: %w", err)
+					}
 
-				l.Printf("Successfully restored %s to %s", plan.DBName, plan.RestoreDBName)
-				return nil
-			},
-			// Release the lock that was acquired in the backup step
-			modular.ReleaseLock(modular.RestoreAccess{}),
-		),
-	)
+					l.Printf("Successfully restored %s to %s", p.DBName, p.RestoreDBName)
+					return nil
+				},
+				// Release the lock that was acquired in the backup step
+				modular.WithDynamicResourceRelease[*DatabaseBackupPlan](modular.RestoreAccess{}.Resource(true)),
+				modular.WithDynamicName(func(p *DatabaseBackupPlan) string {
+					return fmt.Sprintf("restore database %s", p.DBName)
+				}),
+			),
+		)
 
 	return &BackupRestoreOp{
 		name:    "backup-restore-database-dynamic",
@@ -440,11 +456,8 @@ func BackupRestoreDynamic() modular.Operation {
 	rng, _ := randutil.NewPseudoRand()
 	var plan *BackupRestorePlan
 
-	// Create a shared restore resource that will be populated by PrePlan
-	restoreRes := modular.RestoreAccess{}
-
 	// First step: Select table and perform backup
-	dynamicStep := modular.NewDynamicOperation[*BackupRestorePlan]("backup random table (dynamic)").
+	dynamicStep := modular.NewDynamicOperation[*BackupRestorePlan]("backup table").
 		PrePlan(func(ctx context.Context, l *logger.Logger, h *modular.Helper) (*BackupRestorePlan, error) {
 			// Search for a random table
 			dbName, tableName, err := h.SearchTable(func(dbName, tableName string) bool {
@@ -498,36 +511,44 @@ func BackupRestoreDynamic() modular.Operation {
 	builder := modular.NewOperation(dynamicStep).
 		// Second step: Restore the backed up table
 		Then(
-		modular.NewStep("restore table",
-			func(ctx context.Context, l *logger.Logger, h *modular.Helper) error {
-				if plan == nil {
-					return fmt.Errorf("no backup plan available")
-				}
+			modular.NewDynamicStep(
+				"restore table",
+				func(ctx context.Context, l *logger.Logger, h *modular.Helper) (*BackupRestorePlan, error) {
+					// Return the existing plan (idempotent)
+					return plan, nil
+				},
+				func(ctx context.Context, l *logger.Logger, h *modular.Helper, p *BackupRestorePlan) error {
+					if p == nil {
+						return fmt.Errorf("no backup plan available")
+					}
 
-				db := h.RandomDBConn()
+					db := h.RandomDBConn()
 
-				// Create a new database for restore
-				l.Printf("Creating restore database: %s", plan.RestoreDBName)
-				createDBSQL := fmt.Sprintf("CREATE DATABASE %s", plan.RestoreDBName)
-				if _, err := db.ExecContext(ctx, createDBSQL); err != nil {
-					return fmt.Errorf("create database failed: %w", err)
-				}
+					// Create a new database for restore
+					l.Printf("Creating restore database: %s", p.RestoreDBName)
+					createDBSQL := fmt.Sprintf("CREATE DATABASE %s", p.RestoreDBName)
+					if _, err := db.ExecContext(ctx, createDBSQL); err != nil {
+						return fmt.Errorf("create database failed: %w", err)
+					}
 
-				// Restore the table into the new database
-				l.Printf("Restoring table as %s.%s", plan.RestoreDBName, plan.TableName)
-				restoreSQL := fmt.Sprintf("RESTORE TABLE %s.%s FROM LATEST IN '%s' WITH into_db = '%s'",
-					plan.DBName, plan.TableName, plan.BackupPath, plan.RestoreDBName)
-				if _, err := db.ExecContext(ctx, restoreSQL); err != nil {
-					return fmt.Errorf("restore failed: %w", err)
-				}
+					// Restore the table into the new database
+					l.Printf("Restoring table as %s.%s", p.RestoreDBName, p.TableName)
+					restoreSQL := fmt.Sprintf("RESTORE TABLE %s.%s FROM LATEST IN '%s' WITH into_db = '%s'",
+						p.DBName, p.TableName, p.BackupPath, p.RestoreDBName)
+					if _, err := db.ExecContext(ctx, restoreSQL); err != nil {
+						return fmt.Errorf("restore failed: %w", err)
+					}
 
-				l.Printf("Successfully restored %s.%s to %s.%s", plan.DBName, plan.TableName, plan.RestoreDBName, plan.TableName)
-				return nil
-			},
-			// Release the lock that was acquired in the backup step
-			modular.ReleaseLock(restoreRes),
-		),
-	)
+					l.Printf("Successfully restored %s.%s to %s.%s", p.DBName, p.TableName, p.RestoreDBName, p.TableName)
+					return nil
+				},
+				// Release the lock that was acquired in the backup step
+				modular.WithDynamicResourceRelease[*BackupRestorePlan](modular.RestoreAccess{}.Resource(true)),
+				modular.WithDynamicName(func(p *BackupRestorePlan) string {
+					return fmt.Sprintf("restore %s.%s", p.DBName, p.TableName)
+				}),
+			),
+		)
 
 	return &BackupRestoreOp{
 		name:    "backup-restore-dynamic",

@@ -42,7 +42,7 @@ type NodeRestartPlan struct {
 // NodeRestart creates an operation that randomly selects a node, shuts it down,
 // and then restarts it. Uses DynamicStep to select the node during PrePlan.
 func NodeRestart() modular.Operation {
-	builder := modular.NewDynamicOperation[*NodeRestartPlan]("restart random node").
+	builder := modular.NewDynamicOperation[*NodeRestartPlan]("restart node").
 		PrePlan(func(ctx context.Context, l *logger.Logger, h *modular.Helper) (*NodeRestartPlan, error) {
 			nodeID := h.RandomAvailableNode()
 			l.Printf("Selected node %d for restart", nodeID)

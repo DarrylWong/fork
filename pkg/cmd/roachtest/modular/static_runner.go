@@ -234,8 +234,8 @@ func (r *StaticPlanRunner) executeStage(ctx context.Context, l *logger.Logger, s
 		r.logStep(prefix, step.stepID, step.Description(), stepLogger)
 
 		// Print tracked state after each step for debugging and visibility
-		stateOutput := r.stateTracker.PrintTrackedState()
-		stepLogger.Printf("State after step completion:\n%s", stateOutput)
+		//stateOutput := r.stateTracker.PrintTrackedState()
+		//stepLogger.Printf("State after step completion:\n%s", stateOutput)
 	}
 
 	return nil

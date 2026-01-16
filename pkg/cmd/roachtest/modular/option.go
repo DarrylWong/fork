@@ -1,6 +1,8 @@
 package modular
 
 import (
+	"io"
+
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 )
 
@@ -15,16 +17,27 @@ const (
 
 type debugModules map[debugModule]bool
 
+// nilLogger returns a logger that discards all output.
+func nilLogger() *logger.Logger {
+	cfg := logger.Config{
+		Stdout: io.Discard,
+		Stderr: io.Discard,
+	}
+	l, err := cfg.NewLogger("" /* path */)
+	if err != nil {
+		panic(err)
+	}
+	return l
+}
+
 func (d debugModules) NewLogger(parent *logger.Logger, module debugModule) *logger.Logger {
-	var newLogger *logger.Logger
 	if d != nil && d[module] {
 		// Create a non-quiet logger that logs to modular_debug.txt
-		newLogger, _ = parent.ChildLogger(string(module))
-	} else {
-		// Create a quiet logger that still logs to file but not to stdout/stderr
-		newLogger, _ = parent.ChildLogger(string(module), logger.QuietStdout, logger.QuietStderr)
+		newLogger, _ := parent.ChildLogger(string(module))
+		return newLogger
 	}
-	return newLogger
+	// Debug disabled - return a logger that discards all output
+	return nilLogger()
 }
 
 // WithDebug enables debug logging for specific modules.

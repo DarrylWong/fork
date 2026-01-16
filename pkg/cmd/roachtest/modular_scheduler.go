@@ -23,10 +23,6 @@ type SchedulerConfig struct {
 	// BaseDAGNames are the names of base DAGs to select from. If empty, all are available.
 	BaseDAGNames []string
 
-	// IncludeOperations are regex patterns for operations to include.
-	// If nil or empty, all operations are included by default.
-	IncludeOperations []string
-
 	// ExcludeOperations are regex patterns for operations to exclude.
 	ExcludeOperations []string
 
@@ -61,7 +57,6 @@ func NewScheduler(
 
 	// Create operation pool
 	opPool, err := modular.NewOperationPool(
-		config.IncludeOperations,
 		config.ExcludeOperations,
 		seed,
 	)
@@ -129,9 +124,9 @@ func (s *Scheduler) ExecuteTestPlan(
 	// Create planner
 	planner := modTest.NewPlanner()
 
-	// Generate and log DAG visualization
+	// Print initial DAG (note: dynamic operation names are not finalized yet)
 	dag := planner.DAG()
-	s.logger.Printf("Generated DAG:\n%s", dag)
+	s.logger.Printf("Initial DAG (dynamic operation names will be finalized during execution):\n%s", dag)
 
 	// Execute using dynamic runner (plans one stage at a time)
 	if err := modular.RunDynamicTestPlan(ctx, t, &planner); err != nil {

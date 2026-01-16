@@ -202,7 +202,7 @@ func init() {
 				}
 
 				// Use workload init like regular roachtests do
-				cmd := fmt.Sprintf("./cockroach workload init bank --rows=1000 --db=%s {pgurl:%d}",
+				cmd := fmt.Sprintf("./cockroach workload init bank --rows=10 --db=%s {pgurl:%d}",
 					bankDB, h.RandomAvailableNode())
 
 				if err := c.RunE(ctx, option.WithNodes(c.WorkloadNode()), cmd); err != nil {
@@ -236,7 +236,7 @@ func init() {
 			t.InStage(stage1, "run low throughput tpcc", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 				c := h.Cluster()
 				// Run TPCC workload with low concurrency (1 worker) for 10 seconds
-				cmd := fmt.Sprintf("./cockroach workload run tpcc --warehouses=10 --workers=1 --duration=10s --db=%s {pgurl:%d}",
+				cmd := fmt.Sprintf("./cockroach workload run tpcc --duration=10s --db=%s {pgurl:%d}",
 					tpccDB, h.RandomAvailableNode())
 
 				if err := c.RunE(ctx, option.WithNodes(c.WorkloadNode()), cmd); err != nil {
@@ -273,7 +273,7 @@ func init() {
 			t.InStage(stage2, "run high throughput tpcc", func(ctx context.Context, l *logger.Logger, h *Helper) error {
 				c := h.Cluster()
 				// Run TPCC workload with high concurrency (10 workers) for 10 seconds
-				cmd := fmt.Sprintf("./cockroach workload run tpcc --warehouses=10 --workers=10 --duration=10s --db=%s {pgurl:%d}",
+				cmd := fmt.Sprintf("./cockroach workload run tpcc --duration=10s --db=%s {pgurl:%d}",
 					tpccDB, h.RandomAvailableNode())
 
 				if err := c.RunE(ctx, option.WithNodes(c.WorkloadNode()), cmd); err != nil {

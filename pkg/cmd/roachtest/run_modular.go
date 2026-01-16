@@ -120,7 +120,6 @@ func runModularDemo(cmd *cobra.Command) error {
 	// Create scheduler config
 	config := SchedulerConfig{
 		BaseDAGNames:       baseDAGs,
-		IncludeOperations:  nil, // Include all operations by default
 		ExcludeOperations:  excludeOps,
 		OperationsPerStage: opsPerStage,
 		Seed:               seed,
@@ -272,7 +271,6 @@ func runModularScheduler(cmd *cobra.Command, clusterName string) error {
 	// Create scheduler config
 	config := SchedulerConfig{
 		BaseDAGNames:       baseDAGs,
-		IncludeOperations:  nil, // Include all operations by default
 		ExcludeOperations:  excludeOps,
 		OperationsPerStage: opsPerStage,
 		Seed:               seed,
@@ -294,7 +292,7 @@ func runModularScheduler(cmd *cobra.Command, clusterName string) error {
 		collectModularArtifacts(ctx, l, cluster)
 	}()
 
-	// Run one iteration (t was created earlier and set on the cluster)
+	// Run one iteration
 	if err := scheduler.RunIteration(ctx, t); err != nil {
 		return errors.Wrap(err, "scheduler iteration failed")
 	}

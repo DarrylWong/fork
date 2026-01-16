@@ -131,11 +131,11 @@ func (h *Helper) AlterRange(rangeName, zoneConfig string) error {
 }
 
 // AlterAllRanges alters zone configuration for all system ranges, the default range,
-// and all previously tracked zone configs (tables/databases with explicit overrides).
-// This ensures complete coverage:
+// and all databases in the cluster. This ensures complete coverage by querying the cluster
+// for all existing databases rather than relying on tracked state:
 // - System ranges (meta, system, liveness, timeseries)
 // - Default zone (for future tables)
-// - All previously modified zones (tables/databases with explicit configs)
+// - All databases (applies to all tables in each database, including externally created ones like TPCC)
 func (h *Helper) AlterAllRanges(zoneConfig string) error {
 	// First, update all standard system and default ranges
 	systemRanges := map[string]struct{}{
@@ -152,21 +152,26 @@ func (h *Helper) AlterAllRanges(zoneConfig string) error {
 		}
 	}
 
-	// Collect all tracked zone configs to update
-	var trackedRanges []string
-	h.stateTracker.zoneConfigs.Range(func(key, value interface{}) bool {
-		rangeName := key.(string)
-		// Skip if it's a system range we already updated
-		if _, isSystemRange := systemRanges[rangeName]; !isSystemRange {
-			trackedRanges = append(trackedRanges, rangeName)
-		}
-		return true // continue iteration
-	})
+	// Query for all databases (including system databases) and apply zone config to each
+	rows, err := h.Query("SELECT database_name FROM [SHOW DATABASES]")
+	if err != nil {
+		return fmt.Errorf("failed to query databases: %w", err)
+	}
+	defer rows.Close()
 
-	// Update all tracked zone configs (tables/databases with explicit overrides)
-	for _, rangeName := range trackedRanges {
-		if err := h.AlterRange(rangeName, zoneConfig); err != nil {
-			return fmt.Errorf("failed to alter zone config for %s: %w", rangeName, err)
+	var databases []string
+	for rows.Next() {
+		var dbName string
+		if err := rows.Scan(&dbName); err != nil {
+			return fmt.Errorf("failed to scan database name: %w", err)
+		}
+		databases = append(databases, dbName)
+	}
+
+	// Alter zone config for each database (this applies to all tables in the database)
+	for _, dbName := range databases {
+		if err := h.Exec(fmt.Sprintf("ALTER DATABASE %s CONFIGURE ZONE USING %s", dbName, zoneConfig)); err != nil {
+			return fmt.Errorf("failed to alter zone config for database %s: %w", dbName, err)
 		}
 	}
 

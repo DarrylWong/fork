@@ -16,22 +16,24 @@ func init() {
 	// and registering the created operations with unique names
 
 	// Schema operations
-	modular.RegisterOperation(AddRandomIndex())
 	modular.RegisterOperation(AddRandomIndexDynamic())
 	modular.RegisterOperation(AddRandomColumnDynamic())
 
 	// Workload operations
-	modular.RegisterOperation(InspectTable())
 	modular.RegisterOperation(InspectTableDynamic())
 
 	// Node operations
 	modular.RegisterOperation(NodeRestart())
 
-	// Replication operations
-	modular.RegisterOperation(ReplicationFactorCycle())
+	// Backup/Restore operations
+	modular.RegisterOperation(BackupRestoreDynamic())
+	modular.RegisterOperation(BackupRestoreDatabaseDynamic())
 
-	// Note: TPCC, BackupRestore, and other operations that require parameters
-	// cannot be pre-registered since they need cluster or configuration info.
-	// The scheduler will need to handle these specially or we need to add
-	// parameterless versions.
+	// Cluster setting operations
+	modular.RegisterOperation(ChangeClusterSettingDynamic(ClusterSettingOptions{}))
+
+	// Replication operations
+	// Disabled for now, since its buggy and takes too long when it works.
+	// Its not properly finding user created tables.
+	// modular.RegisterOperation(ReplicationFactorCycle())
 }

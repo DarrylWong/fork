@@ -41,13 +41,12 @@ func RunDynamicTestPlan(ctx context.Context, t test.Test, planner *TestPlanner) 
 
 // NewDynamicRunner creates a new dynamic runner for executing stages one at a time.
 func NewDynamicRunner(planner *TestPlanner) *DynamicPlanRunner {
-	clusterStateLogger := planner.debugModules.NewLogger(planner.logger, ClusterStateDebug)
 	lockManager := NewRuntimeLockManager()
 
 	return &DynamicPlanRunner{
 		planner:       planner,
 		helper:        &Helper{rng: planner.rng, lockManager: lockManager},
-		stateTracker:  NewClusterStateTracker(clusterStateLogger),
+		stateTracker:  NewClusterStateTracker(nilLogger()),
 		lockManager:   lockManager,
 		currentStepID: 0,
 	}
@@ -138,6 +137,13 @@ func (r *DynamicPlanRunner) planStage(stageIdx int) (Stage, stagePlan, error) {
 	// Generate the stage plan
 	plan := r.planner.generateStagePlan(mergedStage)
 
+	// IMPORTANT: Call PrePlan again on the plan steps because generateStagePlan
+	// copies testSteps, losing the planResult we set above. This ensures
+	// the plan steps have their planResult set for execution.
+	if err := r.callPrePlanCallbacks(&plan); err != nil {
+		return Stage{}, stagePlan{}, fmt.Errorf("PrePlan on plan failed: %w", err)
+	}
+
 	// Create concurrent steps
 	r.planner.CreateConcurrentSteps(&plan)
 
@@ -161,7 +167,9 @@ func (r *DynamicPlanRunner) callPrePlanOnStage(stage *Stage) error {
 
 				// Check if this step implements a PrePlan method
 				switch protocol := step.StepProtocol.(type) {
-				case interface{ PrePlan(context.Context, *logger.Logger, *Helper) (interface{}, error) }:
+				case interface {
+					PrePlan(context.Context, *logger.Logger, *Helper) (interface{}, error)
+				}:
 					// This step has a PrePlan method - call it
 					result, err := protocol.PrePlan(ctx, l, r.helper)
 					if err != nil {
@@ -196,7 +204,9 @@ func (r *DynamicPlanRunner) callPrePlanCallbacks(plan *stagePlan) error {
 
 		// Try to extract the underlying step protocol
 		switch protocol := step.StepProtocol.(type) {
-		case interface{ PrePlan(context.Context, *logger.Logger, *Helper) (interface{}, error) }:
+		case interface {
+			PrePlan(context.Context, *logger.Logger, *Helper) (interface{}, error)
+		}:
 			// This step has a PrePlan method - call it
 			result, err := protocol.PrePlan(ctx, l, r.helper)
 			if err != nil {
@@ -212,7 +222,7 @@ func (r *DynamicPlanRunner) callPrePlanCallbacks(plan *stagePlan) error {
 		if concStep, ok := step.StepProtocol.(*concurrentStep); ok {
 			for j := range concStep.steps {
 				nestedStep := &concStep.steps[j]
-				if protocol, ok := nestedStep.StepProtocol.(interface{
+				if protocol, ok := nestedStep.StepProtocol.(interface {
 					PrePlan(context.Context, *logger.Logger, *Helper) (interface{}, error)
 				}); ok {
 					result, err := protocol.PrePlan(ctx, l, r.helper)
@@ -271,8 +281,8 @@ func (r *DynamicPlanRunner) executeStage(ctx context.Context, l *logger.Logger, 
 		r.logStep(fmt.Sprintf("FINISHED [%s]", duration), step.stepID, step.Description(), stepLogger)
 
 		// Print tracked state after each step
-		stateOutput := r.stateTracker.PrintTrackedState()
-		stepLogger.Printf("State after step completion:\n%s", stateOutput)
+		//stateOutput := r.stateTracker.PrintTrackedState()
+		//stepLogger.Printf("State after step completion:\n%s", stateOutput)
 	}
 
 	return nil
@@ -285,7 +295,9 @@ func (r *DynamicPlanRunner) executeStep(ctx context.Context, l *logger.Logger, s
 	if step.planResult != nil {
 		// This is a dynamic step with a plan result - check if we can call RunWithPlan
 		switch protocol := step.StepProtocol.(type) {
-		case interface{ RunWithPlan(context.Context, *logger.Logger, *Helper, interface{}) error }:
+		case interface {
+			RunWithPlan(context.Context, *logger.Logger, *Helper, interface{}) error
+		}:
 			return protocol.RunWithPlan(ctx, l, r.helper, step.planResult)
 		}
 	}
