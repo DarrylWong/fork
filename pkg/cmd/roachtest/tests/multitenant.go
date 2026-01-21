@@ -24,6 +24,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/testutils/sqlutils"
+	"github.com/cockroachdb/cockroach/pkg/util/retry"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
 	"github.com/lib/pq"
@@ -426,8 +427,6 @@ func registerMultiTenantMultiregion(r registry.Registry) {
 // runMultitenantSQLProxyu demonstrates starting a SQL proxy that routes
 // connections to a virtual cluster.
 func runMultitenantSQLProxy(ctx context.Context, t test.Test, c cluster.Cluster) {
-	// Start the storage layer on all nodes in insecure mode (no TLS)
-	t.L().Printf("starting storage cluster")
 	storageNodes := c.All()
 	storageSettings := install.MakeClusterSettings(
 		install.EnvOption([]string{"COCKROACH_TRUST_CLIENT_PROVIDED_SQL_REMOTE_ADDR=true"}),
@@ -462,7 +461,7 @@ func runMultitenantSQLProxy(ctx context.Context, t test.Test, c cluster.Cluster)
 	err = sqlProxy.AddPod(ctx, c.All(), virtualClusterName, 0 /* sqlInstance */)
 	require.NoError(t, err)
 
-	url, err := sqlProxy.URL(ctx, virtualClusterName)
+	url, err := sqlProxy.InternalURL(ctx, virtualClusterName)
 	require.NoError(t, err)
 
 	// Check that the url is constructed properly by using it in a tpcc workload.
@@ -474,16 +473,6 @@ func runMultitenantSQLProxy(ctx context.Context, t test.Test, c cluster.Cluster)
 	c.Run(ctx, option.WithNodes(c.Node(3)), runCmd)
 	require.NoError(t, err)
 
-	// podID returns which pod our session is connected to.
-	// Since it's a SQL pod, we don't have access to information such as node_id
-	// or sql_addr. This is a bit hacky, but we get around this by parsing the session id
-	// which is suffixed by a unique id per SQL pod.
-	podID := func(l *logger.Logger, sessionID string) string {
-		id := string(sessionID[len(sessionID)-1])
-		l.Printf("session ID %s -> pod ID %s", sessionID, id)
-		return id
-	}
-
 	// nodeIDForSession queries the virtual cluster to find which node_id
 	// the given session_id is connected to.
 	nodeIDForSession := func(db *sql.DB, sessionID string) (int, error) {
@@ -493,13 +482,12 @@ func runMultitenantSQLProxy(ctx context.Context, t test.Test, c cluster.Cluster)
 			return 0, err
 		}
 
-		t.L().Printf("session ID %s -> node ID %d", sessionID, nodeID)
 		return nodeID, nil
 	}
 
 	// Verify that the proxy is load balancing across multiple sql pods.
 	func() {
-		sqlPodsHit := make(map[string]bool)
+		sqlPodsHit := make(map[int]bool)
 		dbConns := make([]*sql.DB, 0)
 
 		// The SQL proxy will route connections to the pod with the least amount of
@@ -512,17 +500,16 @@ func runMultitenantSQLProxy(ctx context.Context, t test.Test, c cluster.Cluster)
 		}()
 
 		for i := range len(c.All()) * 3 {
-			testDB, err := sqlProxy.Conn(ctx, virtualClusterName)
+			db, err := sqlProxy.Conn(ctx, virtualClusterName)
 			require.NoError(t, err)
-			dbConns = append(dbConns, testDB)
+			dbConns = append(dbConns, db)
 
-			// Query which backend node this connection landed on
-			// Use crdb_internal.node_id() which works in virtual clusters
 			var sessionID string
-			err = testDB.QueryRow("SHOW session_id").Scan(&sessionID)
+			err = db.QueryRow("SHOW session_id").Scan(&sessionID)
 			require.NoError(t, err)
-
-			sqlPodsHit[podID(t.L(), sessionID)] = true
+			nodeID, err := nodeIDForSession(db, sessionID)
+			require.NoError(t, err)
+			sqlPodsHit[nodeID] = true
 
 			// We expect that the first len(c.All()) connections are evenly distributed across every
 			// pod, as well that subsequent connections after that don't connect to unexpected podIDs.
@@ -535,7 +522,7 @@ func runMultitenantSQLProxy(ctx context.Context, t test.Test, c cluster.Cluster)
 	// Test that if we remove all but one of the sql pods, we should see that all connections now
 	// connect to the same pod.
 	func() {
-		sqlPodsHit := make(map[string]bool)
+		sqlPodsHit := make(map[int]bool)
 		dbConns := make([]*sql.DB, 0)
 		defer func() {
 			for _, db := range dbConns {
@@ -558,7 +545,10 @@ func runMultitenantSQLProxy(ctx context.Context, t test.Test, c cluster.Cluster)
 			var sessionID string
 			err = db.QueryRow("SHOW session_id").Scan(&sessionID)
 			require.NoError(t, err)
-			sqlPodsHit[podID(t.L(), sessionID)] = true
+			nodeID, err := nodeIDForSession(db, sessionID)
+			require.NoError(t, err)
+
+			sqlPodsHit[nodeID] = true
 		}
 
 		require.Equal(t, 1, len(sqlPodsHit))
@@ -569,7 +559,7 @@ func runMultitenantSQLProxy(ctx context.Context, t test.Test, c cluster.Cluster)
 
 	// Test that draining a pod causes existing sessions to be migrated.
 	func() {
-		sqlPodsHit := make(map[string]bool)
+		sqlPodsHit := make(map[int]bool)
 		dbConns := make([]*sql.DB, 0)
 		defer func() {
 			for _, db := range dbConns {
@@ -586,7 +576,9 @@ func runMultitenantSQLProxy(ctx context.Context, t test.Test, c cluster.Cluster)
 			var sessionID string
 			err = db.QueryRow("SHOW session_id").Scan(&sessionID)
 			require.NoError(t, err)
-			sqlPodsHit[podID(t.L(), sessionID)] = true
+			nodeID, err := nodeIDForSession(db, sessionID)
+			require.NoError(t, err)
+			sqlPodsHit[nodeID] = true
 		}
 		require.Equal(t, len(c.All()), len(sqlPodsHit))
 
@@ -599,32 +591,32 @@ func runMultitenantSQLProxy(ctx context.Context, t test.Test, c cluster.Cluster)
 
 		// After draining our other nodes, our existing connections should all be migrated such that
 		// we only connect to one pod. Connections only get migrated after 1 minute of draining to avoid
-		// fluctuation during high load, so lets wait for 2 minutes.
-		select {
-		case <-time.After(2 * time.Minute):
-		case <-ctx.Done():
-			t.Fatal(ctx.Err())
-		}
-		sqlPodsHit = make(map[string]bool)
-		for _, db := range dbConns {
-			var sessionID string
-			err = db.QueryRow("SHOW session_id").Scan(&sessionID)
-			require.NoError(t, err)
-			sqlPodsHit[podID(t.L(), sessionID)] = true
+		// fluctuation during high load, so lets retry for 5 minutes.
+		retryOpts := retry.Options{
+			InitialBackoff: 10 * time.Second,
+			MaxBackoff:     10 * time.Second,
+			MaxDuration:    5 * time.Minute,
 		}
 
-		// Check which nodes our sessions are actually connected to
-		t.L().Printf("Checking node IDs for all test sessions...")
-		for i, db := range dbConns {
-			var sessionID string
-			err = db.QueryRow("SHOW session_id").Scan(&sessionID)
-			require.NoError(t, err)
+		err = retryOpts.Do(ctx, func(ctx context.Context) error {
+			for _, db := range dbConns {
+				var sessionID string
+				err = db.QueryRow("SHOW session_id").Scan(&sessionID)
+				if err != nil {
+					return err
+				}
+				nodeID, err := nodeIDForSession(db, sessionID)
+				if err != nil {
+					return err
+				}
+				sqlPodsHit[nodeID] = true
+			}
 
-			nodeID, err := nodeIDForSession(db, sessionID)
-			require.NoError(t, err)
-			t.L().Printf("Connection %d: session %s is on node %d", i, sessionID, nodeID)
-		}
-
-		require.Equal(t, 1, len(sqlPodsHit))
+			if len(sqlPodsHit) != 1 {
+				return errors.Errorf("expected all sessions to be migrated to a single pod, but connected to %d pods", len(sqlPodsHit))
+			}
+			return nil
+		})
+		require.NoError(t, err)
 	}()
 }

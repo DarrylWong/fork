@@ -70,6 +70,14 @@ func (p *SQLProxy) Start(ctx context.Context) error {
 
 // AddTenant adds a new tenant to the directory server.
 func (p *SQLProxy) AddTenant(ctx context.Context, name string) error {
+	// Enable session revival tokens for connection migration
+	db := p.c.Conn(ctx, p.l, 1)
+	defer db.Close()
+	_, err := db.ExecContext(ctx, `ALTER TENANT $1 SET CLUSTER SETTING server.user_login.session_revival_token.enabled = true`, name)
+	if err != nil {
+		return err
+	}
+
 	tenantID, err := TenantID(ctx, p.l, p.c, name)
 	if err != nil {
 		return err
@@ -304,13 +312,20 @@ func (p *SQLProxy) PodAddr(ctx context.Context, nodes option.NodeListOption, vir
 	return addrs, nil
 }
 
-func (p *SQLProxy) URL(ctx context.Context, virtualClusterName string) (string, error) {
+func (p *SQLProxy) InternalURL(ctx context.Context, virtualClusterName string) (string, error) {
 	tenantID, err := p.TenantID(ctx, virtualClusterName)
 	if err != nil {
 		return "", err
 	}
-	// Use external=false since this URL is for workloads running on cluster nodes
 	return p.c.ProxyURL(p.l, p.proxyNode, virtualClusterName, tenantID, p.proxyOpts, false /* external */)
+}
+
+func (p *SQLProxy) ExternalURL(ctx context.Context, virtualClusterName string) (string, error) {
+	tenantID, err := p.TenantID(ctx, virtualClusterName)
+	if err != nil {
+		return "", err
+	}
+	return p.c.ProxyURL(p.l, p.proxyNode, virtualClusterName, tenantID, p.proxyOpts, true /* external */)
 }
 
 func (p *SQLProxy) Conn(ctx context.Context, virtualClusterName string) (*gosql.DB, error) {

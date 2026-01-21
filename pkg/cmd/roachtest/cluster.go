@@ -2384,12 +2384,14 @@ func (c *clusterImpl) ProxyURL(l *logger.Logger, proxyNode option.NodeListOption
 }
 
 func (c *clusterImpl) ProxyConn(l *logger.Logger, proxyNode option.NodeListOption, virtualClusterName string, tenantID int, opts install.SQLProxyOpts) (*gosql.DB, error) {
-	url, err := c.ProxyURL(l, proxyNode, virtualClusterName, tenantID, opts, true /* external */)
-	l.Printf("connecting to SQL proxy on node %d, url: %s", proxyNode, url)
+	proxyURL, err := c.ProxyURL(l, proxyNode, virtualClusterName, tenantID, opts, true /* external */)
 	if err != nil {
 		return nil, err
 	}
-	return gosql.Open("postgres", url)
+	vals := make(url.Values)
+	vals["allow_unsafe_internals"] = []string{"true"}
+	dataSource := proxyURL + "&" + vals.Encode()
+	return gosql.Open("postgres", dataSource)
 }
 
 // StartProxyDirectory starts a directory server process on the specified node.
