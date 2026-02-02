@@ -94,7 +94,7 @@ func (t *tableDecoder) decodeEvent(
 		return DecodedRow{}, cdcevent.Row{}, errors.Wrap(err, "failed to strip tenant prefix")
 	}
 
-	decodedRow, err := t.decoder.DecodeKV(ctx, event.KeyValue, cdcevent.CurrentRow, event.KeyValue.Value.Timestamp, false)
+	decodedRow, _, err := t.decoder.DecodeKV(ctx, event.KeyValue, cdcevent.CurrentRow, event.KeyValue.Value.Timestamp, false)
 	if err != nil {
 		return DecodedRow{}, cdcevent.Row{}, err
 	}
@@ -117,7 +117,7 @@ func (t *tableDecoder) decodeEvent(
 
 		// TODO(jeffswenson): it would be nice if decoded row has the Timestamp,
 		// but for some reason it is missing from the rangefeed.
-		decodedPrevRow, err := t.decoder.DecodeKV(ctx, prev, cdcevent.PrevRow, event.KeyValue.Value.Timestamp, false)
+		decodedPrevRow, _, err := t.decoder.DecodeKV(ctx, prev, cdcevent.PrevRow, event.KeyValue.Value.Timestamp, false)
 		if err != nil {
 			return DecodedRow{}, cdcevent.Row{}, err
 		}
