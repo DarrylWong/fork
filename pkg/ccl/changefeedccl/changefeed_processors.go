@@ -51,6 +51,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/log/logcrash"
 	"github.com/cockroachdb/cockroach/pkg/util/mon"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
+	"github.com/cockroachdb/cockroach/pkg/util/rangescanstats"
 	"github.com/cockroachdb/cockroach/pkg/util/span"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/cockroach/pkg/util/tracing"
@@ -123,6 +124,7 @@ type changeAggregator struct {
 	agg      *tracing.TracingAggregator
 	aggTimer timeutil.Timer
 
+	statsPoller            *rangescanstats.RangeStatsPoller
 	metrics                *Metrics
 	sliMetrics             *sliMetrics
 	sliMetricsID           int64
@@ -470,6 +472,23 @@ func (ca *changeAggregator) Start(ctx context.Context) {
 		ca.cancel()
 		return
 	}
+
+	laggingRangesThreshold, laggingRangesInterval, err := opts.GetLaggingRangesConfig(ctx, ca.FlowCtx.Cfg.Settings)
+	if err != nil {
+		log.Changefeed.Warningf(ca.Ctx(), "moving to draining due to error getting lagging ranges config: %v", err)
+		ca.MoveToDraining(err)
+		ca.cancel()
+		return
+	}
+	ca.statsPoller = rangescanstats.StartStatsPoller(
+		ctx,
+		laggingRangesInterval,
+		spans,
+		ca.frontier,
+		execCfg.RangeDescIteratorFactory,
+		laggingRangesThreshold,
+	)
+
 	ca.sink = &errorWrapperSink{wrapped: ca.sink}
 	ca.eventConsumer, ca.sink, err = newEventConsumer(
 		ctx, ca.FlowCtx.Cfg, ca.spec, feed, ca.frontier, kvFeedHighWater,
@@ -622,15 +641,7 @@ func makeKVFeedMonitoringCfg(
 	opts changefeedbase.StatementOptions,
 	settings *cluster.Settings,
 ) (kvfeed.MonitoringConfig, error) {
-	laggingRangesThreshold, laggingRangesInterval, err := opts.GetLaggingRangesConfig(ctx, settings)
-	if err != nil {
-		return kvfeed.MonitoringConfig{}, err
-	}
 	return kvfeed.MonitoringConfig{
-		LaggingRangesCallback:        sliMetrics.getLaggingRangesCallback(),
-		LaggingRangesThreshold:       laggingRangesThreshold,
-		LaggingRangesPollingInterval: laggingRangesInterval,
-
 		OnBackfillCallback:      sliMetrics.getBackfillCallback(),
 		OnBackfillRangeCallback: sliMetrics.getBackfillRangeCallback(),
 	}, nil
@@ -729,6 +740,10 @@ func (ca *changeAggregator) close() {
 	// data is deleted and not included in metrics.
 	if ca.sliMetrics != nil {
 		ca.sliMetrics.closeId(ca.sliMetricsID)
+	}
+
+	if ca.statsPoller != nil {
+		ca.statsPoller.Close()
 	}
 
 	ca.memAcc.Close(ca.Ctx())
@@ -995,7 +1010,9 @@ func (ca *changeAggregator) emitResolved(batch jobspb.ResolvedSpans) error {
 	progressUpdate := jobspb.ResolvedSpans{
 		ResolvedSpans: batch.ResolvedSpans,
 		Stats: jobspb.ResolvedSpans_Stats{
+			SenderID:      ca.spec.ProcessorID,
 			RecentKvCount: ca.recentKVCount,
+			RangeStats:    ca.statsPoller.MaybeStats(),
 		},
 	}
 	if log.V(2) {
@@ -1110,6 +1127,9 @@ type changeFrontier struct {
 	usageWgCancel context.CancelFunc
 
 	targets changefeedbase.Targets
+
+	// rangeStatsCollector aggregates range stats from all aggregators.
+	rangeStatsCollector rangescanstats.AggregateRangeStatsCollector
 }
 
 const (
@@ -1263,11 +1283,12 @@ func newChangeFrontierProcessor(
 	cf := &changeFrontier{
 		// We might modify the ChangefeedState field in the eval.Context, so we
 		// need to make a copy.
-		evalCtx:       flowCtx.NewEvalCtx(),
-		spec:          spec,
-		memAcc:        memMonitor.MakeBoundAccount(),
-		input:         input,
-		usageWgCancel: func() {},
+		evalCtx:             flowCtx.NewEvalCtx(),
+		spec:                spec,
+		memAcc:              memMonitor.MakeBoundAccount(),
+		input:               input,
+		usageWgCancel:       func() {},
+		rangeStatsCollector: rangescanstats.NewAggregateRangeStatsCollector(int(spec.NumAggregators)),
 	}
 
 	defer func() {
@@ -1739,6 +1760,12 @@ func (cf *changeFrontier) noteAggregatorProgress(ctx context.Context, d rowenc.E
 
 	cf.maybeMarkJobIdle(resolvedSpans.Stats.RecentKvCount)
 
+	if resolvedSpans.Stats.RangeStats != nil {
+		cf.rangeStatsCollector.Add(resolvedSpans.Stats.SenderID, resolvedSpans.Stats.RangeStats)
+		//TODO when do we decide to rollup stats?
+		cf.aggregateAndUpdateRangeMetrics()
+	}
+
 	for _, resolved := range resolvedSpans.ResolvedSpans {
 		// Inserting a timestamp less than the one the changefeed flow started at
 		// could potentially regress the job progress. This is not expected, but it
@@ -1811,6 +1838,17 @@ func (cf *changeFrontier) maybeMarkJobIdle(recentKVCount uint64) {
 
 	isIdle := timeutil.Since(cf.latestResolvedKV) > idleTimeout
 	cf.js.job.MarkIdle(isIdle)
+}
+
+// aggregateAndUpdateRangeMetrics aggregates range stats from all aggregators
+// and updates the metrics with the rolled-up total.
+func (cf *changeFrontier) aggregateAndUpdateRangeMetrics() {
+	rolledUpStats, _, _ := cf.rangeStatsCollector.RollupStats()
+	if rolledUpStats.RangeCount != 0 {
+		cf.sliMetrics.ScanningRanges.Update(rolledUpStats.ScanningRangeCount)
+		cf.sliMetrics.LaggingRanges.Update(rolledUpStats.LaggingRangeCount)
+		cf.sliMetrics.TotalRanges.Update(rolledUpStats.RangeCount)
+	}
 }
 
 func (cf *changeFrontier) maybeCheckpointJob(
