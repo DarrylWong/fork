@@ -51,6 +51,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/log/logcrash"
 	"github.com/cockroachdb/cockroach/pkg/util/mon"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
+	"github.com/cockroachdb/cockroach/pkg/util/rangescanstats"
 	"github.com/cockroachdb/cockroach/pkg/util/span"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/cockroach/pkg/util/tracing"
@@ -123,6 +124,7 @@ type changeAggregator struct {
 	agg      *tracing.TracingAggregator
 	aggTimer timeutil.Timer
 
+	statsPoller            *rangescanstats.RangeStatsPoller
 	metrics                *Metrics
 	sliMetrics             *sliMetrics
 	sliMetricsID           int64
@@ -470,6 +472,24 @@ func (ca *changeAggregator) Start(ctx context.Context) {
 		ca.cancel()
 		return
 	}
+
+	laggingRangesThreshold, laggingRangesInterval, err := opts.GetLaggingRangesConfig(ctx, ca.FlowCtx.Cfg.Settings)
+	if err != nil {
+		log.Changefeed.Warningf(ca.Ctx(), "moving to draining due to error getting lagging ranges config: %v", err)
+		ca.MoveToDraining(err)
+		ca.cancel()
+		return
+	}
+	ca.statsPoller = rangescanstats.StartStatsPoller(
+		ctx,
+		laggingRangesInterval,
+		spans,
+		ca.frontier,
+		execCfg.RangeDescIteratorFactory,
+		laggingRangesThreshold,
+		ca.sliMetrics.getRangeStatsCallback(),
+	)
+
 	ca.sink = &errorWrapperSink{wrapped: ca.sink}
 	ca.eventConsumer, ca.sink, err = newEventConsumer(
 		ctx, ca.FlowCtx.Cfg, ca.spec, feed, ca.frontier, kvFeedHighWater,
@@ -622,15 +642,7 @@ func makeKVFeedMonitoringCfg(
 	opts changefeedbase.StatementOptions,
 	settings *cluster.Settings,
 ) (kvfeed.MonitoringConfig, error) {
-	laggingRangesThreshold, laggingRangesInterval, err := opts.GetLaggingRangesConfig(ctx, settings)
-	if err != nil {
-		return kvfeed.MonitoringConfig{}, err
-	}
 	return kvfeed.MonitoringConfig{
-		LaggingRangesCallback:        sliMetrics.getLaggingRangesCallback(),
-		LaggingRangesThreshold:       laggingRangesThreshold,
-		LaggingRangesPollingInterval: laggingRangesInterval,
-
 		OnBackfillCallback:      sliMetrics.getBackfillCallback(),
 		OnBackfillRangeCallback: sliMetrics.getBackfillRangeCallback(),
 	}, nil
@@ -729,6 +741,10 @@ func (ca *changeAggregator) close() {
 	// data is deleted and not included in metrics.
 	if ca.sliMetrics != nil {
 		ca.sliMetrics.closeId(ca.sliMetricsID)
+	}
+
+	if ca.statsPoller != nil {
+		ca.statsPoller.Close()
 	}
 
 	ca.memAcc.Close(ca.Ctx())

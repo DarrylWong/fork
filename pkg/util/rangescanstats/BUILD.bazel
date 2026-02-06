@@ -21,7 +21,6 @@ go_test(
     srcs = ["stats_test.go"],
     embed = [":rangescanstats"],
     deps = [
-        "//pkg/repstream/streampb",
         "//pkg/roachpb",
         "//pkg/testutils",
         "//pkg/util/hlc",

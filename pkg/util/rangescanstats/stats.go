@@ -28,6 +28,9 @@ type RangeStatsPoller struct {
 	stats  atomic.Pointer[rangescanstatspb.RangeStats]
 }
 
+// StatsHandlerFunc is a function that consumes polled range stats.
+type StatsHandlerFunc func(r *RangeStatsPoller, totalRangeCount, scanningRangeCount, laggingRangeCount int64)
+
 func StartStatsPoller(
 	ctx context.Context,
 	interval time.Duration,
@@ -35,6 +38,7 @@ func StartStatsPoller(
 	frontier span.Frontier,
 	ranges rangedesc.IteratorFactory,
 	laggingSpanThreshold time.Duration,
+	callbackFunc StatsHandlerFunc,
 ) *RangeStatsPoller {
 	ctx, cancel := context.WithCancel(ctx)
 	poller := &RangeStatsPoller{
@@ -45,14 +49,14 @@ func StartStatsPoller(
 		tick := time.NewTicker(interval)
 		defer tick.Stop()
 		for {
-			stats, err := computeRangeStats(ctx, spans, frontier, ranges, laggingSpanThreshold)
+			totalRangeCount, scanningRangeCount, laggingRangeCount, err := computeRangeStats(ctx, spans, frontier, ranges, laggingSpanThreshold)
 			if err != nil {
 				log.Dev.Warningf(ctx, "unable to calculate range scan stats: %v", err)
 			} else {
-				poller.stats.Store(&stats)
+				callbackFunc(poller, totalRangeCount, scanningRangeCount, laggingRangeCount)
 			}
 
-			log.VEventf(ctx, 1, "publishing range scan stats: %+v", stats)
+			log.VEventf(ctx, 1, "publishing range scan stats: totalRanges=%d, scanningRanges=%d, laggingRanges=%d", totalRangeCount, scanningRangeCount, laggingRangeCount)
 
 			select {
 			case <-ctx.Done():
@@ -77,18 +81,28 @@ func (r *RangeStatsPoller) MaybeStats() *rangescanstatspb.RangeStats {
 	return r.stats.Load()
 }
 
+// StoreStatsHandler is a StatsHandler that stores the most recent stats in
+// the given RangeStatsPoller. The stats can be retrieved using MaybeStats.
+func StoreStatsHandler(r *RangeStatsPoller, totalRangeCount, scanningRangeCount, laggingRangeCount int64) {
+	stats := &rangescanstatspb.RangeStats{
+		RangeCount:         totalRangeCount,
+		ScanningRangeCount: scanningRangeCount,
+		LaggingRangeCount:  laggingRangeCount,
+	}
+	r.stats.Store(stats)
+}
+
 func computeRangeStats(
 	ctx context.Context,
 	spans []roachpb.Span,
 	frontier span.Frontier,
 	ranges rangedesc.IteratorFactory,
 	laggingSpanThreshold time.Duration,
-) (rangescanstatspb.RangeStats, error) {
-	var stats rangescanstatspb.RangeStats
+) (totalRangeCount int64, scanningRangeCount int64, laggingRangeCount int64, err error) {
 	for _, initialSpan := range spans {
 		lazyIterator, err := ranges.NewLazyIterator(ctx, initialSpan, 100)
 		if err != nil {
-			return rangescanstatspb.RangeStats{}, err
+			return 0, 0, 0, err
 		}
 		for ; lazyIterator.Valid(); lazyIterator.Next() {
 			now := timeutil.Now()
@@ -96,20 +110,20 @@ func computeRangeStats(
 				Key:    lazyIterator.CurRangeDescriptor().StartKey.AsRawKey(),
 				EndKey: lazyIterator.CurRangeDescriptor().EndKey.AsRawKey(),
 			}
-			stats.RangeCount += 1
+			totalRangeCount += 1
 			for _, timestamp := range frontier.SpanEntries(rangeSpan) {
 				if timestamp.IsEmpty() {
-					stats.ScanningRangeCount += 1
+					scanningRangeCount += 1
 					break
 				} else if now.Sub(timestamp.GoTime()) > laggingSpanThreshold {
-					stats.LaggingRangeCount += 1
+					laggingRangeCount += 1
 					break
 				}
 			}
 		}
 		if lazyIterator.Error() != nil {
-			return rangescanstatspb.RangeStats{}, lazyIterator.Error()
+			return 0, 0, 0, lazyIterator.Error()
 		}
 	}
-	return stats, nil
+	return totalRangeCount, scanningRangeCount, laggingRangeCount, nil
 }

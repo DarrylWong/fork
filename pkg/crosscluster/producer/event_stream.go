@@ -190,7 +190,7 @@ func (s *eventStream) Start(ctx context.Context, txn *kv.Txn) (retErr error) {
 		log.Dev.Infof(ctx, "resuming event stream (no initial scan) from %s", initialTimestamp)
 	}
 
-	s.stats = rangescanstats.StartStatsPoller(ctx, time.Minute, s.spec.Spans, s.frontier, s.execCfg.RangeDescIteratorFactory, laggingSpanThreshold)
+	s.stats = rangescanstats.StartStatsPoller(ctx, time.Minute, s.spec.Spans, s.frontier, s.execCfg.RangeDescIteratorFactory, laggingSpanThreshold, rangescanstats.StoreStatsHandler)
 
 	// Reserve batch kvsSize bytes from monitor.  We might have to do something more fancy
 	// in the future, but for now, grabbing chunk of memory from the monitor would do the trick.

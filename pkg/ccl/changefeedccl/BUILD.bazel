@@ -162,6 +162,7 @@ go_library(
         "//pkg/util/protoutil",
         "//pkg/util/quotapool",
         "//pkg/util/randutil",
+        "//pkg/util/rangescanstats",
         "//pkg/util/retry",
         "//pkg/util/span",
         "//pkg/util/syncutil",
