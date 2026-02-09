@@ -58,7 +58,7 @@ type eventStream struct {
 	rf    *rangefeed.RangeFeed
 	mon   *mon.BytesMonitor
 	acc   mon.BoundAccount
-	stats *rangescanstats.RangeStatsPoller
+	stats *rangescanstats.AsyncRangeStatsPoller
 
 	// The remaining fields are used to process rangefeed messages.
 	seb                streamEventBatcher
@@ -190,8 +190,7 @@ func (s *eventStream) Start(ctx context.Context, txn *kv.Txn) (retErr error) {
 		log.Dev.Infof(ctx, "resuming event stream (no initial scan) from %s", initialTimestamp)
 	}
 
-	s.stats = rangescanstats.StartStatsPoller(ctx, time.Minute, s.spec.Spans, s.frontier, s.execCfg.RangeDescIteratorFactory, laggingSpanThreshold)
-
+	s.stats = rangescanstats.StartAsyncStatsPoller(ctx, time.Minute, s.spec.Spans, s.frontier, s.execCfg.RangeDescIteratorFactory, laggingSpanThreshold)
 	// Reserve batch kvsSize bytes from monitor.  We might have to do something more fancy
 	// in the future, but for now, grabbing chunk of memory from the monitor would do the trick.
 	if err := s.acc.Grow(ctx, s.spec.Config.BatchByteSize); err != nil {

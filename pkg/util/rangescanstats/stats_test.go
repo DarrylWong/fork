@@ -153,7 +153,7 @@ func TestNewPoller(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			poller := StartStatsPoller(context.Background(), time.Minute, trackedSpans, frontier, ranges, laggingSpanThreshold)
+			poller := StartAsyncStatsPoller(context.Background(), time.Minute, trackedSpans, frontier, ranges, laggingSpanThreshold)
 			testutils.SucceedsSoon(t, func() error {
 				stats := poller.stats.Load()
 				if stats == nil {

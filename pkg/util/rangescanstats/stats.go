@@ -7,7 +7,6 @@ package rangescanstats
 
 import (
 	"context"
-	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
@@ -17,7 +16,40 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/rangescanstats/rangescanstatspb"
 	"github.com/cockroachdb/cockroach/pkg/util/span"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
+	"sync/atomic"
 )
+
+// AsyncRangeStatsPoller is a thin wrapper around RangeStatsPoller that stores the most
+// recent stats to be asynchronously consumed via MaybeStats.
+type AsyncRangeStatsPoller struct {
+	*RangeStatsPoller
+	stats atomic.Pointer[rangescanstatspb.RangeStats]
+}
+
+// MaybeStats returns the most recent stats if they are available or null if
+// the initial stats calculation is not ready.
+func (p *AsyncRangeStatsPoller) MaybeStats() *rangescanstatspb.RangeStats {
+	return p.stats.Load()
+}
+
+func (p *AsyncRangeStatsPoller) updateStats(stats *rangescanstatspb.RangeStats) {
+	p.stats.Store(stats)
+}
+
+func StartAsyncStatsPoller(
+	ctx context.Context,
+	interval time.Duration,
+	spans []roachpb.Span,
+	frontier span.Frontier,
+	ranges rangedesc.IteratorFactory,
+	laggingSpanThreshold time.Duration,
+) *AsyncRangeStatsPoller {
+	asyncPoller := &AsyncRangeStatsPoller{}
+	asyncPoller.RangeStatsPoller = StartStatsPoller(
+		ctx, interval, spans, frontier, ranges, laggingSpanThreshold, asyncPoller.updateStats,
+	)
+	return asyncPoller
+}
 
 // RangeStatsPoller manages a goroutine that polls the total number of ranges
 // and their scanning status. Close must be called to avoid leaking the
@@ -25,8 +57,10 @@ import (
 type RangeStatsPoller struct {
 	cancel func()
 	g      ctxgroup.Group
-	stats  atomic.Pointer[rangescanstatspb.RangeStats]
 }
+
+// StatsHandlerFunc is a function that consumes polled range stats.
+type StatsHandlerFunc func(stats *rangescanstatspb.RangeStats)
 
 func StartStatsPoller(
 	ctx context.Context,
@@ -35,6 +69,7 @@ func StartStatsPoller(
 	frontier span.Frontier,
 	ranges rangedesc.IteratorFactory,
 	laggingSpanThreshold time.Duration,
+	callbackFunc StatsHandlerFunc,
 ) *RangeStatsPoller {
 	ctx, cancel := context.WithCancel(ctx)
 	poller := &RangeStatsPoller{
@@ -49,7 +84,7 @@ func StartStatsPoller(
 			if err != nil {
 				log.Dev.Warningf(ctx, "unable to calculate range scan stats: %v", err)
 			} else {
-				poller.stats.Store(&stats)
+				callbackFunc(&stats)
 			}
 
 			log.VEventf(ctx, 1, "publishing range scan stats: %+v", stats)
@@ -69,12 +104,6 @@ func StartStatsPoller(
 func (r *RangeStatsPoller) Close() {
 	r.cancel()
 	_ = r.g.Wait()
-}
-
-// MaybeStats returns the most recent stats if they are available or null if
-// the initial stats calculation is not ready.
-func (r *RangeStatsPoller) MaybeStats() *rangescanstatspb.RangeStats {
-	return r.stats.Load()
 }
 
 func computeRangeStats(
