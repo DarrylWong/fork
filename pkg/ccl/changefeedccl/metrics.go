@@ -89,6 +89,7 @@ type AggMetrics struct {
 	AggregatorProgress          *aggmetric.AggGauge
 	CheckpointProgress          *aggmetric.AggGauge
 	LaggingRanges               *aggmetric.AggGauge
+	ScanningRanges              *aggmetric.AggGauge
 	TotalRanges                 *aggmetric.AggGauge
 	CloudstorageBufferedBytes   *aggmetric.AggGauge
 	KafkaThrottlingNanos        *aggmetric.AggHistogram
@@ -180,6 +181,7 @@ type sliMetrics struct {
 	AggregatorProgress          *aggmetric.Gauge
 	CheckpointProgress          *aggmetric.Gauge
 	LaggingRanges               *aggmetric.Gauge
+	ScanningRanges              *aggmetric.Gauge
 	TotalRanges                 *aggmetric.Gauge
 	CloudstorageBufferedBytes   *aggmetric.Gauge
 	KafkaThrottlingNanos        *aggmetric.Histogram
@@ -1124,6 +1126,13 @@ func newAggregateMetrics(histogramWindow time.Duration, lookup *cidr.Lookup) *Ag
 		Unit:        metric.Unit_COUNT,
 		Category:    metric.Metadata_CHANGEFEEDS,
 	}
+	metaScanningRanges := metric.Metadata{
+		Name:        "changefeed.scanning_ranges",
+		Help:        "The number of ranges undergoing an initial scan",
+		Measurement: "Ranges",
+		Unit:        metric.Unit_COUNT,
+		Category:    metric.Metadata_CHANGEFEEDS,
+	}
 	metaTotalRanges := metric.Metadata{
 		Name:        "changefeed.total_ranges",
 		Help:        "The total number of ranges being watched by changefeed aggregators",
@@ -1285,6 +1294,7 @@ func newAggregateMetrics(histogramWindow time.Duration, lookup *cidr.Lookup) *Ag
 		AggregatorProgress:        b.FunctionalGauge(metaAggregatorProgress, functionalGaugeMinFn),
 		CheckpointProgress:        b.FunctionalGauge(metaCheckpointProgress, functionalGaugeMinFn),
 		LaggingRanges:             b.Gauge(metaLaggingRanges),
+		ScanningRanges:            b.Gauge(metaScanningRanges),
 		TotalRanges:               b.Gauge(metaTotalRanges),
 		CloudstorageBufferedBytes: b.Gauge(metaCloudstorageBufferedBytes),
 		KafkaThrottlingNanos: b.Histogram(metric.HistogramOptions{
@@ -1368,6 +1378,7 @@ func (a *AggMetrics) getOrCreateScope(scope string) (*sliMetrics, error) {
 		SchemaRegistryRetries:       a.SchemaRegistryRetries.AddChild(scope),
 		SchemaRegistrations:         a.SchemaRegistrations.AddChild(scope),
 		LaggingRanges:               a.LaggingRanges.AddChild(scope),
+		ScanningRanges:              a.ScanningRanges.AddChild(scope),
 		TotalRanges:                 a.TotalRanges.AddChild(scope),
 		CloudstorageBufferedBytes:   a.CloudstorageBufferedBytes.AddChild(scope),
 		KafkaThrottlingNanos:        a.KafkaThrottlingNanos.AddChild(scope),
@@ -1438,6 +1449,8 @@ func (a *AggMetrics) getOrCreateScope(scope string) (*sliMetrics, error) {
 // getLaggingRangesCallback returns a function which can be called to update the
 // lagging ranges metric. It should be called with the current number of lagging
 // ranges.
+// TODO(darryl): This can be removed once we no longer have to maintain backwards
+// compatibility v26.1 metrics.
 func (m *sliMetrics) getLaggingRangesCallback() func(lagging int64, total int64) {
 	// Because this gauge is shared between changefeeds in the same metrics scope,
 	// we must instead modify it using `Inc` and `Dec` (as opposed to `Update`) to
@@ -1467,6 +1480,45 @@ func (m *sliMetrics) getLaggingRangesCallback() func(lagging int64, total int64)
 
 		m.TotalRanges.Dec(last.total - total)
 		last.total = total
+	}
+}
+
+// getRangeStatsCallback returns a function which can be called to update the
+// range statistics metrics (TotalRanges, ScanningRanges, LaggingRanges). It
+// should be called with RangeStats containing the current counts.
+func (m *sliMetrics) getRangeStatsCallback() func(total, scanning, lagging int64) {
+	// Because these gauges are shared between changefeeds in the same metrics
+	// scope, we must instead modify them using `Inc` and `Dec` (as opposed to
+	// `Update`) to ensure values written by others are not overwritten. The code
+	// below is used to determine the deltas based on the last known values.
+	//
+	// Example:
+	//
+	// Initially there are 0 lagging ranges, so `last` is 0. Assume the gauge
+	// has an arbitrary value X.
+	//
+	// If 10 ranges are behind, last=0,i=10: X.Dec(0 - 10) = X.Inc(10)
+	// If 3 ranges catch up, last=10,i=7: X.Dec(10 - 7) = X.Dec(3)
+	// If 4 ranges fall behind, last=7,i=11: X.Dec(7 - 11) = X.Inc(4)
+	// If 1 lagging range is deleted, last=7,i=10: X.Dec(11-10) = X.Dec(1)
+	last := struct {
+		syncutil.Mutex
+		total    int64
+		scanning int64
+		lagging  int64
+	}{}
+	return func(total, scanning, lagging int64) {
+		last.Lock()
+		defer last.Unlock()
+
+		m.TotalRanges.Dec(last.total - total)
+		last.total = total
+
+		m.ScanningRanges.Dec(last.scanning - scanning)
+		last.scanning = scanning
+
+		m.LaggingRanges.Dec(last.lagging - lagging)
+		last.lagging = lagging
 	}
 }
 

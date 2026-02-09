@@ -18,6 +18,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/kvevent"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/schemafeed"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/timers"
+	"github.com/cockroachdb/cockroach/pkg/clusterversion"
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/kv"
@@ -149,7 +150,7 @@ func Run(ctx context.Context, cfg Config) error {
 		sc, pff, bf, cfg.Targets, cfg.ScopedTimers, cfg.Knobs)
 	f.onBackfillCallback = cfg.MonitoringCfg.OnBackfillCallback
 	f.rangeObserver = startLaggingRangesObserver(g, cfg.MonitoringCfg.LaggingRangesCallback,
-		cfg.MonitoringCfg.LaggingRangesPollingInterval, cfg.MonitoringCfg.LaggingRangesThreshold)
+		cfg.MonitoringCfg.LaggingRangesPollingInterval, cfg.MonitoringCfg.LaggingRangesThreshold, cfg.Settings)
 
 	g.GoCtx(cfg.SchemaFeed.Run)
 	g.GoCtx(f.run)
@@ -200,9 +201,16 @@ func startLaggingRangesObserver(
 	updateLaggingRanges func(lagging int64, total int64),
 	pollingInterval time.Duration,
 	threshold time.Duration,
+	settings *cluster.Settings,
 ) kvcoord.RangeObserver {
 	return func(fn kvcoord.ForEachRangeFn) {
 		g.GoCtx(func(ctx context.Context) error {
+			// Usual case: our cluster is likely to already be on v26.2, so avoid
+			// starting the observer at all.
+			if settings.Version.IsActive(ctx, clusterversion.V26_2_Start) {
+				return nil
+			}
+
 			// Reset metrics on shutdown.
 			defer func() {
 				updateLaggingRanges(0 /* lagging */, 0 /* total */)
@@ -217,6 +225,12 @@ func startLaggingRangesObserver(
 				case <-ctx.Done():
 					return ctx.Err()
 				case <-timer.C:
+					// Stop the observer once the cluster is on v26.2 or later, as the new
+					// RangeStatsPoller will handle all range metrics.
+					if settings.Version.IsActive(ctx, clusterversion.V26_2_Start) {
+						return nil
+					}
+
 					var laggingCount, totalCount int64
 					thresholdTS := timeutil.Now().Add(-1 * threshold)
 					err := fn(func(rfCtx kvcoord.RangeFeedContext, feed kvcoord.PartialRangeFeed) error {

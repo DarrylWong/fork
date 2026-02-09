@@ -51,6 +51,8 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/log/logcrash"
 	"github.com/cockroachdb/cockroach/pkg/util/mon"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
+	"github.com/cockroachdb/cockroach/pkg/util/rangescanstats"
+	"github.com/cockroachdb/cockroach/pkg/util/rangescanstats/rangescanstatspb"
 	"github.com/cockroachdb/cockroach/pkg/util/span"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/cockroach/pkg/util/tracing"
@@ -1104,6 +1106,9 @@ type changeFrontier struct {
 	agg      *tracing.TracingAggregator
 	aggTimer timeutil.Timer
 
+	statsPoller         *rangescanstats.RangeStatsPoller
+	updateStatsCallback func(total, scanning, lagging int64)
+
 	knobs TestingKnobs
 
 	usageWg       sync.WaitGroup
@@ -1528,6 +1533,7 @@ func (cf *changeFrontier) Start(ctx context.Context) {
 	}()
 
 	cf.sliMetricsID = cf.sliMetrics.claimId()
+	cf.startRangeStatsPoller(ctx)
 
 	// TODO(dan): It's very important that we de-register from the metric because
 	// if we orphan an entry in there, our monitoring will lie (say the changefeed
@@ -1599,6 +1605,76 @@ func (cf *changeFrontier) runUsageMetricReporting(ctx context.Context) {
 	}
 }
 
+func formatRangeStatsStatusMessage(stats *rangescanstatspb.RangeStats) string {
+	if stats == nil || stats.RangeCount == 0 {
+		return ""
+	}
+	initialScanComplete := stats.ScanningRangeCount == 0
+	incompleteCount := stats.ScanningRangeCount
+	if initialScanComplete {
+		incompleteCount = stats.LaggingRangeCount
+	}
+
+	fractionCompleted := 100 * max(
+		// Use a tiny fraction completed to start with a nearly empty
+		// progress bar until we get the first batch of range stats.
+		float32(0.0001),
+		float32(stats.RangeCount-incompleteCount)/float32(stats.RangeCount))
+
+	if !initialScanComplete {
+		return fmt.Sprintf("%.0f%%: initial scan on %d out of %d ranges", fractionCompleted, stats.ScanningRangeCount, stats.RangeCount)
+	}
+	if stats.LaggingRangeCount != 0 {
+		return fmt.Sprintf("%.0f%%: catching up on %d out of %d ranges", fractionCompleted, stats.LaggingRangeCount, stats.RangeCount)
+	}
+	return ""
+}
+
+func (cf *changeFrontier) startRangeStatsPoller(ctx context.Context) {
+	execCfg := cf.FlowCtx.Cfg.ExecutorConfig.(*sql.ExecutorConfig)
+	if cf.knobs.OverrideExecCfg != nil {
+		execCfg = cf.knobs.OverrideExecCfg(execCfg)
+	}
+
+	opts := changefeedbase.MakeStatementOptions(cf.spec.Feed.Opts)
+	laggingRangesThreshold, laggingRangesInterval, err := opts.GetLaggingRangesConfig(ctx, cf.FlowCtx.Cfg.Settings)
+	if err != nil {
+		log.Changefeed.Warningf(cf.Ctx(), "moving to draining due to error getting lagging ranges config: %v", err)
+		cf.MoveToDraining(err)
+		return
+	}
+
+	cf.updateStatsCallback = cf.sliMetrics.getRangeStatsCallback()
+	cf.statsPoller = rangescanstats.StartStatsPoller(
+		ctx,
+		laggingRangesInterval,
+		cf.spec.TrackedSpans,
+		cf.frontier,
+		execCfg.RangeDescIteratorFactory,
+		laggingRangesThreshold,
+		func(stats *rangescanstatspb.RangeStats) {
+			// Only run the new callback if we're on V26_2.
+			if cf.evalCtx.Settings.Version.IsActive(ctx, clusterversion.V26_2_Start) {
+				cf.updateStatsCallback(stats.RangeCount, stats.ScanningRangeCount, stats.LaggingRangeCount)
+
+				// Update job status message with range stats.
+				if cf.js.job != nil {
+					if statusMsg := formatRangeStatsStatusMessage(stats); statusMsg != "" {
+						// TODO: probably a better way to  update the message
+						_ = cf.js.job.NoTxn().UpdateStatusMessage(ctx, jobs.StatusMessage(statusMsg))
+					}
+				}
+			}
+		},
+	)
+}
+
+func (cf *changeFrontier) closeRangeStatsPoller() {
+	cf.statsPoller.Close()
+	// Reset metrics on shutdown.
+	cf.updateStatsCallback(0, 0, 0)
+}
+
 func (cf *changeFrontier) close() {
 	// Shut down the usage metric reporting goroutine first, since otherwise
 	// we can use a span after it's finished.
@@ -1615,6 +1691,7 @@ func (cf *changeFrontier) close() {
 		}
 		cf.memAcc.Close(cf.Ctx())
 		cf.MemMonitor.Stop(cf.Ctx())
+		cf.closeRangeStatsPoller()
 	}
 }
 
