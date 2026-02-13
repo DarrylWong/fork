@@ -52,6 +52,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/mon"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 	"github.com/cockroachdb/cockroach/pkg/util/span"
+	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/cockroach/pkg/util/tracing"
 	"github.com/cockroachdb/cockroach/pkg/util/uuid"
@@ -996,6 +997,11 @@ func (ca *changeAggregator) emitResolved(batch jobspb.ResolvedSpans) error {
 		ResolvedSpans: batch.ResolvedSpans,
 		Stats: jobspb.ResolvedSpans_Stats{
 			RecentKvCount: ca.recentKVCount,
+			BackfillProgress: jobspb.ResolvedSpans_Stats_BackfillProgress{
+				PendingRanges: ca.sliMetrics.BackfillPendingRanges.Value(),
+				TotalRanges:   ca.sliMetrics.TotalRanges.Value(),
+				AggregatorID:  ca.spec.AggregatorID,
+			},
 		},
 	}
 	if log.V(2) {
@@ -1098,6 +1104,10 @@ type changeFrontier struct {
 	// map (shared structure between all feeds within the same scope on the node).
 	metricsID    int
 	sliMetricsID int64
+
+	// BackfillStatsCollector aggregates backfill stats from all aggregators and
+	// updates the job progress.
+	backfillStatsCollector *backfillStatsCollector
 
 	// Aggregator that aggregates StructuredEvents emitted in the
 	// changeFrontier's trace recording.
@@ -1263,11 +1273,12 @@ func newChangeFrontierProcessor(
 	cf := &changeFrontier{
 		// We might modify the ChangefeedState field in the eval.Context, so we
 		// need to make a copy.
-		evalCtx:       flowCtx.NewEvalCtx(),
-		spec:          spec,
-		memAcc:        memMonitor.MakeBoundAccount(),
-		input:         input,
-		usageWgCancel: func() {},
+		evalCtx:                flowCtx.NewEvalCtx(),
+		spec:                   spec,
+		memAcc:                 memMonitor.MakeBoundAccount(),
+		input:                  input,
+		usageWgCancel:          func() {},
+		backfillStatsCollector: newBackfillStatsCollector(spec.NumAggregators),
 	}
 
 	defer func() {
@@ -1738,6 +1749,7 @@ func (cf *changeFrontier) noteAggregatorProgress(ctx context.Context, d rowenc.E
 	}
 
 	cf.maybeMarkJobIdle(resolvedSpans.Stats.RecentKvCount)
+	cf.backfillStatsCollector.add(&resolvedSpans.Stats.BackfillProgress)
 
 	frontierChanged, err := cf.forwardFrontier(ctx, resolvedSpans.ResolvedSpans)
 	if err != nil {
@@ -1791,6 +1803,8 @@ func (cf *changeFrontier) maybeCheckpoint(
 		return nil
 	}
 
+	cf.updateBackfillJobStatus(cf.Ctx())
+
 	// If the highwater has moved an empty checkpoint will be saved
 	var checkpoint *jobspb.TimestampSpansMap
 	if updateCheckpoint {
@@ -1834,6 +1848,16 @@ func (cf *changeFrontier) maybeMarkJobIdle(recentKVCount uint64) {
 
 	isIdle := timeutil.Since(cf.latestResolvedKV) > idleTimeout
 	cf.js.job.MarkIdle(isIdle)
+}
+
+func (cf *changeFrontier) updateBackfillJobStatus(ctx context.Context) {
+	_, percent, status := cf.backfillStatsCollector.rollupStats(cf.frontier.Frontier().IsEmpty())
+	if status != "" && cf.js.job != nil {
+		msg := fmt.Sprintf("%.0f%%: %s", 100*percent, status)
+		if err := cf.js.job.NoTxn().UpdateStatusMessage(ctx, jobs.StatusMessage(msg)); err != nil {
+			log.Dev.Warningf(ctx, "failed to report initial scan progress: %v", err)
+		}
+	}
 }
 
 func (cf *changeFrontier) shouldCheckpoint(
@@ -2511,4 +2535,59 @@ func (l *saveRateLimiter) doneSave(saveDuration time.Duration) {
 		l.avgSaveDuration = time.Duration(
 			alpha*float64(saveDuration) + (1-alpha)*float64(l.avgSaveDuration))
 	}
+}
+
+type backfillStatsCollector struct {
+	mu             syncutil.Mutex
+	stats          map[int32]*jobspb.ResolvedSpans_Stats_BackfillProgress
+	processorCount int32
+}
+
+func newBackfillStatsCollector(processorCount int32) *backfillStatsCollector {
+	return &backfillStatsCollector{
+		stats:          make(map[int32]*jobspb.ResolvedSpans_Stats_BackfillProgress),
+		processorCount: processorCount,
+	}
+}
+
+func (b *backfillStatsCollector) add(
+	stats *jobspb.ResolvedSpans_Stats_BackfillProgress,
+) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.stats[stats.AggregatorID] = stats
+}
+
+func (b *backfillStatsCollector) rollupStats(initialScan bool) (
+	jobspb.ResolvedSpans_Stats_BackfillProgress,
+	float32,
+	string,
+) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var total jobspb.ResolvedSpans_Stats_BackfillProgress
+	for _, aggregatorStats := range b.stats {
+		total.TotalRanges += aggregatorStats.TotalRanges
+		total.PendingRanges += aggregatorStats.PendingRanges
+	}
+
+	// Don't report a percentage until all aggregators have reported.
+	if len(b.stats) != int(b.processorCount) {
+		return jobspb.ResolvedSpans_Stats_BackfillProgress{}, 0, fmt.Sprintf("starting streams (%d out of %d)", len(b.stats), b.processorCount)
+	}
+
+	fractionCompleted := max(
+		// Use a tiny fraction completed to start with a nearly empty
+		// progress bar until we get the first batch of range stats.
+		float32(0.0001),
+		float32(total.TotalRanges-total.PendingRanges)/float32(total.TotalRanges))
+
+	if initialScan {
+		return total, fractionCompleted, fmt.Sprintf("initial scan on %d out of %d ranges", total.PendingRanges, total.TotalRanges)
+	}
+	if total.PendingRanges != 0 {
+		return total, fractionCompleted, fmt.Sprintf("schemachange backfill on %d out of %d ranges", total.PendingRanges, total.TotalRanges)
+	}
+	return total, 1, ""
 }

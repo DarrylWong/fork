@@ -1267,6 +1267,14 @@ message ResolvedSpans {
 
   message Stats {
     uint64 recent_kv_count = 1;
+
+    message BackfillProgress {
+      int64 pending_ranges = 1;
+      int64 total_ranges = 2;
+      int32 aggregator_id = 3 [(gogoproto.customname) = "AggregatorID"];
+    }
+
+    BackfillProgress backfill_progress = 2 [(gogoproto.nullable) = false];
   }
 
   Stats stats = 2 [(gogoproto.nullable) = false];
