@@ -105,29 +105,29 @@ func TestNewTableConstraints(t *testing.T) {
 	runner := sqlutils.MakeSQLRunner(conn)
 
 	testCases := []struct {
-		name       string
-		createStmt string
-		tableName  string
-		want       *tableConstraints
+		name        string
+		createStmts []string
+		tableNames  []string
+		want        []*tableConstraints
 	}{
 		{
 			name: "single column primary key, single column unique constraint",
-			createStmt: `
+			createStmts: []string{`
 				CREATE TABLE test1 (
 					a INT PRIMARY KEY,
 					b INT UNIQUE,
 					c INT
 				)
-			`,
-			tableName: "test1",
-			want: &tableConstraints{
+			`},
+			tableNames: []string{"test1"},
+			want: []*tableConstraints{{
 				PrimaryKey:        columnSet{columns: []int32{0}},     // column "a" at index 0
 				UniqueConstraints: []columnSet{{columns: []int32{1}}}, // unique "b" at index 1
-			},
+			}},
 		},
 		{
 			name: "multi-column primary key, multi-column unique constraint",
-			createStmt: `
+			createStmts: []string{`
 				CREATE TABLE test2 (
 					a INT,
 					b INT,
@@ -136,61 +136,99 @@ func TestNewTableConstraints(t *testing.T) {
 					PRIMARY KEY (a, b),
 					UNIQUE (c, d)
 				)
-			`,
-			tableName: "test2",
-			want: &tableConstraints{
+			`},
+			tableNames: []string{"test2"},
+			want: []*tableConstraints{{
 				PrimaryKey:        columnSet{columns: []int32{0, 1}},     // columns "a", "b" at indices 0, 1
 				UniqueConstraints: []columnSet{{columns: []int32{2, 3}}}, // unique (c,d)
-			},
+			}},
 		},
 		{
 			name: "multiple unique constraints",
-			createStmt: `
+			createStmts: []string{`
 				CREATE TABLE test3 (
 					id INT PRIMARY KEY,
 					email STRING UNIQUE,
 					username STRING UNIQUE,
 					data STRING
 				)
-			`,
-			tableName: "test3",
-			want: &tableConstraints{
+			`},
+			tableNames: []string{"test3"},
+			want: []*tableConstraints{{
 				PrimaryKey:        columnSet{columns: []int32{0}},                            // column "id" at index 0
 				UniqueConstraints: []columnSet{{columns: []int32{1}}, {columns: []int32{2}}}, // unique "email", "username"
-			},
+			}},
+		},
+		{
+			name: "foreign key constraints",
+			createStmts: []string{
+				`CREATE TABLE customer (
+					id INT PRIMARY KEY,
+					email STRING,
+					username STRING
+				)
+			`,
+				`CREATE TABLE orders (
+					id INT PRIMARY KEY,
+					price INT,
+					customer INT REFERENCES customer(id)
+				)
+			`},
+			tableNames: []string{"customer", "orders"},
+			want: []*tableConstraints{{
+				PrimaryKey: columnSet{columns: []int32{0}}, // column "id" at index 0
+			}, {
+				PrimaryKey:            columnSet{columns: []int32{0}},     // column "id" at index 0
+				ForeignKeyConstraints: []columnSet{{columns: []int32{2}}}, // outbound FK on "customer.id"
+			}},
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Create the table
-			runner.Exec(t, tc.createStmt)
-
-			// Get the table descriptor
-			tableDesc := desctestutils.TestingGetTableDescriptor(
-				kvDB,
-				codec,
-				"defaultdb",
-				"public",
-				tc.tableName,
-			)
-
-			// Call newTableConstraints
-			got := newTableConstraints(tableDesc)
-
-			// Update expected values with the actual table ID and index IDs
-			tc.want.PrimaryKey.prefix = tablePrefix(tableDesc.GetID())
-			primaryIndex := tableDesc.GetPrimaryIndex()
-			idx := 0
-			for _, uc := range tableDesc.EnforcedUniqueConstraintsWithIndex() {
-				if uc.GetID() != primaryIndex.GetID() {
-					tc.want.UniqueConstraints[idx].prefix = uniqueIndexPrefix(tableDesc.GetID(), uc.GetID())
-					idx++
-				}
+			// Create the tables
+			for _, stmt := range tc.createStmts {
+				runner.Exec(t, stmt)
 			}
 
-			// Verify constraints using require.Equal
-			require.Equal(t, tc.want, got)
+			for i, tableName := range tc.tableNames {
+				// Get the table descriptor
+				tableDesc := desctestutils.TestingGetTableDescriptor(
+					kvDB,
+					codec,
+					"defaultdb",
+					"public",
+					tableName,
+				)
+
+				// Call newTableConstraints
+				got := newTableConstraints(tableDesc)
+
+				// Update expected values with the actual table ID and column IDs
+				want := tc.want[i]
+				pkColIDs := tableDesc.GetPrimaryIndex().CollectKeyColumnIDs().Ordered()
+				want.PrimaryKey.prefix = constraintPrefix(tableDesc.GetID(), pkColIDs)
+				primaryIndex := tableDesc.GetPrimaryIndex()
+				idx := 0
+				for _, uc := range tableDesc.EnforcedUniqueConstraintsWithIndex() {
+					if uc.GetID() != primaryIndex.GetID() {
+						ucColIDs := uc.CollectKeyColumnIDs().Ordered()
+						want.UniqueConstraints[idx].prefix = constraintPrefix(tableDesc.GetID(), ucColIDs)
+						idx++
+					}
+				}
+
+				// Update expected FK constraint prefixes
+				fkIdx := 0
+				for _, fk := range tableDesc.EnforcedOutboundForeignKeys() {
+					refColIDs := fk.CollectReferencedColumnIDs().Ordered()
+					want.ForeignKeyConstraints[fkIdx].prefix = constraintPrefix(fk.GetReferencedTableID(), refColIDs)
+					fkIdx++
+				}
+
+				// Verify constraints using require.Equal
+				require.Equal(t, want, got)
+			}
 		})
 	}
 }

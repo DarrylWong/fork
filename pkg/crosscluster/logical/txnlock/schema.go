@@ -19,14 +19,21 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 )
 
-func tablePrefix(tableID descpb.ID) uint64 {
-	// TODO(jeffswenson): hash this
-	return uint64(tableID)
-}
-
-func uniqueIndexPrefix(tableID descpb.ID, ucID descpb.IndexID) uint64 {
-	// TODO(jeffswenson): hash this
-	return uint64(tableID)<<32 | uint64(ucID)
+// constraintPrefix produces a hash prefix that uniquely identifies a
+// constraint on a table. It hashes the table ID and the column IDs that make
+// up the constraint. This is used to ensure different constraints produce
+// different lock hashes, while allowing foreign keys to share a prefix with
+// the parent's PK or unique constraint they reference.
+func constraintPrefix(tableID descpb.ID, colIDs []descpb.ColumnID) uint64 {
+	h := fnv.New64a()
+	var buf [4]byte
+	binary.BigEndian.PutUint32(buf[:], uint32(tableID))
+	h.Write(buf[:])
+	for _, colID := range colIDs {
+		binary.BigEndian.PutUint32(buf[:], uint32(colID))
+		h.Write(buf[:])
+	}
+	return h.Sum64()
 }
 
 type columnSet struct {
@@ -94,9 +101,9 @@ func (c *columnSet) equal(ctx *eval.Context, rowA, rowB tree.Datums) bool {
 }
 
 type tableConstraints struct {
-	PrimaryKey        columnSet
-	UniqueConstraints []columnSet
-	// TODO(jeffswenson): add support for foreign key ordering
+	PrimaryKey            columnSet
+	UniqueConstraints     []columnSet
+	ForeignKeyConstraints []columnSet
 }
 
 func newTableConstraints(table catalog.TableDescriptor) *tableConstraints {
@@ -113,45 +120,57 @@ func newTableConstraints(table catalog.TableDescriptor) *tableConstraints {
 
 	// Extract primary key columns
 	primaryIndex := table.GetPrimaryIndex()
+	pkColIDs := primaryIndex.CollectKeyColumnIDs().Ordered()
 	tc.PrimaryKey = columnSet{
-		columns: make([]int32, primaryIndex.NumKeyColumns()),
-		prefix:  tablePrefix(table.GetID()),
+		columns: make([]int32, len(pkColIDs)),
+		prefix:  constraintPrefix(table.GetID(), pkColIDs),
 	}
-	for i := 0; i < primaryIndex.NumKeyColumns(); i++ {
-		colID := primaryIndex.GetKeyColumnID(i)
+	for i, colID := range pkColIDs {
 		tc.PrimaryKey.columns[i] = colIDToIndex[colID]
 	}
 
 	// Extract unique constraints with indexes (excluding primary key)
 	for _, uc := range table.EnforcedUniqueConstraintsWithIndex() {
-		// Skip the primary key index
 		if uc.GetID() == primaryIndex.GetID() {
 			continue
 		}
-		cols := make([]int32, uc.NumKeyColumns())
-		for i := 0; i < uc.NumKeyColumns(); i++ {
-			colID := uc.GetKeyColumnID(i)
+		ucColIDs := uc.CollectKeyColumnIDs().Ordered()
+		cols := make([]int32, len(ucColIDs))
+		for i, colID := range ucColIDs {
 			cols[i] = colIDToIndex[colID]
 		}
 		tc.UniqueConstraints = append(tc.UniqueConstraints, columnSet{
 			columns: cols,
-			prefix:  uniqueIndexPrefix(table.GetID(), uc.GetID()),
+			prefix:  constraintPrefix(table.GetID(), ucColIDs),
 		})
 	}
 
 	// Extract unique constraints without indexes
-	for i, uc := range table.EnforcedUniqueConstraintsWithoutIndex() {
-		colIDs := uc.CollectKeyColumnIDs().Ordered()
-		cols := make([]int32, len(colIDs))
-		for i, colID := range colIDs {
+	for _, uc := range table.EnforcedUniqueConstraintsWithoutIndex() {
+		ucColIDs := uc.CollectKeyColumnIDs().Ordered()
+		cols := make([]int32, len(ucColIDs))
+		for i, colID := range ucColIDs {
 			cols[i] = colIDToIndex[colID]
 		}
 		tc.UniqueConstraints = append(tc.UniqueConstraints, columnSet{
 			columns: cols,
-			prefix: uniqueIndexPrefix(
-				table.GetID(),
-				descpb.IndexID(len(table.EnforcedUniqueConstraintsWithIndex())+i+1),
-			),
+			prefix:  constraintPrefix(table.GetID(), ucColIDs),
+		})
+	}
+
+	// Outbound FKs: this table is the child. The FK's referenced column IDs
+	// on the parent, sorted, produce the same prefix as the parent's PK or
+	// unique constraint, so the child's FK lock collides with the parent's
+	// PK/UC lock without needing inbound FK entries on the parent.
+	for _, fk := range table.EnforcedOutboundForeignKeys() {
+		refColIDs := fk.CollectReferencedColumnIDs().Ordered()
+		cols := make([]int32, fk.NumOriginColumns())
+		for i := 0; i < fk.NumOriginColumns(); i++ {
+			cols[i] = colIDToIndex[fk.GetOriginColumnID(i)]
+		}
+		tc.ForeignKeyConstraints = append(tc.ForeignKeyConstraints, columnSet{
+			columns: cols,
+			prefix:  constraintPrefix(fk.GetReferencedTableID(), refColIDs),
 		})
 	}
 
