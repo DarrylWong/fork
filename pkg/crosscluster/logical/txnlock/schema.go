@@ -164,9 +164,17 @@ func newTableConstraints(table catalog.TableDescriptor) *tableConstraints {
 	// PK/UC lock without needing inbound FK entries on the parent.
 	for _, fk := range table.EnforcedOutboundForeignKeys() {
 		refColIDs := fk.CollectReferencedColumnIDs().Ordered()
-		cols := make([]int32, fk.NumOriginColumns())
+		// Map each referenced column ID to its corresponding origin column ID
+		// so we can iterate origin columns in the parent's sorted column ID
+		// order. This ensures the child FK hashes values in the same order as
+		// the parent's PK/UC.
+		refToOrigin := make(map[descpb.ColumnID]descpb.ColumnID, fk.NumOriginColumns())
 		for i := 0; i < fk.NumOriginColumns(); i++ {
-			cols[i] = colIDToIndex[fk.GetOriginColumnID(i)]
+			refToOrigin[fk.GetReferencedColumnID(i)] = fk.GetOriginColumnID(i)
+		}
+		cols := make([]int32, len(refColIDs))
+		for i, refColID := range refColIDs {
+			cols[i] = colIDToIndex[refToOrigin[refColID]]
 		}
 		tc.ForeignKeyConstraints = append(tc.ForeignKeyConstraints, columnSet{
 			columns: cols,

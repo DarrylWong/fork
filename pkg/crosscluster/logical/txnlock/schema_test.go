@@ -182,6 +182,33 @@ func TestNewTableConstraints(t *testing.T) {
 				ForeignKeyConstraints: []columnSet{{columns: []int32{2}}}, // outbound FK on "customer.id"
 			}},
 		},
+		{
+			name: "multi-column FK",
+			createStmts: []string{
+				`CREATE TABLE parent2 (
+					a INT,
+					b INT,
+					c INT,
+					PRIMARY KEY (c, a)
+				)`,
+				`CREATE TABLE child2 (
+					id INT PRIMARY KEY,
+					x INT,
+					y INT,
+					FOREIGN KEY (x, y) REFERENCES parent2(c, a)
+				)`,
+			},
+			tableNames: []string{"parent2", "child2"},
+			want: []*tableConstraints{{
+				// Sorted by col ID: a(index 0), c(index 2)
+				PrimaryKey: columnSet{columns: []int32{0, 2}},
+			}, {
+				PrimaryKey: columnSet{columns: []int32{0}},
+				// Origin cols reordered to match parent's sorted col ID order:
+				// parent sorted = [a, c], a→y(index 2), c→x(index 1)
+				ForeignKeyConstraints: []columnSet{{columns: []int32{2, 1}}},
+			}},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -228,6 +255,46 @@ func TestNewTableConstraints(t *testing.T) {
 
 				// Verify constraints using require.Equal
 				require.Equal(t, want, got)
+			}
+
+			// Verify that FK prefixes on child tables match the
+			// corresponding PK/UC prefix on the parent table.
+			if len(tc.tableNames) >= 2 {
+				descs := make(map[string]*tableConstraints, len(tc.tableNames))
+				for _, tableName := range tc.tableNames {
+					tableDesc := desctestutils.TestingGetTableDescriptor(
+						kvDB, codec, "defaultdb", "public", tableName,
+					)
+					descs[tableName] = newTableConstraints(tableDesc)
+				}
+				for _, tableName := range tc.tableNames {
+					child := descs[tableName]
+					for fkIdx, fk := range child.ForeignKeyConstraints {
+						t.Logf("table %s FK[%d] prefix: %d columns: %v",
+							tableName, fkIdx, fk.prefix, fk.columns)
+						// Find the parent whose PK/UC has a matching prefix.
+						found := false
+						for parentName, parent := range descs {
+							if parent.PrimaryKey.prefix == fk.prefix {
+								t.Logf("  matched %s PK prefix: %d columns: %v",
+									parentName, parent.PrimaryKey.prefix, parent.PrimaryKey.columns)
+								found = true
+								break
+							}
+							for ucIdx, uc := range parent.UniqueConstraints {
+								if uc.prefix == fk.prefix {
+									t.Logf("  matched %s UC[%d] prefix: %d columns: %v",
+										parentName, ucIdx, uc.prefix, uc.columns)
+									found = true
+									break
+								}
+							}
+						}
+						require.True(t, found,
+							"FK prefix %d on table %s did not match any parent PK/UC prefix",
+							fk.prefix, tableName)
+					}
+				}
 			}
 		})
 	}
