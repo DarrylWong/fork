@@ -190,6 +190,7 @@ go_library(
         "sequelize.go",
         "slow_drain.go",
         "split.go",
+        "sql_proxy_upgrade.go",
         "sqlalchemy.go",
         "sqlalchemy_blocklist.go",
         "sqlsmith.go",

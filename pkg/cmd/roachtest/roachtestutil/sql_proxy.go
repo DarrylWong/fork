@@ -14,12 +14,14 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/roachprod"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
+	"github.com/cockroachdb/cockroach/pkg/util/retry"
 	"github.com/cockroachdb/errors"
 )
 
@@ -205,6 +207,31 @@ func (p *SQLProxy) DrainPod(
 		return err
 	}
 	return nil
+}
+
+// WaitForDrain polls the given node's session count until all
+// non-internal sessions have migrated away. The db should be a direct
+// connection to the node being drained (not through the proxy). This
+// should be called after DrainPod and before stopping the process.
+func (p *SQLProxy) WaitForDrain(ctx context.Context, db *gosql.DB) error {
+	retryOpts := retry.Options{
+		InitialBackoff: 5 * time.Second,
+		MaxBackoff:     10 * time.Second,
+		MaxDuration:    2 * time.Minute,
+	}
+	return retryOpts.Do(ctx, func(ctx context.Context) error {
+		var count int
+		if err := db.QueryRowContext(ctx,
+			"SELECT count(*) FROM crdb_internal.node_sessions "+
+				"WHERE application_name NOT LIKE '$ internal%'",
+		).Scan(&count); err != nil {
+			return err
+		}
+		if count > 0 {
+			return errors.Newf("node still has %d active sessions", count)
+		}
+		return nil
+	})
 }
 
 func (p *SQLProxy) TenantID(ctx context.Context, virtualClusterName string) (int, error) {
