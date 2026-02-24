@@ -106,6 +106,21 @@ type tableConstraints struct {
 	ForeignKeyConstraints []columnSet
 }
 
+// containsPrefix returns true if prefix matches this table's primary key
+// or any of its unique constraints.
+func (t *tableConstraints) containsPrefix(prefix uint64) bool {
+	if prefix == t.PrimaryKey.prefix {
+		return true
+	}
+	for _, uc := range t.UniqueConstraints {
+		if prefix == uc.prefix {
+			return true
+		}
+	}
+	// We don't check FK prefixes since they are constraints on a different table.
+	return false
+}
+
 func newTableConstraints(table catalog.TableDescriptor) *tableConstraints {
 	// Get the column schema which determines the order of datums in rows
 	columnSchema := sqlwriter.GetColumnSchema(table)
@@ -211,6 +226,21 @@ func (t *tableConstraints) deriveLocks(row ldrdecoder.DecodedRow, locks []Lock) 
 			}
 		}
 	}
+	for _, fk := range t.ForeignKeyConstraints {
+		switch {
+		case fk.null(row.Row) && fk.null(row.PrevRow):
+			continue
+		case fk.equal(&evalCtx, row.Row, row.PrevRow):
+			continue
+		default:
+			if !fk.null(row.Row) {
+				locks = append(locks, Lock{Hash: fk.hash(row.Row), Read: true})
+			}
+			if !fk.null(row.PrevRow) {
+				locks = append(locks, Lock{Hash: fk.hash(row.PrevRow), Read: true})
+			}
+		}
+	}
 	return locks
 }
 
@@ -227,5 +257,35 @@ func (t *tableConstraints) DependsOn(a, b ldrdecoder.DecodedRow) bool {
 			return true
 		}
 	}
+	return false
+}
+
+// fkDependsOn returns true if b must be applied before a, based on FK
+// constraints between their tables. It checks whether the FK's prefix
+// matches any of the parent's constraining column sets (PK or UCs),
+// since a REFERENCES clause can target either.
+func fkDependsOn(
+	tcA, tcB *tableConstraints, a, b ldrdecoder.DecodedRow,
+) bool {
+	// Case 1: a is child, b is parent.
+	// b (parent) must come before a (child) if a is creating a reference
+	// (non-null FK in Row).
+	for _, fk := range tcA.ForeignKeyConstraints {
+		if tcB.containsPrefix(fk.prefix) && !fk.null(a.Row) {
+			return true
+		}
+	}
+
+	// Case 2: a is parent, b is child.
+	// b (child) must come before a (parent) if b is releasing a reference
+	// (non-null FK in PrevRow) and a (parent) is being deleted/updated
+	// (non-empty PrevRow means parent row existed before).
+	for _, fk := range tcB.ForeignKeyConstraints {
+		if tcA.containsPrefix(fk.prefix) &&
+			!fk.null(b.PrevRow) && len(a.PrevRow) > 0 {
+			return true
+		}
+	}
+
 	return false
 }

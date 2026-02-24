@@ -120,19 +120,17 @@ func (ls *LockSynthesizer) deriveLocks(row ldrdecoder.DecodedRow, locks []Lock) 
 	return tc.deriveLocks(row, locks)
 }
 
-// DependsOn returns true if row a must be applied before row b.
+// dependsOn returns true if b must be applied before a. The sort uses lock
+// hash collisions to find candidate pairs, then calls this to determine
+// actual ordering. For same-table rows, it delegates to
+// tableConstraints.DependsOn (UC ordering). For cross-table rows, it checks
+// FK constraints to enforce parent-before-child on inserts and
+// child-before-parent on deletes.
 func (ls *LockSynthesizer) dependsOn(a, b ldrdecoder.DecodedRow) bool {
-	// If rows are from different tables, no ordering constraint
-	if a.TableID != b.TableID {
-		return false
+	tcA := ls.tableConstraints[a.TableID]
+	if a.TableID == b.TableID {
+		return tcA.DependsOn(a, b)
 	}
-
-	// Look up the table constraints
-	tc, ok := ls.tableConstraints[a.TableID]
-	if !ok {
-		// No constraints for this table
-		return false
-	}
-
-	return tc.DependsOn(a, b)
+	tcB := ls.tableConstraints[b.TableID]
+	return fkDependsOn(tcA, tcB, a, b)
 }

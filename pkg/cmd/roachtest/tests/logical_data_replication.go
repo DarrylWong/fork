@@ -217,6 +217,24 @@ func registerLogicalDataReplicationTests(r registry.Registry) {
 			run: TestLDRCreateTablesTPCC,
 		},
 		{
+			name: "ldr/tpcc/fk",
+			clusterSpec: multiClusterSpec{
+				leftNodes:  3,
+				rightNodes: 3,
+				clusterOpts: []spec.Option{
+					spec.CPU(8),
+					spec.WorkloadNode(),
+					spec.WorkloadNodeCPU(8),
+					spec.VolumeSize(100),
+				},
+			},
+			ldrConfig: ldrConfig{
+				initialScanTimeout: 30 * time.Minute,
+				mode:               ModeTransaction,
+			},
+			run: TestLDRTPCCForeignKey,
+		},
+		{
 			name: "ldr/conflict",
 			clusterSpec: multiClusterSpec{
 				leftNodes:  3,
@@ -400,6 +418,58 @@ func TestLDRTPCC(
 	monitor.Go(func(ctx context.Context) error {
 		defer close(workloadDoneCh)
 		// Run workload on both clusters.
+		return c.RunE(ctx, option.WithNodes(setup.workloadNode), workload.workload.sourceRunCmd("system", setup.CRDBNodes()))
+	})
+
+	monitor.Wait()
+	validateLatency()
+	VerifyCorrectness(ctx, c, t, setup, leftJobID, rightJobID, 2*time.Minute, workload)
+}
+
+// TestLDRTPCCForeignKey runs tpcc with foreign keys enabled using transaction
+// mode. This validates the full FK ordering pipeline: lock synthesis emits FK
+// read locks that collide with parent PK write locks, the scheduler uses these
+// to create cross-transaction dependencies, and the applier respects
+// intra-transaction ordering (parent before child on inserts, child before
+// parent on deletes).
+func TestLDRTPCCForeignKey(
+	ctx context.Context, t test.Test, c cluster.Cluster, setup multiClusterSetup, ldrConfig ldrConfig,
+) {
+	duration := 10 * time.Minute
+	warehouses := 10
+	if c.IsLocal() {
+		duration = 3 * time.Minute
+		warehouses = 10
+	}
+
+	workload := LDRWorkload{
+		workload: replicateTPCC{
+			warehouses:     warehouses,
+			duration:       duration,
+			repairOrderIDs: true,
+		},
+		dbName:            "tpcc",
+		manualSchemaSetup: true,
+		tableNames:        []string{"customer", "district", "history", "item", "new_order", "order_line", "order", "stock", "warehouse"},
+	}
+
+	// Init both clusters with FKs enabled (the default). The left has 10
+	// warehouses and the right has 1.
+	c.Run(ctx,
+		option.WithNodes(setup.workloadNode),
+		fmt.Sprintf("./cockroach workload init tpcc --warehouses=1 {pgurl:%d:system}", setup.right.nodes[0]))
+	c.Run(ctx,
+		option.WithNodes(setup.workloadNode),
+		fmt.Sprintf("./cockroach workload init tpcc --warehouses=10 {pgurl:%d:system}", setup.left.nodes[0]))
+	leftJobID, rightJobID := setupLDR(ctx, t, c, setup, workload, ldrConfig)
+
+	workloadDoneCh := make(chan struct{})
+	maxExpectedLatency := 3 * time.Minute
+	monitor := c.NewDeprecatedMonitor(ctx, setup.CRDBNodes())
+	validateLatency := setupLatencyVerifiers(ctx, t, c, monitor, leftJobID, rightJobID, setup, workloadDoneCh, maxExpectedLatency)
+
+	monitor.Go(func(ctx context.Context) error {
+		defer close(workloadDoneCh)
 		return c.RunE(ctx, option.WithNodes(setup.workloadNode), workload.workload.sourceRunCmd("system", setup.CRDBNodes()))
 	})
 
@@ -793,6 +863,8 @@ func (m mode) String() string {
 		return "immediate"
 	case ModeValidated:
 		return "validated"
+	case ModeTransaction:
+		return "transaction"
 	default:
 		return "default"
 	}
@@ -802,6 +874,7 @@ const (
 	Default = iota
 	ModeImmediate
 	ModeValidated
+	ModeTransaction
 )
 
 type multiClusterSpec struct {
