@@ -12,6 +12,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catprivilege"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descutil"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/funcinfo"
 	"github.com/cockroachdb/cockroach/pkg/sql/parserutils"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
@@ -601,6 +602,67 @@ func (desc *Mutable) SetDropped() {
 func (desc *Mutable) SetOffline(reason string) {
 	desc.State = descpb.DescriptorState_OFFLINE
 	desc.OfflineReason = reason
+}
+
+// Rewrite implements the catalog.MutableDescriptor interface.
+func (desc *Mutable) Rewrite(rewriter catalog.DescriptorRewriteFn) error {
+	newID, newNI, err := rewriter(desc.ID, descpb.NameInfo{
+		ParentID:       desc.GetParentID(),
+		ParentSchemaID: desc.GetParentSchemaID(),
+		Name:           desc.GetName(),
+	})
+	if err != nil {
+		return errors.Wrapf(err, "function %q (%d)", desc.GetName(), desc.ID)
+	}
+	desc.ID = newID
+	desc.ParentID = newNI.ParentID
+	desc.ParentSchemaID = newNI.ParentSchemaID
+	desc.Name = newNI.Name
+	desc.Version = 1
+	desc.ModificationTime = hlc.Timestamp{}
+
+	// Rewrite type OIDs in parameters and return type.
+	for _, param := range desc.Params {
+		descutil.RewriteIDsInTypesT(param.Type, rewriter)
+	}
+	descutil.RewriteIDsInTypesT(desc.ReturnType.Type, rewriter)
+
+	// Rewrite forward references.
+	for i, depID := range desc.DependsOn {
+		newDepID, _, depErr := rewriter(depID, descpb.NameInfo{})
+		if depErr != nil {
+			return errors.Wrapf(depErr,
+				"referenced relation %d in function %q", depID, desc.GetName())
+		}
+		desc.DependsOn[i] = newDepID
+	}
+	for i, typID := range desc.DependsOnTypes {
+		newTypID, _, typErr := rewriter(typID, descpb.NameInfo{})
+		if typErr != nil {
+			return errors.Wrapf(typErr,
+				"referenced type %d in function %q", typID, desc.GetName())
+		}
+		desc.DependsOnTypes[i] = newTypID
+	}
+	for i, funcID := range desc.DependsOnFunctions {
+		newFuncID, _, funcErr := rewriter(funcID, descpb.NameInfo{})
+		if funcErr != nil {
+			return errors.Wrapf(funcErr,
+				"referenced function %d in function %q", funcID, desc.GetName())
+		}
+		desc.DependsOnFunctions[i] = newFuncID
+	}
+
+	// Rewrite back-references.
+	for i, dep := range desc.DependedOnBy {
+		newDepID, _, depErr := rewriter(dep.ID, descpb.NameInfo{})
+		if depErr != nil {
+			return errors.Wrapf(depErr,
+				"back-referenced relation %d in function %q", dep.ID, desc.GetName())
+		}
+		desc.DependedOnBy[i].ID = newDepID
+	}
+	return nil
 }
 
 // SetDeclarativeSchemaChangerState implements the catalog.MutableDescriptor interface.

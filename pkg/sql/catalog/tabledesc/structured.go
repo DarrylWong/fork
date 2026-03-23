@@ -19,6 +19,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/colinfo"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descutil"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/internal/validate"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/schemaexpr"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/typedesc"
@@ -2842,6 +2843,243 @@ func (desc *Mutable) SetTableLocalityGlobal() {
 	lc := LocalityConfigGlobal()
 	desc.LocalityConfig = &lc
 }
+
+// Rewrite implements the catalog.MutableDescriptor interface.
+func (desc *Mutable) Rewrite(rewriter catalog.DescriptorRewriteFn) error {
+	// Rewrite self.
+	newID, newNI, err := rewriter(desc.ID, descpb.NameInfo{
+		ParentID:       desc.GetParentID(),
+		ParentSchemaID: desc.GetParentSchemaID(),
+		Name:           desc.GetName(),
+	})
+	if err != nil {
+		return errors.Wrapf(err, "table %q (%d)", desc.GetName(), desc.ID)
+	}
+	desc.ID = newID
+	desc.ParentID = newNI.ParentID
+	desc.UnexposedParentSchemaID = newNI.ParentSchemaID
+	desc.Name = newNI.Name
+	desc.Version = 1
+	desc.ModificationTime = hlc.Timestamp{}
+
+	// Helper to rewrite a single ID reference.
+	rewriteID := func(id descpb.ID, context string) (descpb.ID, error) {
+		newRefID, _, refErr := rewriter(id, descpb.NameInfo{})
+		if refErr != nil {
+			return 0, errors.Wrapf(refErr, "%s in table %q", context, desc.GetName())
+		}
+		return newRefID, nil
+	}
+
+	// Rewrite outbound FKs.
+	for i := range desc.OutboundFKs {
+		fk := &desc.OutboundFKs[i]
+		fk.OriginTableID = newID
+		if fk.ReferencedTableID, err = rewriteID(fk.ReferencedTableID,
+			"referenced table in outbound FK "+fk.Name); err != nil {
+			return err
+		}
+	}
+
+	// Rewrite inbound FKs.
+	for i := range desc.InboundFKs {
+		fk := &desc.InboundFKs[i]
+		fk.ReferencedTableID = newID
+		if fk.OriginTableID, err = rewriteID(fk.OriginTableID,
+			"origin table in inbound FK "+fk.Name); err != nil {
+			return err
+		}
+	}
+
+	// Rewrite FK mutations.
+	for i := range desc.Mutations {
+		if c := desc.Mutations[i].GetConstraint(); c != nil &&
+			c.ConstraintType == descpb.ConstraintToUpdate_FOREIGN_KEY {
+			fk := &c.ForeignKey
+			fk.OriginTableID = newID
+			if fk.ReferencedTableID, err = rewriteID(fk.ReferencedTableID,
+				"referenced table in FK mutation "+fk.Name); err != nil {
+				return err
+			}
+		}
+		if c := desc.Mutations[i].GetConstraint(); c != nil &&
+			c.ConstraintType == descpb.ConstraintToUpdate_UNIQUE_WITHOUT_INDEX {
+			uwi := &c.UniqueWithoutIndexConstraint
+			if uwi.TableID, err = rewriteID(uwi.TableID,
+				"unique without index constraint mutation"); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Rewrite DependsOn, DependsOnTypes, DependsOnFunctions.
+	for i, id := range desc.DependsOn {
+		if desc.DependsOn[i], err = rewriteID(id, "depends-on relation"); err != nil {
+			return err
+		}
+	}
+	for i, id := range desc.DependsOnTypes {
+		if desc.DependsOnTypes[i], err = rewriteID(id, "depends-on type"); err != nil {
+			return err
+		}
+	}
+	for i, id := range desc.DependsOnFunctions {
+		if desc.DependsOnFunctions[i], err = rewriteID(id, "depends-on function"); err != nil {
+			return err
+		}
+	}
+
+	// Rewrite DependedOnBy back-references.
+	for i, ref := range desc.DependedOnBy {
+		if desc.DependedOnBy[i].ID, err = rewriteID(ref.ID, "depended-on-by relation"); err != nil {
+			return err
+		}
+	}
+
+	// Rewrite UniqueWithoutIndexConstraints.
+	for i := range desc.UniqueWithoutIndexConstraints {
+		uwi := &desc.UniqueWithoutIndexConstraints[i]
+		if uwi.TableID, err = rewriteID(uwi.TableID, "unique without index constraint"); err != nil {
+			return err
+		}
+	}
+
+	// Rewrite column type OIDs and sequence/function references.
+	rewriteCol := func(col *descpb.ColumnDescriptor) error {
+		descutil.RewriteIDsInTypesT(col.Type, rewriter)
+		for i, seqID := range col.UsesSequenceIds {
+			if col.UsesSequenceIds[i], err = rewriteID(seqID, "sequence reference in column "+col.Name); err != nil {
+				return err
+			}
+		}
+		for i, seqID := range col.OwnsSequenceIds {
+			if col.OwnsSequenceIds[i], err = rewriteID(seqID, "owned sequence in column "+col.Name); err != nil {
+				return err
+			}
+		}
+		for i, fnID := range col.UsesFunctionIds {
+			if col.UsesFunctionIds[i], err = rewriteID(fnID, "function reference in column "+col.Name); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for i := range desc.Columns {
+		if err := rewriteCol(&desc.Columns[i]); err != nil {
+			return err
+		}
+	}
+	for i := range desc.Mutations {
+		if col := desc.Mutations[i].GetColumn(); col != nil {
+			if err := rewriteCol(col); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Rewrite sequence ownership.
+	if desc.IsSequence() && desc.SequenceOpts.HasOwner() {
+		if desc.SequenceOpts.SequenceOwner.OwnerTableID, err = rewriteID(
+			desc.SequenceOpts.SequenceOwner.OwnerTableID, "sequence owner table"); err != nil {
+			return err
+		}
+	}
+
+	// Rewrite triggers.
+	for i := range desc.Triggers {
+		trigger := &desc.Triggers[i]
+		if trigger.FuncID, err = rewriteID(trigger.FuncID,
+			"function in trigger "+trigger.Name); err != nil {
+			return err
+		}
+		for j, id := range trigger.DependsOn {
+			if trigger.DependsOn[j], err = rewriteID(id,
+				"depends-on relation in trigger "+trigger.Name); err != nil {
+				return err
+			}
+		}
+		for j, id := range trigger.DependsOnTypes {
+			if trigger.DependsOnTypes[j], err = rewriteID(id,
+				"depends-on type in trigger "+trigger.Name); err != nil {
+				return err
+			}
+		}
+		for j, id := range trigger.DependsOnRoutines {
+			if trigger.DependsOnRoutines[j], err = rewriteID(id,
+				"depends-on routine in trigger "+trigger.Name); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Rewrite policies.
+	for i := range desc.Policies {
+		policy := &desc.Policies[i]
+		for j, fnID := range policy.DependsOnFunctions {
+			if policy.DependsOnFunctions[j], err = rewriteID(fnID,
+				"function in policy "+policy.Name); err != nil {
+				return err
+			}
+		}
+		for j, typID := range policy.DependsOnTypes {
+			if policy.DependsOnTypes[j], err = rewriteID(typID,
+				"type in policy "+policy.Name); err != nil {
+				return err
+			}
+		}
+		for j, relID := range policy.DependsOnRelations {
+			if policy.DependsOnRelations[j], err = rewriteID(relID,
+				"relation in policy "+policy.Name); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Rewrite type, sequence, and function OIDs in serialized expressions.
+	if err := ForEachExprStringInTableDesc(desc, func(expr *string, typ catalog.DescExprType) error {
+		switch typ {
+		case catalog.SQLExpr:
+			newExpr, exprErr := descutil.RewriteExprIDs(*expr, rewriter)
+			if exprErr != nil {
+				return exprErr
+			}
+			*expr = newExpr
+		case catalog.PLpgSQLStmt:
+			newExpr, exprErr := descutil.RewritePLpgSQLBodyIDs(*expr, rewriter)
+			if exprErr != nil {
+				return exprErr
+			}
+			*expr = newExpr
+		case catalog.SQLStmt:
+			// No table-level expressions currently use this type.
+		default:
+			return errors.AssertionFailedf("unexpected expression type %d", typ)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// Rewrite view query.
+	if desc.IsView() {
+		newQuery, viewErr := descutil.RewriteViewQueryIDs(desc.ViewQuery, rewriter)
+		if viewErr != nil {
+			return viewErr
+		}
+		desc.ViewQuery = newQuery
+	}
+
+	// Rewrite declarative schema changer state.
+	if state := desc.GetDeclarativeSchemaChangerState(); state != nil {
+		if err := descutil.RewriteSchemaChangerState(state, rewriter); err != nil {
+			return err
+		}
+		desc.SetDeclarativeSchemaChangerState(state)
+	}
+
+	return nil
+}
+
 
 // SetDeclarativeSchemaChangerState is part of the catalog.MutableDescriptor
 // interface.

@@ -18,6 +18,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catprivilege"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descutil"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/multiregion"
 	"github.com/cockroachdb/cockroach/pkg/sql/enum"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
@@ -1076,6 +1077,50 @@ func (desc *immutable) ForEachSuperRegion(f func(superRegionName string) error) 
 		if err := f(s.SuperRegionName); err != nil {
 			return iterutil.Map(err)
 		}
+	}
+	return nil
+}
+
+// Rewrite implements the catalog.MutableDescriptor interface.
+func (desc *Mutable) Rewrite(rewriter catalog.DescriptorRewriteFn) error {
+	newID, newNI, err := rewriter(desc.ID, descpb.NameInfo{
+		ParentID:       desc.GetParentID(),
+		ParentSchemaID: desc.GetParentSchemaID(),
+		Name:           desc.GetName(),
+	})
+	if err != nil {
+		return errors.Wrapf(err, "type %q (%d)", desc.GetName(), desc.ID)
+	}
+	desc.ID = newID
+	desc.ParentID = newNI.ParentID
+	desc.ParentSchemaID = newNI.ParentSchemaID
+	desc.Name = newNI.Name
+	desc.Version = 1
+	desc.ModificationTime = hlc.Timestamp{}
+
+	// Rewrite back-references.
+	for i, id := range desc.ReferencingDescriptorIDs {
+		newRefID, _, refErr := rewriter(id, descpb.NameInfo{})
+		if refErr != nil {
+			return errors.Wrapf(refErr,
+				"referencing descriptor %d in type %q", id, desc.GetName())
+		}
+		desc.ReferencingDescriptorIDs[i] = newRefID
+	}
+
+	switch t := desc.Kind; t {
+	case descpb.TypeDescriptor_ENUM, descpb.TypeDescriptor_COMPOSITE,
+		descpb.TypeDescriptor_MULTIREGION_ENUM:
+		newArrayID, _, arrayErr := rewriter(desc.ArrayTypeID, descpb.NameInfo{})
+		if arrayErr != nil {
+			return errors.Wrapf(arrayErr,
+				"array type %d for type %q", desc.ArrayTypeID, desc.GetName())
+		}
+		desc.ArrayTypeID = newArrayID
+	case descpb.TypeDescriptor_ALIAS:
+		descutil.RewriteIDsInTypesT(desc.Alias, rewriter)
+	default:
+		return errors.AssertionFailedf("unknown type kind %s", t.String())
 	}
 	return nil
 }

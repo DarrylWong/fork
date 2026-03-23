@@ -133,9 +133,10 @@ func IngestExternalCatalog(
 	if err != nil {
 		return ingestedCatalog, err
 	}
-	tablesToWrite := make([]catalog.TableDescriptor, 0, len(externalCatalog.Tables))
+	// First pass: generate new IDs and build the rewrite map.
+	idRewrites := make(map[descpb.ID]descpb.ID, len(externalCatalog.Tables))
 	var originalParentID descpb.ID
-	for i, table := range externalCatalog.Tables {
+	for _, table := range externalCatalog.Tables {
 		if originalParentID == 0 {
 			originalParentID = table.ParentID
 		} else if originalParentID != table.ParentID {
@@ -145,18 +146,31 @@ func IngestExternalCatalog(
 		if err != nil {
 			return ingestedCatalog, err
 		}
-		// TODO: rewrite the tables to fresh ids.
+		idRewrites[table.ID] = newID
+	}
+	rewriter := catalog.DescriptorRewriteFn(func(id descpb.ID, ni descpb.NameInfo) (descpb.ID, descpb.NameInfo, error) {
+		newID, ok := idRewrites[id]
+		if !ok {
+			return 0, descpb.NameInfo{}, errors.Errorf("missing rewrite for descriptor %d", id)
+		}
+		return newID, descpb.NameInfo{
+			ParentID:       dbDesc.GetID(),
+			ParentSchemaID: schemaID,
+			Name:           ni.Name,
+		}, nil
+	})
+
+	// Second pass: build mutable descriptors and rewrite all internal IDs.
+	tablesToWrite := make([]catalog.TableDescriptor, 0, len(externalCatalog.Tables))
+	for i, table := range externalCatalog.Tables {
 		mutTable := tabledesc.NewBuilder(&table).BuildCreatedMutableTable()
-		if setOffline {
-			// TODO: Add some functional ops so client can set offline msg, among
-			// other things.
-			mutTable.SetOffline("")
+		if err := mutTable.Rewrite(rewriter); err != nil {
+			return ingestedCatalog, errors.Wrapf(err, "restoring table desc and namespace entries")
 		}
 		mutTable.Name = ingestingUnqualifiedTableNames[i]
-		mutTable.UnexposedParentSchemaID = schemaID
-		mutTable.ParentID = dbDesc.GetID()
-		mutTable.Version = 1
-		mutTable.ID = newID
+		if setOffline {
+			mutTable.SetOffline("")
+		}
 		tablesToWrite = append(tablesToWrite, mutTable)
 		ingestedCatalog.Tables = append(ingestedCatalog.Tables, mutTable.TableDescriptor)
 	}

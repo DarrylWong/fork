@@ -15,6 +15,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catprivilege"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descutil"
 	"github.com/cockroachdb/cockroach/pkg/sql/parserutils"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
@@ -478,6 +479,53 @@ func (desc *Mutable) SetDefaultPrivilegeDescriptor(
 // interface.
 func (desc *immutable) GetDeclarativeSchemaChangeState() *scpb.DescriptorState {
 	return desc.DeclarativeSchemaChangerState.Clone()
+}
+
+// Rewrite implements the catalog.MutableDescriptor interface.
+func (desc *Mutable) Rewrite(rewriter catalog.DescriptorRewriteFn) error {
+	newID, newNI, err := rewriter(desc.ID, descpb.NameInfo{
+		ParentID:       desc.GetParentID(),
+		ParentSchemaID: desc.GetParentSchemaID(),
+		Name:           desc.GetName(),
+	})
+	if err != nil {
+		return errors.Wrapf(err, "schema %q (%d)", desc.GetName(), desc.ID)
+	}
+	desc.ID = newID
+	desc.ParentID = newNI.ParentID
+	desc.Name = newNI.Name
+	desc.Version = 1
+	desc.ModificationTime = hlc.Timestamp{}
+
+	// Rewrite function signature IDs and type OIDs.
+	newFns := make(map[string]descpb.SchemaDescriptor_Function, len(desc.Functions))
+	for fnName, fn := range desc.Functions {
+		newSigs := make([]descpb.SchemaDescriptor_FunctionSignature, 0, len(fn.Signatures))
+		for i := range fn.Signatures {
+			sig := fn.Signatures[i]
+			newFnID, _, fnErr := rewriter(sig.ID, descpb.NameInfo{})
+			if fnErr != nil {
+				return errors.Wrapf(fnErr, "function %q (%d) in schema %q", fnName, sig.ID, desc.GetName())
+			}
+			sig.ID = newFnID
+			for _, typ := range sig.ArgTypes {
+				descutil.RewriteIDsInTypesT(typ, rewriter)
+			}
+			descutil.RewriteIDsInTypesT(sig.ReturnType, rewriter)
+			for _, typ := range sig.OutParamTypes {
+				descutil.RewriteIDsInTypesT(typ, rewriter)
+			}
+			newSigs = append(newSigs, sig)
+		}
+		if len(newSigs) > 0 {
+			newFns[fnName] = descpb.SchemaDescriptor_Function{
+				Name:       fnName,
+				Signatures: newSigs,
+			}
+		}
+	}
+	desc.Functions = newFns
+	return nil
 }
 
 // SetDeclarativeSchemaChangerState is part of the catalog.MutableDescriptor

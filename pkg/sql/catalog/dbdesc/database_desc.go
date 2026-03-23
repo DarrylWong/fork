@@ -572,6 +572,40 @@ func (desc *immutable) GetDeclarativeSchemaChangerState() *scpb.DescriptorState 
 	return desc.DeclarativeSchemaChangerState.Clone()
 }
 
+// Rewrite implements the catalog.MutableDescriptor interface.
+func (desc *Mutable) Rewrite(rewriter catalog.DescriptorRewriteFn) error {
+	newID, newNI, err := rewriter(desc.ID, descpb.NameInfo{
+		ParentID:       desc.GetParentID(),
+		ParentSchemaID: desc.GetParentSchemaID(),
+		Name:           desc.GetName(),
+	})
+	if err != nil {
+		return errors.Wrapf(err, "database %q (%d)", desc.GetName(), desc.ID)
+	}
+	desc.ID = newID
+	desc.Name = newNI.Name
+	desc.Version = 1
+	desc.ModificationTime = hlc.Timestamp{}
+
+	// Rewrite the name-to-ID mapping for the database's child schemas.
+	newSchemas := make(map[string]descpb.DatabaseDescriptor_SchemaInfo, len(desc.Schemas))
+	if err := desc.ForEachSchema(func(id descpb.ID, name string) error {
+		newSchemaID, _, schemaErr := rewriter(id, descpb.NameInfo{
+			ParentID: newID,
+			Name:     name,
+		})
+		if schemaErr != nil {
+			return errors.Wrapf(schemaErr, "schema %q (%d) in database %q", name, id, desc.GetName())
+		}
+		newSchemas[name] = descpb.DatabaseDescriptor_SchemaInfo{ID: newSchemaID}
+		return nil
+	}); err != nil {
+		return err
+	}
+	desc.Schemas = newSchemas
+	return nil
+}
+
 // SetDeclarativeSchemaChangerState is part of the catalog.MutableDescriptor
 // interface.
 func (desc *Mutable) SetDeclarativeSchemaChangerState(state *scpb.DescriptorState) {
