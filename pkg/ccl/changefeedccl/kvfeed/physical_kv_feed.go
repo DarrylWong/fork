@@ -39,6 +39,7 @@ type rangeFeedConfig struct {
 	RangeObserver        kvcoord.RangeObserver
 	Knobs                TestingKnobs
 	Timers               *timers.ScopedTimers
+	RangefeedOptions     []kvcoord.RangeFeedOption
 }
 
 // rangefeedFactory is a function that creates and runs a rangefeed.
@@ -117,6 +118,7 @@ func (p rangefeedFactory) Run(ctx context.Context, sink kvevent.Writer, cfg rang
 	if len(cfg.Knobs.RangefeedOptions) != 0 {
 		rfOpts = append(rfOpts, cfg.Knobs.RangefeedOptions...)
 	}
+	rfOpts = append(rfOpts, cfg.RangefeedOptions...)
 
 	g.GoCtx(func(ctx context.Context) error {
 		if cfg.Knobs.OnRangeFeedStart != nil {

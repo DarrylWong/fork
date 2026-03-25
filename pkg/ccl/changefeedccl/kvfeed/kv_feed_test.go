@@ -154,7 +154,8 @@ func TestKVFeed(t *testing.T) {
 			codec,
 			tf, sf, rangefeedFactory(ref.run), bufferFactory,
 			changefeedbase.Targets{},
-			st, TestingKnobs{})
+			st, TestingKnobs{},
+			false /* withSequentialRFStartup */)
 		ctx, cancel := context.WithCancel(context.Background())
 		g := ctxgroup.WithContext(ctx)
 		g.GoCtx(func(ctx context.Context) error {

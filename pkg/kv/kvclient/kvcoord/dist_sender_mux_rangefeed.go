@@ -88,7 +88,7 @@ func muxRangeFeed(
 	}
 
 	m.g.GoCtx(func(ctx context.Context) error {
-		return divideAllSpansOnRangeBoundaries(ctx, spans, m.startSingleRangeFeed, ds)
+		return divideAllSpansOnRangeBoundaries(ctx, spans, m.startSingleRangeFeed, ds, cfg.forEachSpanFn)
 	})
 
 	return errors.CombineErrors(m.g.Wait(), ctx.Err())

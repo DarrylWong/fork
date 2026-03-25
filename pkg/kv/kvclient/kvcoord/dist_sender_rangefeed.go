@@ -61,6 +61,10 @@ type ForEachRangeFn func(fn ActiveRangeFeedIterFn) error
 // by polling fn.
 type RangeObserver func(fn ForEachRangeFn)
 
+// ForEachSpanFn is called synchronously before starting a rangefeed(s) for each
+// span.
+type ForEachSpanFn func(ctx context.Context, stp SpanTimePair) error
+
 type rangeFeedConfig struct {
 	overSystemTable       bool
 	withDiff              bool
@@ -68,6 +72,7 @@ type rangeFeedConfig struct {
 	withMetadata          bool
 	withMatchingOriginIDs []uint32
 	rangeObserver         RangeObserver
+	forEachSpanFn         ForEachSpanFn
 	consumerID            int64
 	bulkDelivery          bool
 
@@ -156,6 +161,14 @@ func WithConsumerID(cid int64) RangeFeedOption {
 	})
 }
 
+// WithForEachSpanFn sets a ForEachSpanFn callback that is called synchronously
+// before starting a rangefeed for each span. It may block.
+func WithForEachSpanFn(fn ForEachSpanFn) RangeFeedOption {
+	return optionFunc(func(c *rangeFeedConfig) {
+		c.forEachSpanFn = fn
+	})
+}
+
 // SpanTimePair is a pair of span along with its starting time. The starting
 // time is exclusive, i.e. the first possible emitted event (including catchup
 // scans) will be at startAfter.Next().
@@ -211,9 +224,14 @@ func (ds *DistSender) RangeFeed(
 }
 
 // divideAllSpansOnRangeBoundaries divides all spans on range boundaries and invokes
-// provided onRange function for each range.
+// provided onRange function for each range. If beforeStart is non-nil, it is
+// called synchronously before processing each span and may block.
 func divideAllSpansOnRangeBoundaries(
-	ctx context.Context, spans []SpanTimePair, onRange onRangeFn, ds *DistSender,
+	ctx context.Context,
+	spans []SpanTimePair,
+	onRange onRangeFn,
+	ds *DistSender,
+	forEachSpanFn ForEachSpanFn,
 ) error {
 	// Sort input spans based on their start time -- older spans first.
 	// Starting rangefeed over large number of spans is an expensive proposition,
@@ -230,6 +248,11 @@ func divideAllSpansOnRangeBoundaries(
 	})
 
 	for _, stp := range spans {
+		if forEachSpanFn != nil {
+			if err := forEachSpanFn(ctx, stp); err != nil {
+				return err
+			}
+		}
 		rs, err := keys.SpanAddr(stp.Span)
 		if err != nil {
 			return err

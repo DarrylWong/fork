@@ -26,6 +26,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/blobs"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/cdcevent"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/changefeedbase"
+
 	"github.com/cockroachdb/cockroach/pkg/cloud"
 	"github.com/cockroachdb/cockroach/pkg/cloud/cloudpb"
 	_ "github.com/cockroachdb/cockroach/pkg/cloud/impl" // register cloud storage providers
@@ -1010,3 +1011,7 @@ func (n *mockSinkStorage) Delete(_ context.Context, _ string) error {
 func (n *mockSinkStorage) Size(_ context.Context, _ string) (int64, error) {
 	return 0, nil
 }
+
+// TODO(darrylwong): Add an integration test for #155015 that verifies
+// sequential rangefeed startup prevents cloud storage sink file ordering
+// violations after restart with a partial checkpoint.

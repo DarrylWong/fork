@@ -100,6 +100,11 @@ type Config struct {
 	ScopedTimers *timers.ScopedTimers
 
 	ConsumerID int64
+
+	// WithSequentialRFStartup, when true, starts rangefeeds in order of
+	// most-behind resolved timestamp, waiting for the frontier to catch up
+	// to each span's resolved timestamp before starting its rangefeed.
+	WithSequentialRFStartup bool
 }
 
 // Run will run the kvfeed. The feed runs synchronously and returns an
@@ -158,7 +163,8 @@ func Run(ctx context.Context, cfg Config) (retErr error) {
 		cfg.InitialHighWater, cfg.InitialSpanTimePairs, cfg.EndTime,
 		cfg.Codec,
 		cfg.SchemaFeed,
-		sc, pff, bf, cfg.Targets, cfg.ScopedTimers, cfg.Knobs)
+		sc, pff, bf, cfg.Targets, cfg.ScopedTimers, cfg.Knobs,
+		cfg.WithSequentialRFStartup)
 	f.onBackfillCallback = cfg.MonitoringCfg.OnBackfillCallback
 
 	g.GoCtx(cfg.SchemaFeed.Run)
@@ -217,18 +223,19 @@ func (e schemaChangeDetectedError) Error() string {
 }
 
 type kvFeed struct {
-	spans                []roachpb.Span
-	withFrontierQuantize time.Duration
-	withDiff             bool
-	withFiltering        bool
-	withInitialBackfill  bool
-	withBulkDelivery     bool
-	consumerID           int64
-	initialHighWater     hlc.Timestamp
-	initialSpanTimePairs []kvcoord.SpanTimePair
-	endTime              hlc.Timestamp
-	writer               kvevent.Writer
-	codec                keys.SQLCodec
+	spans                      []roachpb.Span
+	withFrontierQuantize       time.Duration
+	withStartSpansSequentially bool
+	withDiff                   bool
+	withFiltering              bool
+	withInitialBackfill        bool
+	withBulkDelivery           bool
+	consumerID                 int64
+	initialHighWater           hlc.Timestamp
+	initialSpanTimePairs       []kvcoord.SpanTimePair
+	endTime                    hlc.Timestamp
+	writer                     kvevent.Writer
+	codec                      keys.SQLCodec
 
 	onBackfillCallback func() func()
 	rangeObserver      kvcoord.RangeObserver
@@ -266,29 +273,31 @@ func newKVFeed(
 	targets changefeedbase.Targets,
 	ts *timers.ScopedTimers,
 	knobs TestingKnobs,
+	withSequentialRFStartup bool,
 ) *kvFeed {
 	return &kvFeed{
-		writer:               writer,
-		spans:                spans,
-		initialSpanTimePairs: initialSpanTimePairs,
-		withInitialBackfill:  withInitialBackfill,
-		withDiff:             withDiff,
-		withFiltering:        withFiltering,
-		withFrontierQuantize: withFrontierQuantize,
-		withBulkDelivery:     withBulkDelivery,
-		consumerID:           consumerID,
-		initialHighWater:     initialHighWater,
-		endTime:              endTime,
-		schemaChangeEvents:   schemaChangeEvents,
-		schemaChangePolicy:   schemaChangePolicy,
-		codec:                codec,
-		tableFeed:            tf,
-		scanner:              sc,
-		physicalFeed:         pff,
-		bufferFactory:        bf,
-		targets:              targets,
-		timers:               ts,
-		knobs:                knobs,
+		withStartSpansSequentially: withSequentialRFStartup,
+		writer:                     writer,
+		spans:                      spans,
+		initialSpanTimePairs:       initialSpanTimePairs,
+		withInitialBackfill:        withInitialBackfill,
+		withDiff:                   withDiff,
+		withFiltering:              withFiltering,
+		withFrontierQuantize:       withFrontierQuantize,
+		withBulkDelivery:           withBulkDelivery,
+		consumerID:                 consumerID,
+		initialHighWater:           initialHighWater,
+		endTime:                    endTime,
+		schemaChangeEvents:         schemaChangeEvents,
+		schemaChangePolicy:         schemaChangePolicy,
+		codec:                      codec,
+		tableFeed:                  tf,
+		scanner:                    sc,
+		physicalFeed:               pff,
+		bufferFactory:              bf,
+		targets:                    targets,
+		timers:                     ts,
+		knobs:                      knobs,
 	}
 }
 
@@ -545,6 +554,24 @@ func (f *kvFeed) scanIfShould(
 	return spansToScan, scanTime, nil
 }
 
+// This can probably be derived somewhere?
+const TODOMaxBackoff = 3 * time.Second
+
+func waitForFrontierBeforeStartingCallback(resumeFrontier span.Frontier, maxBackoff time.Duration) kvcoord.ForEachSpanFn {
+	return func(ctx context.Context, stp kvcoord.SpanTimePair) error {
+		backoff := 10 * time.Millisecond
+		for resumeFrontier.Frontier().Less(stp.StartAfter) {
+			select {
+			case <-time.After(backoff):
+				backoff = min(backoff*2, maxBackoff)
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		return nil
+	}
+}
+
 // runUntilTableEvent starts rangefeeds for the spans being watched by
 // the kv feed and runs until a table event (schema change) is encountered.
 //
@@ -584,6 +611,12 @@ func (f *kvFeed) runUntilTableEvent(ctx context.Context, resumeFrontier span.Fro
 		Knobs:                f.knobs,
 		Timers:               f.timers,
 		RangeObserver:        f.rangeObserver,
+	}
+
+	if f.withStartSpansSequentially {
+		physicalCfg.RangefeedOptions = append(physicalCfg.RangefeedOptions,
+			kvcoord.WithForEachSpanFn(waitForFrontierBeforeStartingCallback(resumeFrontier, TODOMaxBackoff)),
+		)
 	}
 
 	// The following two synchronous calls works as follows:

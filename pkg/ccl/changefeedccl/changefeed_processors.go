@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"iter"
 	"math/rand"
+	"net/url"
 	"slices"
 	"sync"
 	"time"
@@ -550,31 +551,44 @@ func (ca *changeAggregator) makeKVFeedCfg(
 		})
 	}
 
+	// Sequential rangefeed startup starts rangefeeds in order of most-behind
+	// resolved timestamp, preventing cloud storage sink file ordering violations
+	// after restart with a partial checkpoint (#155015). Default on for cloud
+	// storage sinks; opt-in for other sinks via cluster setting.
+	sequentialRFStartup := changefeedbase.SequentialRangefeedStartup.Get(&cfg.Settings.SV)
+	if !sequentialRFStartup {
+		sinkURI, err := url.Parse(config.SinkURI)
+		if err == nil && isCloudStorageSink(sinkURI) {
+			sequentialRFStartup = true
+		}
+	}
+
 	return kvfeed.Config{
-		Writer:               buf,
-		Settings:             cfg.Settings,
-		DB:                   cfg.DB.KV(),
-		Codec:                cfg.Codec,
-		Clock:                cfg.DB.KV().Clock(),
-		Spans:                spans,
-		Targets:              ca.targets,
-		Metrics:              &ca.metrics.KVFeedMetrics,
-		MM:                   memMon,
-		InitialHighWater:     initialHighWater,
-		InitialSpanTimePairs: initialSpanTimePairs,
-		EndTime:              config.EndTime,
-		WithDiff:             filters.WithDiff,
-		WithFiltering:        filters.WithFiltering,
-		WithFrontierQuantize: changefeedbase.Quantize.Get(&cfg.Settings.SV),
-		WithBulkDelivery:     changefeedbase.BulkDelivery.Get(&cfg.Settings.SV),
-		NeedsInitialScan:     needsInitialScan,
-		SchemaChangeEvents:   schemaChange.EventClass,
-		SchemaChangePolicy:   schemaChange.Policy,
-		SchemaFeed:           sf,
-		Knobs:                ca.knobs.FeedKnobs,
-		ScopedTimers:         ca.sliMetrics.Timers,
-		MonitoringCfg:        monitoringCfg,
-		ConsumerID:           int64(ca.spec.JobID),
+		Writer:                  buf,
+		Settings:                cfg.Settings,
+		DB:                      cfg.DB.KV(),
+		Codec:                   cfg.Codec,
+		Clock:                   cfg.DB.KV().Clock(),
+		Spans:                   spans,
+		Targets:                 ca.targets,
+		Metrics:                 &ca.metrics.KVFeedMetrics,
+		MM:                      memMon,
+		InitialHighWater:        initialHighWater,
+		InitialSpanTimePairs:    initialSpanTimePairs,
+		EndTime:                 config.EndTime,
+		WithDiff:                filters.WithDiff,
+		WithFiltering:           filters.WithFiltering,
+		WithFrontierQuantize:    changefeedbase.Quantize.Get(&cfg.Settings.SV),
+		WithBulkDelivery:        changefeedbase.BulkDelivery.Get(&cfg.Settings.SV),
+		NeedsInitialScan:        needsInitialScan,
+		SchemaChangeEvents:      schemaChange.EventClass,
+		SchemaChangePolicy:      schemaChange.Policy,
+		SchemaFeed:              sf,
+		Knobs:                   ca.knobs.FeedKnobs,
+		ScopedTimers:            ca.sliMetrics.Timers,
+		MonitoringCfg:           monitoringCfg,
+		ConsumerID:              int64(ca.spec.JobID),
+		WithSequentialRFStartup: sequentialRFStartup,
 	}, nil
 }
 

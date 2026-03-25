@@ -482,6 +482,22 @@ var TrackPerTableProgress = settings.RegisterBoolSetting(
 	metamorphic.ConstantWithTestBool("changefeed.progress.per_table_tracking.enabled", true),
 )
 
+// SequentialRangefeedStartup controls whether rangefeeds are started
+// sequentially in order of most-behind resolved timestamp. When enabled,
+// the most-behind spans start first, letting them catch up before starting
+// spans that are further ahead. A span's rangefeed is not started until
+// the frontier has caught up to that span's resolved timestamp, which
+// keeps the frontier advancing steadily rather than being held back by
+// all spans competing for resources simultaneously.
+var SequentialRangefeedStartup = settings.RegisterBoolSetting(
+	settings.ApplicationLevel,
+	"changefeed.sequential_rangefeed_startup.enabled",
+	"when true, rangefeeds are started in order of most-behind resolved "+
+		"timestamp, waiting for the frontier to catch up to each span's "+
+		"resolved timestamp before starting its rangefeed",
+	false,
+)
+
 // FrontierPersistenceInterval configures the minimum amount of time that must
 // elapse before a changefeed will persist its entire span frontier again.
 var FrontierPersistenceInterval = settings.RegisterDurationSettingWithExplicitUnit(
