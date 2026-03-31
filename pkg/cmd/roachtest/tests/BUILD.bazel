@@ -48,6 +48,7 @@ go_library(
         "cdc_filtering.go",
         "cdc_helper.go",
         "cdc_stats.go",
+        "cdc_upgrade_inspect.go",
         "chaos.go",
         "clearrange.go",
         "cli.go",
