@@ -606,18 +606,16 @@ func (desc *Mutable) SetOffline(reason string) {
 
 // Rewrite implements the catalog.MutableDescriptor interface.
 func (desc *Mutable) Rewrite(rewriter catalog.DescriptorRewriteFn) error {
-	newID, newNI, err := rewriter(desc.ID, descpb.NameInfo{
-		ParentID:       desc.GetParentID(),
-		ParentSchemaID: desc.GetParentSchemaID(),
-		Name:           desc.GetName(),
-	})
-	if err != nil {
-		return errors.Wrapf(err, "function %q (%d)", desc.GetName(), desc.ID)
+	var err error
+	if desc.ID, err = rewriter(desc.ID); err != nil {
+		return errors.Wrapf(err, "function %q", desc.GetName())
 	}
-	desc.ID = newID
-	desc.ParentID = newNI.ParentID
-	desc.ParentSchemaID = newNI.ParentSchemaID
-	desc.Name = newNI.Name
+	if desc.ParentID, err = rewriter(desc.ParentID); err != nil {
+		return errors.Wrapf(err, "parent database for function %q", desc.GetName())
+	}
+	if desc.ParentSchemaID, err = rewriter(desc.ParentSchemaID); err != nil {
+		return errors.Wrapf(err, "parent schema for function %q", desc.GetName())
+	}
 	desc.Version = 1
 	desc.ModificationTime = hlc.Timestamp{}
 
@@ -629,38 +627,26 @@ func (desc *Mutable) Rewrite(rewriter catalog.DescriptorRewriteFn) error {
 
 	// Rewrite forward references.
 	for i, depID := range desc.DependsOn {
-		newDepID, _, depErr := rewriter(depID, descpb.NameInfo{})
-		if depErr != nil {
-			return errors.Wrapf(depErr,
-				"referenced relation %d in function %q", depID, desc.GetName())
+		if desc.DependsOn[i], err = rewriter(depID); err != nil {
+			return err
 		}
-		desc.DependsOn[i] = newDepID
 	}
 	for i, typID := range desc.DependsOnTypes {
-		newTypID, _, typErr := rewriter(typID, descpb.NameInfo{})
-		if typErr != nil {
-			return errors.Wrapf(typErr,
-				"referenced type %d in function %q", typID, desc.GetName())
+		if desc.DependsOnTypes[i], err = rewriter(typID); err != nil {
+			return err
 		}
-		desc.DependsOnTypes[i] = newTypID
 	}
 	for i, funcID := range desc.DependsOnFunctions {
-		newFuncID, _, funcErr := rewriter(funcID, descpb.NameInfo{})
-		if funcErr != nil {
-			return errors.Wrapf(funcErr,
-				"referenced function %d in function %q", funcID, desc.GetName())
+		if desc.DependsOnFunctions[i], err = rewriter(funcID); err != nil {
+			return err
 		}
-		desc.DependsOnFunctions[i] = newFuncID
 	}
 
 	// Rewrite back-references.
 	for i, dep := range desc.DependedOnBy {
-		newDepID, _, depErr := rewriter(dep.ID, descpb.NameInfo{})
-		if depErr != nil {
-			return errors.Wrapf(depErr,
-				"back-referenced relation %d in function %q", dep.ID, desc.GetName())
+		if desc.DependedOnBy[i].ID, err = rewriter(dep.ID); err != nil {
+			return err
 		}
-		desc.DependedOnBy[i].ID = newDepID
 	}
 	return nil
 }

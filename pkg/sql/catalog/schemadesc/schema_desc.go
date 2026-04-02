@@ -483,17 +483,13 @@ func (desc *immutable) GetDeclarativeSchemaChangeState() *scpb.DescriptorState {
 
 // Rewrite implements the catalog.MutableDescriptor interface.
 func (desc *Mutable) Rewrite(rewriter catalog.DescriptorRewriteFn) error {
-	newID, newNI, err := rewriter(desc.ID, descpb.NameInfo{
-		ParentID:       desc.GetParentID(),
-		ParentSchemaID: desc.GetParentSchemaID(),
-		Name:           desc.GetName(),
-	})
-	if err != nil {
-		return errors.Wrapf(err, "schema %q (%d)", desc.GetName(), desc.ID)
+	var err error
+	if desc.ID, err = rewriter(desc.ID); err != nil {
+		return errors.Wrapf(err, "schema %q", desc.GetName())
 	}
-	desc.ID = newID
-	desc.ParentID = newNI.ParentID
-	desc.Name = newNI.Name
+	if desc.ParentID, err = rewriter(desc.ParentID); err != nil {
+		return errors.Wrapf(err, "parent database for schema %q", desc.GetName())
+	}
 	desc.Version = 1
 	desc.ModificationTime = hlc.Timestamp{}
 
@@ -503,7 +499,7 @@ func (desc *Mutable) Rewrite(rewriter catalog.DescriptorRewriteFn) error {
 		newSigs := make([]descpb.SchemaDescriptor_FunctionSignature, 0, len(fn.Signatures))
 		for i := range fn.Signatures {
 			sig := fn.Signatures[i]
-			newFnID, _, fnErr := rewriter(sig.ID, descpb.NameInfo{})
+			newFnID, fnErr := rewriter(sig.ID)
 			if fnErr != nil {
 				return errors.Wrapf(fnErr, "function %q (%d) in schema %q", fnName, sig.ID, desc.GetName())
 			}

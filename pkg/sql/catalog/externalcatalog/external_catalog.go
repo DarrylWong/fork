@@ -135,10 +135,11 @@ func IngestExternalCatalog(
 	}
 	// First pass: generate new IDs and build the rewrite map.
 	idRewrites := make(map[descpb.ID]descpb.ID, len(externalCatalog.Tables))
-	var originalParentID descpb.ID
+	var originalParentID, originalParentSchemaID descpb.ID
 	for _, table := range externalCatalog.Tables {
 		if originalParentID == 0 {
 			originalParentID = table.ParentID
+			originalParentSchemaID = table.GetUnexposedParentSchemaID()
 		} else if originalParentID != table.ParentID {
 			return ingestedCatalog, errors.New("all tables must belong to the same parent")
 		}
@@ -148,16 +149,16 @@ func IngestExternalCatalog(
 		}
 		idRewrites[table.ID] = newID
 	}
-	rewriter := catalog.DescriptorRewriteFn(func(id descpb.ID, ni descpb.NameInfo) (descpb.ID, descpb.NameInfo, error) {
+	// Map source parent database and schema IDs to destination IDs.
+	idRewrites[originalParentID] = dbDesc.GetID()
+	idRewrites[originalParentSchemaID] = schemaID
+
+	rewriter := catalog.DescriptorRewriteFn(func(id descpb.ID) (descpb.ID, error) {
 		newID, ok := idRewrites[id]
 		if !ok {
-			return 0, descpb.NameInfo{}, errors.Errorf("missing rewrite for descriptor %d", id)
+			return 0, errors.Errorf("missing rewrite for descriptor %d", id)
 		}
-		return newID, descpb.NameInfo{
-			ParentID:       dbDesc.GetID(),
-			ParentSchemaID: schemaID,
-			Name:           ni.Name,
-		}, nil
+		return newID, nil
 	})
 
 	// Second pass: build mutable descriptors and rewrite all internal IDs.

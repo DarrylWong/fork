@@ -12,7 +12,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
-	"github.com/cockroachdb/cockroach/pkg/sql/catalog/schemaexpr"
 	"github.com/cockroachdb/cockroach/pkg/sql/parserutils"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/screl"
@@ -31,14 +30,14 @@ func RewriteIDsInTypesT(typ *types.T, rewriter catalog.DescriptorRewriteFn) {
 	}
 	tid := catid.UserDefinedOIDToID(typ.Oid())
 	var newOID, newArrayOID oid.Oid
-	if newID, _, err := rewriter(tid, descpb.NameInfo{}); err == nil {
+	if newID, err := rewriter(tid); err == nil {
 		newOID = catid.TypeIDToOID(newID)
 	}
 	if typ.Family() != types.ArrayFamily {
 		arrayOid := typ.UserDefinedArrayOID()
 		if arrayOid != 0 {
 			arrayTid := catid.UserDefinedOIDToID(arrayOid)
-			if newID, _, err := rewriter(arrayTid, descpb.NameInfo{}); err == nil {
+			if newID, err := rewriter(arrayTid); err == nil {
 				newArrayOID = catid.TypeIDToOID(newID)
 			}
 		}
@@ -60,7 +59,7 @@ func makeTypeReplaceFmtCtx(rewriter catalog.DescriptorRewriteFn) *tree.FmtCtx {
 				id = descpb.ID(ref.OID)
 			}
 			newRef := ref
-			if newID, _, err := rewriter(id, descpb.NameInfo{}); err == nil {
+			if newID, err := rewriter(id); err == nil {
 				newRef = &tree.OIDTypeReference{OID: catid.TypeIDToOID(newID)}
 			}
 			ctx.WriteString(newRef.SQLString())
@@ -74,15 +73,24 @@ func makeSeqReplaceFunc(
 	rewriter catalog.DescriptorRewriteFn,
 ) func(expr tree.Expr) (bool, tree.Expr, error) {
 	return func(expr tree.Expr) (bool, tree.Expr, error) {
-		seqID, ok := schemaexpr.GetSeqIDFromExpr(expr)
-		if !ok {
-			return true, expr, nil
-		}
 		annotateTypeExpr, ok := expr.(*tree.AnnotateTypeExpr)
 		if !ok {
 			return true, expr, nil
 		}
-		newID, _, err := rewriter(descpb.ID(seqID), descpb.NameInfo{})
+		typ, safe := tree.GetStaticallyKnownType(annotateTypeExpr.Type)
+		if !safe || typ.Family() != types.OidFamily {
+			return true, expr, nil
+		}
+		numVal, ok := annotateTypeExpr.Expr.(*tree.NumVal)
+		if !ok {
+			return true, expr, nil
+		}
+		seqID, err := numVal.AsInt64()
+		if err != nil {
+			// Not a valid sequence ID literal; skip this expression.
+			return true, expr, nil //nolint:returnerrcheck
+		}
+		newID, err := rewriter(descpb.ID(seqID))
 		if err != nil {
 			return false, expr, err
 		}
@@ -113,7 +121,7 @@ func makeFuncReplaceFunc(
 			return true, expr, nil
 		}
 		fnID := catid.UserDefinedOIDToID(oidRef.OID)
-		newID, _, err := rewriter(fnID, descpb.NameInfo{})
+		newID, err := rewriter(fnID)
 		if err != nil {
 			return false, expr, err
 		}
@@ -208,29 +216,31 @@ func RewriteSchemaChangerState(
 
 		// Rewrite special-case elements that carry parent info.
 		if data := t.GetTableData(); data != nil {
-			newID, newNI, err := rewriter(data.TableID, descpb.NameInfo{
-				ParentID: data.DatabaseID,
-			})
-			if err != nil {
+			var err error
+			if data.TableID, err = rewriter(data.TableID); err != nil {
 				return errors.Wrapf(err, "rewriting schema changer state element %s",
 					screl.ElementString(t.Element()))
 			}
-			data.TableID = newID
-			data.DatabaseID = newNI.ParentID
+			if data.DatabaseID, err = rewriter(data.DatabaseID); err != nil {
+				return errors.Wrapf(err, "rewriting schema changer state element %s",
+					screl.ElementString(t.Element()))
+			}
 			continue
 		}
 		if data := t.GetNamespace(); data != nil {
-			newID, newNI, err := rewriter(data.DescriptorID, descpb.NameInfo{
-				ParentID:       data.DatabaseID,
-				ParentSchemaID: data.SchemaID,
-			})
-			if err != nil {
+			var err error
+			if data.DescriptorID, err = rewriter(data.DescriptorID); err != nil {
 				return errors.Wrapf(err, "rewriting schema changer state element %s",
 					screl.ElementString(t.Element()))
 			}
-			data.DescriptorID = newID
-			data.DatabaseID = newNI.ParentID
-			data.SchemaID = newNI.ParentSchemaID
+			if data.DatabaseID, err = rewriter(data.DatabaseID); err != nil {
+				return errors.Wrapf(err, "rewriting schema changer state element %s",
+					screl.ElementString(t.Element()))
+			}
+			if data.SchemaID, err = rewriter(data.SchemaID); err != nil {
+				return errors.Wrapf(err, "rewriting schema changer state element %s",
+					screl.ElementString(t.Element()))
+			}
 			continue
 		}
 
@@ -239,7 +249,7 @@ func RewriteSchemaChangerState(
 			if *id == descpb.InvalidID {
 				return nil
 			}
-			newID, _, err := rewriter(*id, descpb.NameInfo{})
+			newID, err := rewriter(*id)
 			if err != nil {
 				return err
 			}

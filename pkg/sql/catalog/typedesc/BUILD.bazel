@@ -20,6 +20,7 @@ go_library(
         "//pkg/sql/catalog/catpb",
         "//pkg/sql/catalog/catprivilege",
         "//pkg/sql/catalog/descpb",
+        "//pkg/sql/catalog/descutil",
         "//pkg/sql/catalog/multiregion",
         "//pkg/sql/enum",
         "//pkg/sql/pgwire/pgcode",

@@ -13,20 +13,16 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 )
 
-// DescriptorRewriteFn is a function that maps an old descriptor ID and its
-// namespace entry (name, parent ID, parent schema ID) to new values. It is
-// called by MutableDescriptor.Rewrite for every ID reference within a
-// descriptor.
-//
-// For non-self ID references (e.g., a foreign key's referenced table ID, a
-// type OID in a column), only the returned ID is used — the returned NameInfo
-// is ignored.
+// DescriptorRewriteFn maps an old descriptor ID to a new one. It is called by
+// MutableDescriptor.Rewrite for every ID reference within a descriptor,
+// including the descriptor's own ID, parent IDs, FK references, dependency
+// lists, type OIDs, sequence IDs, and function OIDs in expressions.
 //
 // The function must return an error if it cannot provide a rewrite for the
 // given ID. This ensures that callers who expect all references to be
 // rewritable (e.g., LDR, PCR) get a clear error rather than a silently
 // corrupt descriptor.
-type DescriptorRewriteFn func(id descpb.ID, ni descpb.NameInfo) (descpb.ID, descpb.NameInfo, error)
+type DescriptorRewriteFn func(id descpb.ID) (descpb.ID, error)
 
 // MutableDescriptor represents a descriptor undergoing in-memory mutations
 // as part of a schema change.
@@ -63,16 +59,16 @@ type MutableDescriptor interface {
 	// schema change currently operating on this descriptor.
 	SetDeclarativeSchemaChangerState(*scpb.DescriptorState)
 
-	// Rewrite rewrites all descriptor ID references and namespace entries
-	// within the descriptor using the provided DescriptorRewriteFn callback.
-	//
-	// The callback is invoked for the descriptor's own ID (with its full
-	// NameInfo — the returned NameInfo is applied to the descriptor itself),
-	// and for every referenced descriptor ID (only the returned ID is used).
+	// Rewrite rewrites all descriptor ID references within the descriptor
+	// using the provided DescriptorRewriteFn callback. This includes the
+	// descriptor's own ID, parent IDs, and all referenced descriptor IDs.
 	//
 	// Rewrite also resets the descriptor version to 1 and clears the
 	// modification timestamp, since rewritten descriptors are treated as
 	// freshly created on the destination.
+	//
+	// Name changes are not handled by Rewrite — callers should set the
+	// descriptor name separately if needed.
 	//
 	// If the DescriptorRewriteFn returns an error for any referenced ID,
 	// Rewrite stops and returns that error. Callers that want to tolerate

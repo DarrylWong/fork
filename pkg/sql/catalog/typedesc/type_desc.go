@@ -1083,40 +1083,32 @@ func (desc *immutable) ForEachSuperRegion(f func(superRegionName string) error) 
 
 // Rewrite implements the catalog.MutableDescriptor interface.
 func (desc *Mutable) Rewrite(rewriter catalog.DescriptorRewriteFn) error {
-	newID, newNI, err := rewriter(desc.ID, descpb.NameInfo{
-		ParentID:       desc.GetParentID(),
-		ParentSchemaID: desc.GetParentSchemaID(),
-		Name:           desc.GetName(),
-	})
-	if err != nil {
-		return errors.Wrapf(err, "type %q (%d)", desc.GetName(), desc.ID)
+	var err error
+	if desc.ID, err = rewriter(desc.ID); err != nil {
+		return errors.Wrapf(err, "type %q", desc.GetName())
 	}
-	desc.ID = newID
-	desc.ParentID = newNI.ParentID
-	desc.ParentSchemaID = newNI.ParentSchemaID
-	desc.Name = newNI.Name
+	if desc.ParentID, err = rewriter(desc.ParentID); err != nil {
+		return errors.Wrapf(err, "parent database for type %q", desc.GetName())
+	}
+	if desc.ParentSchemaID, err = rewriter(desc.ParentSchemaID); err != nil {
+		return errors.Wrapf(err, "parent schema for type %q", desc.GetName())
+	}
 	desc.Version = 1
 	desc.ModificationTime = hlc.Timestamp{}
 
 	// Rewrite back-references.
 	for i, id := range desc.ReferencingDescriptorIDs {
-		newRefID, _, refErr := rewriter(id, descpb.NameInfo{})
-		if refErr != nil {
-			return errors.Wrapf(refErr,
-				"referencing descriptor %d in type %q", id, desc.GetName())
+		if desc.ReferencingDescriptorIDs[i], err = rewriter(id); err != nil {
+			return err
 		}
-		desc.ReferencingDescriptorIDs[i] = newRefID
 	}
 
 	switch t := desc.Kind; t {
 	case descpb.TypeDescriptor_ENUM, descpb.TypeDescriptor_COMPOSITE,
 		descpb.TypeDescriptor_MULTIREGION_ENUM:
-		newArrayID, _, arrayErr := rewriter(desc.ArrayTypeID, descpb.NameInfo{})
-		if arrayErr != nil {
-			return errors.Wrapf(arrayErr,
-				"array type %d for type %q", desc.ArrayTypeID, desc.GetName())
+		if desc.ArrayTypeID, err = rewriter(desc.ArrayTypeID); err != nil {
+			return err
 		}
-		desc.ArrayTypeID = newArrayID
 	case descpb.TypeDescriptor_ALIAS:
 		descutil.RewriteIDsInTypesT(desc.Alias, rewriter)
 	default:
