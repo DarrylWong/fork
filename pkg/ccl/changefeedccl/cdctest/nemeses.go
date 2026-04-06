@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/changefeedbase"
@@ -237,12 +238,18 @@ func (cfo ChangefeedOption) OptionString() string {
 type NemesesOption struct {
 	EnableFpValidator bool
 	EnableSQLSmith    bool
+
+	// FilteringEnabled is an atomic flag toggled by the FSM to hold
+	// back resolved spans for a subset of the key space. The test
+	// wires this to the changefeed's FilterSpanWithMutation knob.
+	FilteringEnabled *atomic.Bool
 }
 
 var NemesesOptions = []NemesesOption{
 	{
 		EnableFpValidator: true,
 		EnableSQLSmith:    true,
+		FilteringEnabled:  &atomic.Bool{},
 	},
 }
 
@@ -295,6 +302,7 @@ func RunNemesis(
 		maxTestColumnCount:      10,
 		rowCount:                4,
 		db:                      db,
+		filteringEnabled:        nOp.FilteringEnabled,
 		// eventMix does not have to add to 100
 		eventMix: map[fsm.Event]int{
 			// We don't want `eventFinished` to ever be returned by `nextEvent` so we set
@@ -355,6 +363,13 @@ func RunNemesis(
 
 			// eventCreateEnum creates a new enum type.
 			eventCreateEnum{}: 5,
+
+			// eventForcePartialCheckpoint holds back resolved spans for one span,
+			// creating lag that leads to partial checkpoints.
+			eventForcePartialCheckpoint{}: 5,
+
+			// eventStopForcePartialCheckpoint stops holding back resolved spans.
+			eventStopForcePartialCheckpoint{}: 20,
 		},
 	}
 
@@ -547,6 +562,7 @@ func RunNemesis(
 		TxnOpen:         fsm.FromBool(txnOpenBeforeInitialScan),
 		CanAddColumn:    fsm.True,
 		CanRemoveColumn: fsm.False,
+		SpansFiltered:   fsm.False,
 	}
 	m := fsm.MakeMachine(compiledStateTransitions, initialState, ns)
 	for {
@@ -611,6 +627,10 @@ type nemeses struct {
 	openTxnTs              gosql.NullString
 
 	enumCount int
+
+	// filteringEnabled is toggled by the FSM to hold back resolved
+	// spans for a subset of the key space, creating lagging spans.
+	filteringEnabled *atomic.Bool
 }
 
 // nextEvent selects the next state transition.
@@ -716,6 +736,7 @@ type stateRunning struct {
 	TxnOpen         fsm.Bool
 	CanRemoveColumn fsm.Bool
 	CanAddColumn    fsm.Bool
+	SpansFiltered   fsm.Bool
 }
 type stateDone struct{}
 
@@ -738,21 +759,25 @@ type eventRemoveColumn struct {
 	CanRemoveColumnAfter fsm.Bool
 }
 type eventCreateEnum struct{}
+type eventForcePartialCheckpoint struct{}
+type eventStopForcePartialCheckpoint struct{}
 type eventFinished struct{}
 
-func (eventOpenTxn) Event()      {}
-func (eventFeedMessage) Event()  {}
-func (eventPause) Event()        {}
-func (eventResume) Event()       {}
-func (eventCommit) Event()       {}
-func (eventPush) Event()         {}
-func (eventAbort) Event()        {}
-func (eventRollback) Event()     {}
-func (eventSplit) Event()        {}
-func (eventAddColumn) Event()    {}
-func (eventRemoveColumn) Event() {}
-func (eventCreateEnum) Event()   {}
-func (eventFinished) Event()     {}
+func (eventOpenTxn) Event()          {}
+func (eventFeedMessage) Event()      {}
+func (eventPause) Event()            {}
+func (eventResume) Event()           {}
+func (eventCommit) Event()           {}
+func (eventPush) Event()             {}
+func (eventAbort) Event()            {}
+func (eventRollback) Event()         {}
+func (eventSplit) Event()            {}
+func (eventAddColumn) Event()        {}
+func (eventRemoveColumn) Event()     {}
+func (eventCreateEnum) Event()       {}
+func (eventForcePartialCheckpoint) Event()     {}
+func (eventStopForcePartialCheckpoint) Event() {}
+func (eventFinished) Event()         {}
 
 var stateTransitions = fsm.Pattern{
 	stateRunning{
@@ -760,13 +785,15 @@ var stateTransitions = fsm.Pattern{
 		TxnOpen:         fsm.Var("TxnOpen"),
 		CanAddColumn:    fsm.Var("CanAddColumn"),
 		CanRemoveColumn: fsm.Var("CanRemoveColumn"),
+		SpansFiltered:   fsm.Var("SpansFiltered"),
 	}: {
 		eventSplit{}: {
 			Next: stateRunning{
 				FeedPaused:      fsm.Var("FeedPaused"),
 				TxnOpen:         fsm.Var("TxnOpen"),
 				CanAddColumn:    fsm.Var("CanAddColumn"),
-				CanRemoveColumn: fsm.Var("CanRemoveColumn")},
+				CanRemoveColumn: fsm.Var("CanRemoveColumn"),
+				SpansFiltered:   fsm.Var("SpansFiltered")},
 			Action: logEvent(split),
 		},
 		eventFinished{}: {
@@ -779,6 +806,7 @@ var stateTransitions = fsm.Pattern{
 		TxnOpen:         fsm.False,
 		CanAddColumn:    fsm.True,
 		CanRemoveColumn: fsm.Any,
+		SpansFiltered:   fsm.Var("SpansFiltered"),
 	}: {
 		eventAddColumn{
 			CanAddColumnAfter: fsm.Var("CanAddColumnAfter"),
@@ -787,7 +815,8 @@ var stateTransitions = fsm.Pattern{
 				FeedPaused:      fsm.Var("FeedPaused"),
 				TxnOpen:         fsm.False,
 				CanAddColumn:    fsm.Var("CanAddColumnAfter"),
-				CanRemoveColumn: fsm.True},
+				CanRemoveColumn: fsm.True,
+				SpansFiltered:   fsm.Var("SpansFiltered")},
 			Action: logEvent(addColumn),
 		},
 	},
@@ -796,6 +825,7 @@ var stateTransitions = fsm.Pattern{
 		TxnOpen:         fsm.False,
 		CanAddColumn:    fsm.Any,
 		CanRemoveColumn: fsm.True,
+		SpansFiltered:   fsm.Var("SpansFiltered"),
 	}: {
 		eventRemoveColumn{
 			CanRemoveColumnAfter: fsm.Var("CanRemoveColumnAfter"),
@@ -804,7 +834,8 @@ var stateTransitions = fsm.Pattern{
 				FeedPaused:      fsm.Var("FeedPaused"),
 				TxnOpen:         fsm.False,
 				CanAddColumn:    fsm.True,
-				CanRemoveColumn: fsm.Var("CanRemoveColumnAfter")},
+				CanRemoveColumn: fsm.Var("CanRemoveColumnAfter"),
+				SpansFiltered:   fsm.Var("SpansFiltered")},
 			Action: logEvent(removeColumn),
 		},
 	},
@@ -813,13 +844,15 @@ var stateTransitions = fsm.Pattern{
 		TxnOpen:         fsm.False,
 		CanAddColumn:    fsm.Var("CanAddColumn"),
 		CanRemoveColumn: fsm.Var("CanRemoveColumn"),
+		SpansFiltered:   fsm.Var("SpansFiltered"),
 	}: {
 		eventFeedMessage{}: {
 			Next: stateRunning{
 				FeedPaused:      fsm.False,
 				TxnOpen:         fsm.False,
 				CanAddColumn:    fsm.Var("CanAddColumn"),
-				CanRemoveColumn: fsm.Var("CanRemoveColumn")},
+				CanRemoveColumn: fsm.Var("CanRemoveColumn"),
+				SpansFiltered:   fsm.Var("SpansFiltered")},
 			Action: logEvent(noteFeedMessage),
 		},
 	},
@@ -828,13 +861,15 @@ var stateTransitions = fsm.Pattern{
 		TxnOpen:         fsm.False,
 		CanAddColumn:    fsm.Var("CanAddColumn"),
 		CanRemoveColumn: fsm.Var("CanRemoveColumn"),
+		SpansFiltered:   fsm.Var("SpansFiltered"),
 	}: {
 		eventOpenTxn{}: {
 			Next: stateRunning{
 				FeedPaused:      fsm.Var("FeedPaused"),
 				TxnOpen:         fsm.True,
 				CanAddColumn:    fsm.Var("CanAddColumn"),
-				CanRemoveColumn: fsm.Var("CanRemoveColumn")},
+				CanRemoveColumn: fsm.Var("CanRemoveColumn"),
+				SpansFiltered:   fsm.Var("SpansFiltered")},
 			Action: logEvent(openTxn),
 		},
 		eventCreateEnum{}: {
@@ -843,6 +878,7 @@ var stateTransitions = fsm.Pattern{
 				TxnOpen:         fsm.False,
 				CanAddColumn:    fsm.Var("CanAddColumn"),
 				CanRemoveColumn: fsm.Var("CanRemoveColumn"),
+				SpansFiltered:   fsm.Var("SpansFiltered"),
 			},
 			Action: logEvent(createEnum),
 		},
@@ -852,13 +888,15 @@ var stateTransitions = fsm.Pattern{
 		TxnOpen:         fsm.True,
 		CanAddColumn:    fsm.Var("CanAddColumn"),
 		CanRemoveColumn: fsm.Var("CanRemoveColumn"),
+		SpansFiltered:   fsm.Var("SpansFiltered"),
 	}: {
 		eventCommit{}: {
 			Next: stateRunning{
 				FeedPaused:      fsm.Var("FeedPaused"),
 				TxnOpen:         fsm.False,
 				CanAddColumn:    fsm.Var("CanAddColumn"),
-				CanRemoveColumn: fsm.Var("CanRemoveColumn")},
+				CanRemoveColumn: fsm.Var("CanRemoveColumn"),
+				SpansFiltered:   fsm.Var("SpansFiltered")},
 			Action: logEvent(commit),
 		},
 		eventRollback{}: {
@@ -866,7 +904,8 @@ var stateTransitions = fsm.Pattern{
 				FeedPaused:      fsm.Var("FeedPaused"),
 				TxnOpen:         fsm.False,
 				CanAddColumn:    fsm.Var("CanAddColumn"),
-				CanRemoveColumn: fsm.Var("CanRemoveColumn")},
+				CanRemoveColumn: fsm.Var("CanRemoveColumn"),
+				SpansFiltered:   fsm.Var("SpansFiltered")},
 			Action: logEvent(rollback),
 		},
 		eventAbort{}: {
@@ -874,7 +913,8 @@ var stateTransitions = fsm.Pattern{
 				FeedPaused:      fsm.Var("FeedPaused"),
 				TxnOpen:         fsm.True,
 				CanAddColumn:    fsm.Var("CanAddColumn"),
-				CanRemoveColumn: fsm.Var("CanRemoveColumn")},
+				CanRemoveColumn: fsm.Var("CanRemoveColumn"),
+				SpansFiltered:   fsm.Var("SpansFiltered")},
 			Action: logEvent(abort),
 		},
 		eventPush{}: {
@@ -882,7 +922,8 @@ var stateTransitions = fsm.Pattern{
 				FeedPaused:      fsm.Var("FeedPaused"),
 				TxnOpen:         fsm.True,
 				CanAddColumn:    fsm.Var("CanAddColumn"),
-				CanRemoveColumn: fsm.Var("CanRemoveColumn")},
+				CanRemoveColumn: fsm.Var("CanRemoveColumn"),
+				SpansFiltered:   fsm.Var("SpansFiltered")},
 			Action: logEvent(push),
 		},
 	},
@@ -891,13 +932,15 @@ var stateTransitions = fsm.Pattern{
 		TxnOpen:         fsm.Var("TxnOpen"),
 		CanAddColumn:    fsm.Var("CanAddColumn"),
 		CanRemoveColumn: fsm.Var("CanRemoveColumn"),
+		SpansFiltered:   fsm.Var("SpansFiltered"),
 	}: {
 		eventPause{}: {
 			Next: stateRunning{
 				FeedPaused:      fsm.True,
 				TxnOpen:         fsm.Var("TxnOpen"),
 				CanAddColumn:    fsm.Var("CanAddColumn"),
-				CanRemoveColumn: fsm.Var("CanRemoveColumn")},
+				CanRemoveColumn: fsm.Var("CanRemoveColumn"),
+				SpansFiltered:   fsm.Var("SpansFiltered")},
 			Action: logEvent(pause),
 		},
 	},
@@ -906,14 +949,51 @@ var stateTransitions = fsm.Pattern{
 		TxnOpen:         fsm.Var("TxnOpen"),
 		CanAddColumn:    fsm.Var("CanAddColumn"),
 		CanRemoveColumn: fsm.Var("CanRemoveColumn"),
+		SpansFiltered:   fsm.Var("SpansFiltered"),
 	}: {
 		eventResume{}: {
 			Next: stateRunning{
 				FeedPaused:      fsm.False,
 				TxnOpen:         fsm.Var("TxnOpen"),
 				CanAddColumn:    fsm.Var("CanAddColumn"),
-				CanRemoveColumn: fsm.Var("CanRemoveColumn")},
+				CanRemoveColumn: fsm.Var("CanRemoveColumn"),
+				SpansFiltered:   fsm.Var("SpansFiltered")},
 			Action: logEvent(resume),
+		},
+	},
+	// SPAN FILTERING
+	stateRunning{
+		FeedPaused:      fsm.Var("FeedPaused"),
+		TxnOpen:         fsm.Var("TxnOpen"),
+		CanAddColumn:    fsm.Var("CanAddColumn"),
+		CanRemoveColumn: fsm.Var("CanRemoveColumn"),
+		SpansFiltered:   fsm.False,
+	}: {
+		eventForcePartialCheckpoint{}: {
+			Next: stateRunning{
+				FeedPaused:      fsm.Var("FeedPaused"),
+				TxnOpen:         fsm.Var("TxnOpen"),
+				CanAddColumn:    fsm.Var("CanAddColumn"),
+				CanRemoveColumn: fsm.Var("CanRemoveColumn"),
+				SpansFiltered:   fsm.True},
+			Action: logEvent(startPartialCheckpoint),
+		},
+	},
+	stateRunning{
+		FeedPaused:      fsm.Var("FeedPaused"),
+		TxnOpen:         fsm.Var("TxnOpen"),
+		CanAddColumn:    fsm.Var("CanAddColumn"),
+		CanRemoveColumn: fsm.Var("CanRemoveColumn"),
+		SpansFiltered:   fsm.True,
+	}: {
+		eventStopForcePartialCheckpoint{}: {
+			Next: stateRunning{
+				FeedPaused:      fsm.Var("FeedPaused"),
+				TxnOpen:         fsm.Var("TxnOpen"),
+				CanAddColumn:    fsm.Var("CanAddColumn"),
+				CanRemoveColumn: fsm.Var("CanRemoveColumn"),
+				SpansFiltered:   fsm.False},
+			Action: logEvent(stopPartialCheckpoint),
 		},
 	},
 }
@@ -1133,4 +1213,37 @@ func split(a fsm.Args) error {
 	ns := a.Extended.(*nemeses)
 	_, err := ns.db.Exec(`ALTER TABLE foo SPLIT AT VALUES ((random() * $1)::int)`, ns.rowCount)
 	return err
+}
+
+func startPartialCheckpoint(a fsm.Args) error {
+	ns := a.Extended.(*nemeses)
+	// Lower the checkpoint thresholds so the lag we're about to create
+	// gets persisted as a partial checkpoint before a pause can happen.
+	for _, stmt := range []string{
+		`SET CLUSTER SETTING changefeed.frontier_highwater_lag_checkpoint_threshold = '1us'`,
+		`SET CLUSTER SETTING changefeed.frontier_checkpoint_frequency = '10ms'`,
+		`SET CLUSTER SETTING changefeed.progress.frontier_persistence.interval = '5s'`,
+	} {
+		if _, err := ns.db.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	ns.filteringEnabled.Store(true)
+	return nil
+}
+
+func stopPartialCheckpoint(a fsm.Args) error {
+	ns := a.Extended.(*nemeses)
+	ns.filteringEnabled.Store(false)
+	// Restore defaults so non-filtered operation isn't affected.
+	for _, stmt := range []string{
+		`SET CLUSTER SETTING changefeed.frontier_highwater_lag_checkpoint_threshold = '10m'`,
+		`SET CLUSTER SETTING changefeed.frontier_checkpoint_frequency = '10m'`,
+		`SET CLUSTER SETTING changefeed.progress.frontier_persistence.interval = '30s'`,
+	} {
+		if _, err := ns.db.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
