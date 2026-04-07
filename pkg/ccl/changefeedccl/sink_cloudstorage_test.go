@@ -1011,7 +1011,3 @@ func (n *mockSinkStorage) Delete(_ context.Context, _ string) error {
 func (n *mockSinkStorage) Size(_ context.Context, _ string) (int64, error) {
 	return 0, nil
 }
-
-// TODO(darrylwong): Add an integration test for #155015 that verifies
-// sequential rangefeed startup prevents cloud storage sink file ordering
-// violations after restart with a partial checkpoint.

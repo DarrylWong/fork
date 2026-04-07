@@ -559,6 +559,11 @@ const TODOMaxBackoff = 3 * time.Second
 
 func waitForFrontierBeforeStartingCallback(resumeFrontier span.Frontier, maxBackoff time.Duration) kvcoord.ForEachSpanFn {
 	return func(ctx context.Context, stp kvcoord.SpanTimePair) error {
+		frontier := resumeFrontier.Frontier()
+		if frontier.Less(stp.StartAfter) {
+			log.Changefeed.Infof(ctx, "sequential rangefeed startup: waiting for frontier %s to catch up to span %s at %s",
+				frontier, stp.Span, stp.StartAfter)
+		}
 		backoff := 10 * time.Millisecond
 		for resumeFrontier.Frontier().Less(stp.StartAfter) {
 			select {
@@ -597,6 +602,13 @@ func (f *kvFeed) runUntilTableEvent(ctx context.Context, resumeFrontier span.Fro
 	var stps []kvcoord.SpanTimePair
 	for s, ts := range resumeFrontier.Entries() {
 		stps = append(stps, kvcoord.SpanTimePair{Span: s, StartAfter: ts})
+	}
+
+	if f.withStartSpansSequentially {
+		log.Changefeed.Infof(ctx, "sequential rangefeed startup: frontier=%s, %d spans", resumeFrontier.Frontier(), len(stps))
+		for i, stp := range stps {
+			log.Changefeed.Infof(ctx, "  span[%d]: %s startAfter=%s", i, stp.Span, stp.StartAfter)
+		}
 	}
 
 	g := ctxgroup.WithContext(ctx)

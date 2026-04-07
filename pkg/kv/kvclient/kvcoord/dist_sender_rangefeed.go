@@ -61,8 +61,10 @@ type ForEachRangeFn func(fn ActiveRangeFeedIterFn) error
 // by polling fn.
 type RangeObserver func(fn ForEachRangeFn)
 
-// ForEachSpanFn is called synchronously before starting a rangefeed(s) for each
-// span.
+// ForEachSpanFn is called synchronously before starting a rangefeed for each
+// range. It may block — for example, to wait until an external frontier has
+// caught up before allowing the rangefeed to proceed. Ranges are processed in
+// order of oldest StartAfter first.
 type ForEachSpanFn func(ctx context.Context, stp SpanTimePair) error
 
 type rangeFeedConfig struct {
@@ -72,7 +74,7 @@ type rangeFeedConfig struct {
 	withMetadata          bool
 	withMatchingOriginIDs []uint32
 	rangeObserver         RangeObserver
-	forEachSpanFn         ForEachSpanFn
+	forEachSpanFns        []ForEachSpanFn
 	consumerID            int64
 	bulkDelivery          bool
 
@@ -165,7 +167,7 @@ func WithConsumerID(cid int64) RangeFeedOption {
 // before starting a rangefeed for each span. It may block.
 func WithForEachSpanFn(fn ForEachSpanFn) RangeFeedOption {
 	return optionFunc(func(c *rangeFeedConfig) {
-		c.forEachSpanFn = fn
+		c.forEachSpanFns = append(c.forEachSpanFns, fn)
 	})
 }
 
@@ -224,14 +226,13 @@ func (ds *DistSender) RangeFeed(
 }
 
 // divideAllSpansOnRangeBoundaries divides all spans on range boundaries and invokes
-// provided onRange function for each range. If beforeStart is non-nil, it is
-// called synchronously before processing each span and may block.
+// provided onRange function for each range.
 func divideAllSpansOnRangeBoundaries(
 	ctx context.Context,
 	spans []SpanTimePair,
 	onRange onRangeFn,
+	forEachSpanFns []ForEachSpanFn,
 	ds *DistSender,
-	forEachSpanFn ForEachSpanFn,
 ) error {
 	// Sort input spans based on their start time -- older spans first.
 	// Starting rangefeed over large number of spans is an expensive proposition,
@@ -248,8 +249,8 @@ func divideAllSpansOnRangeBoundaries(
 	})
 
 	for _, stp := range spans {
-		if forEachSpanFn != nil {
-			if err := forEachSpanFn(ctx, stp); err != nil {
+		for _, fn := range forEachSpanFns {
+			if err := fn(ctx, stp); err != nil {
 				return err
 			}
 		}

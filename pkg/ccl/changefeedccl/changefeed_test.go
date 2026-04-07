@@ -3164,6 +3164,147 @@ WITH resolved='50ms', min_checkpoint_frequency='50ms', no_initial_scan, cursor=$
 	require.NoError(t, incorrectCheckpointErr)
 }
 
+// TestChangefeedSequentialRangefeedStartup is a regression test for #155015.
+// It verifies that when a changefeed restarts from a partial checkpoint with
+// spans at different timestamps, rangefeeds for spans ahead of the frontier
+// are not started until the frontier catches up. This prevents cloud storage
+// sink file ordering violations.
+func TestChangefeedSequentialRangefeedStartup(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+
+	s, db, stopServer := startTestFullServer(t, makeOptions(t, feedTestNoTenants))
+	defer stopServer()
+	sqlDB := sqlutils.MakeSQLRunner(db)
+
+	knobs := s.TestingKnobs().
+		DistSQL.(*execinfra.TestingKnobs).
+		Changefeed.(*TestingKnobs)
+
+	// Initialize table with multiple ranges.
+	sqlDB.Exec(t, `
+  CREATE TABLE foo (key INT PRIMARY KEY);
+  INSERT INTO foo (key) SELECT * FROM generate_series(1, 1000);
+  ALTER TABLE foo SPLIT AT (SELECT * FROM generate_series(1, 1000, 50));
+  `)
+
+	// Checkpoint progress frequently, allow a large enough checkpoint, and
+	// reduce the lag threshold to allow lag checkpointing to trigger.
+	changefeedbase.SpanCheckpointInterval.Override(
+		context.Background(), &s.ClusterSettings().SV, 10*time.Millisecond)
+	changefeedbase.SpanCheckpointMaxBytes.Override(
+		context.Background(), &s.ClusterSettings().SV, 100<<20 /* 100 MiB */)
+	changefeedbase.SpanCheckpointLagThreshold.Override(
+		context.Background(), &s.ClusterSettings().SV, 10*time.Millisecond)
+	changefeedbase.FrontierPersistenceInterval.Override(
+		context.Background(), &s.ClusterSettings().SV, 100*time.Millisecond)
+	// Disable quantization so that spans at slightly different timestamps
+	// don't get collapsed into the same bucket.
+	changefeedbase.Quantize.Override(
+		context.Background(), &s.ClusterSettings().SV, 0)
+
+	// Get a cursor timestamp.
+	var tsStr string
+	sqlDB.QueryRow(t, `SELECT cluster_logical_timestamp() from foo`).Scan(&tsStr)
+
+	// Hold back resolved spans for one span to create a lagging span that
+	// leads to a partial checkpoint.
+	var filteredSpan atomic.Value
+	knobs.FilterSpanWithMutation = func(resolved *jobspb.ResolvedSpan) (bool, error) {
+		key := string(resolved.Span.Key)
+		if v := filteredSpan.Load(); v != nil {
+			return v.(string) == key, nil
+		}
+		filteredSpan.Store(key)
+		return true, nil
+	}
+
+	var jobID jobspb.JobID
+	sqlDB.QueryRow(t,
+		`CREATE CHANGEFEED FOR foo INTO 'null://'
+WITH resolved='50ms', min_checkpoint_frequency='50ms', no_initial_scan, cursor=$1`, tsStr,
+	).Scan(&jobID)
+
+	idb := s.InternalDB().(isql.DB)
+	jobRegistry := s.JobRegistry().(*jobs.Registry)
+
+	// Wait for a checkpoint with some spans ahead of the highwater.
+	testutils.SucceedsSoon(t, func() error {
+		checkpointSpans := loadCheckpointSpans(t, jobID, idb)
+		if len(checkpointSpans) > 0 {
+			return nil
+		}
+		return errors.New("waiting for partial checkpoint")
+	})
+
+	sqlDB.Exec(t, "PAUSE JOB $1", jobID)
+	waitForJobState(sqlDB, t, jobID, jobs.StatePaused)
+
+	checkpointSpans := loadCheckpointSpans(t, jobID, idb)
+	require.NotEmpty(t, checkpointSpans, "expected partial checkpoint with spans ahead of highwater")
+	t.Logf("checkpoint has %d spans ahead of highwater", len(checkpointSpans))
+
+	// On resume, use a ForEachSpanFn via knobs to record each span's
+	// StartAfter. The kvfeed also sets its own ForEachSpanFn (the blocking
+	// callback) via withStartSpansSequentially. Since forEachSpanFns is a
+	// slice, both run in order: ours records first, then the kvfeed's
+	// blocks until frontier >= startAfter.
+	type spanRecord struct {
+		span       roachpb.Span
+		startAfter hlc.Timestamp
+	}
+	var mu sync.Mutex
+	var records []spanRecord
+	knobs.FeedKnobs.RangefeedOptions = []kvcoord.RangeFeedOption{
+		kvcoord.WithForEachSpanFn(func(ctx context.Context, stp kvcoord.SpanTimePair) error {
+			mu.Lock()
+			defer mu.Unlock()
+			records = append(records, spanRecord{
+				span:       stp.Span,
+				startAfter: stp.StartAfter,
+			})
+			return nil
+		}),
+	}
+	knobs.FilterSpanWithMutation = nil
+
+	sqlDB.Exec(t, "RESUME JOB $1", jobID)
+	waitForJobState(sqlDB, t, jobID, jobs.StateRunning)
+
+	// Wait for highwater to advance past the max checkpoint timestamp,
+	// proving the changefeed successfully caught up despite spans at
+	// different timestamps.
+	var maxCheckpointTS hlc.Timestamp
+	for _, rs := range checkpointSpans {
+		maxCheckpointTS.Forward(rs.Timestamp)
+	}
+	testutils.SucceedsSoon(t, func() error {
+		job, err := jobRegistry.LoadJob(context.Background(), jobID)
+		if err != nil {
+			return err
+		}
+		progress := job.Progress()
+		if hw := progress.GetHighWater(); hw != nil && maxCheckpointTS.Less(*hw) {
+			return nil
+		}
+		return errors.New("waiting for highwater to advance past checkpoint")
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Verify the ForEachSpanFn was called and saw spans at different timestamps.
+	require.NotEmpty(t, records, "expected ForEachSpanFn to be called")
+	startTSSet := make(map[hlc.Timestamp]struct{})
+	for _, r := range records {
+		startTSSet[r.startAfter] = struct{}{}
+	}
+	t.Logf("ForEachSpanFn called for %d spans at %d distinct timestamps",
+		len(records), len(startTSSet))
+	require.GreaterOrEqual(t, len(startTSSet), 2,
+		"expected spans at different timestamps from partial checkpoint")
+}
+
 // Test checkpointing during schema change backfills that can be paused and
 // resumed multiple times during execution
 func TestChangefeedSchemaChangeBackfillCheckpoint(t *testing.T) {

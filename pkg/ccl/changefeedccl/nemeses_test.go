@@ -8,14 +8,11 @@ package changefeedccl
 import (
 	"math"
 	"regexp"
-	"sync/atomic"
 	"testing"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/cdctest"
 	"github.com/cockroachdb/cockroach/pkg/jobs"
-	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
-	"github.com/cockroachdb/cockroach/pkg/sql/execinfra"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/eval"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/skip"
@@ -64,28 +61,11 @@ func TestChangefeedNemeses(t *testing.T) {
 		// nemeses_test.go:39: pq: unimplemented: operation is unsupported inside virtual clusters
 		//
 		// TODO(knz): This seems incorrect, see issue #109417.
-		cdcTest(t, testFn, feedTestNoTenants, withKnobsFn(func(knobs *base.TestingKnobs) {
+		cdcTest(t, testFn, feedTestNoTenants, feedTestForceSink("cloudstorage"), withKnobsFn(func(knobs *base.TestingKnobs) {
 			knobs.SQLEvalContext = &eval.TestingKnobs{
 				ForceProductionValues: true,
 			}
 			knobs.JobsTestingKnobs = jobs.NewTestingKnobsWithShortIntervals()
-
-			// Wire the span filtering knob. When the FSM enables
-			// filtering, hold back resolved spans for one span to
-			// create lagging spans that lead to partial checkpoints.
-			var filteredSpan atomic.Value
-			cfKnobs := knobs.DistSQL.(*execinfra.TestingKnobs).Changefeed.(*TestingKnobs)
-			cfKnobs.FilterSpanWithMutation = func(resolved *jobspb.ResolvedSpan) (bool, error) {
-				if !nop.FilteringEnabled.Load() {
-					return false, nil
-				}
-				key := string(resolved.Span.Key)
-				if v := filteredSpan.Load(); v != nil {
-					return v.(string) == key, nil
-				}
-				filteredSpan.Store(key)
-				return true, nil
-			}
 		}))
 		log.FlushFiles()
 		entries, err := log.FetchEntriesFromFiles(0, math.MaxInt64, 1,

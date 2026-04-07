@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"iter"
 	"math/rand"
-	"net/url"
 	"slices"
 	"sync"
 	"time"
@@ -550,18 +549,15 @@ func (ca *changeAggregator) makeKVFeedCfg(
 			StartAfter: ts,
 		})
 	}
-
-	// Sequential rangefeed startup starts rangefeeds in order of most-behind
-	// resolved timestamp, preventing cloud storage sink file ordering violations
-	// after restart with a partial checkpoint (#155015). Default on for cloud
-	// storage sinks; opt-in for other sinks via cluster setting.
-	sequentialRFStartup := changefeedbase.SequentialRangefeedStartup.Get(&cfg.Settings.SV)
-	if !sequentialRFStartup {
-		sinkURI, err := url.Parse(config.SinkURI)
-		if err == nil && isCloudStorageSink(sinkURI) {
-			sequentialRFStartup = true
-		}
+	log.Changefeed.Warningf(ctx, "DARRYL initialSpanTimePairs: %d entries, frontier=%s", len(initialSpanTimePairs), ca.frontier.Frontier())
+	for i, stp := range initialSpanTimePairs {
+		log.Changefeed.Warningf(ctx, "DARRYL   stp[%d]: %s startAfter=%s", i, stp.Span, stp.StartAfter)
 	}
+
+	// TODO(darrylwong): Consider gating this on the sink type once we have
+	// a reliable way to detect cloud storage sinks (external connections
+	// make URI-based detection unreliable).
+	sequentialRFStartup := true
 
 	return kvfeed.Config{
 		Writer:                  buf,
