@@ -1558,6 +1558,219 @@ func runCDCRollingRestart(
 	}
 }
 
+// runCDCSequentialStartup benchmarks changefeed startup behavior with
+// sequential vs parallel rangefeed startup. It closely follows the
+// fine-grained checkpointing test: a webhook sink with per-range delays
+// creates resolved timestamp spread, and transient sink errors force
+// changefeed restarts from checkpoints. The test monitors
+// distsender.rangefeed.catchup_ranges to measure how long catchup scans
+// take after each transient-error-induced restart.
+//
+// Node topology (same as fine-grained checkpointing):
+// - Nodes 1-3: CRDB
+// - Node 4: webhook-server-slow sink
+func runCDCSequentialStartup(
+	ctx context.Context, t test.Test, c cluster.Cluster, sequential bool,
+) {
+	const numRanges = 1000
+	const maxVal = 100
+
+	crdbNodes := c.Range(1, 3)
+	sinkNode := c.Node(4)
+
+	ips, err := c.ExternalIP(ctx, t.L(), sinkNode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sinkURL := fmt.Sprintf("https://%s:%d", ips[0], debug.WebhookServerSlowPort)
+	sink := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+
+	c.Start(ctx, t.L(), option.DefaultStartOpts(), install.MakeClusterSettings(), crdbNodes)
+
+	db := c.Conn(ctx, t.L(), 1)
+	defer db.Close()
+	t.L().Printf("setting up test with sequential=%t", sequential)
+
+	setupStmts := []string{
+		`SET CLUSTER SETTING kv.rangefeed.enabled = true`,
+		fmt.Sprintf(`SET CLUSTER SETTING changefeed.sequential_rangefeed_startup.enabled = %t`, sequential),
+		`SET CLUSTER SETTING changefeed.span_checkpoint.interval = '1s'`,
+		`SET CLUSTER SETTING changefeed.frontier_highwater_lag_checkpoint_threshold = '100ms'`,
+		`SET CLUSTER SETTING changefeed.frontier_checkpoint_frequency = '1s'`,
+		`CREATE TABLE foo (id INT PRIMARY KEY, val INT)`,
+	}
+	// Insert one row per range, then split — same as fine-grained test.
+	values := make([]string, numRanges)
+	for i := 0; i < numRanges; i++ {
+		values[i] = fmt.Sprintf("(%d, 0)", i*10)
+	}
+	setupStmts = append(setupStmts,
+		fmt.Sprintf("INSERT INTO foo VALUES %s", strings.Join(values, ", ")),
+		fmt.Sprintf("ALTER TABLE foo SPLIT AT SELECT generate_series(0, %d, 10)", numRanges*10),
+	)
+	for _, s := range setupStmts {
+		t.L().Printf(s)
+		if _, err := db.Exec(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Start the slow webhook sink with the same delays as the
+	// fine-grained checkpointing test: 2-32ms across 10 ranges,
+	// with transient errors every 500ms to force restarts.
+	rangeDelays := []string{"2", "4", "8", "16", "32", "2", "4", "8", "16", "32"}
+	const transientErrorIntervalMs = "500"
+	t.Go(func(ctx context.Context, l *logger.Logger) error {
+		l.Printf("starting webhook-server-slow on sink node")
+		return c.RunE(ctx, option.WithNodes(sinkNode),
+			fmt.Sprintf("./cockroach workload debug webhook-server-slow %s %s",
+				transientErrorIntervalMs, strings.Join(rangeDelays, " ")))
+	})
+	// Give the sink server a moment to start.
+	time.Sleep(3 * time.Second)
+
+	defer func() {
+		_, _ = sink.Get(sinkURL + "/exit")
+	}()
+
+	t.L().Printf("starting changefeed...")
+	var jobID int
+	if err := db.QueryRow(fmt.Sprintf(
+		`CREATE CHANGEFEED FOR TABLE foo INTO 'webhook-%s/?insecure_tls_skip_verify=true'`+
+			` WITH initial_scan='no', updated`,
+		sinkURL,
+	)).Scan(&jobID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert remaining rows and run updates — same workload pattern as
+	// fine-grained checkpointing test.
+	inserts := make([]string, 0, numRanges*9)
+	for i := 0; i < numRanges; i++ {
+		for j := 1; j < 10; j++ {
+			inserts = append(inserts, fmt.Sprintf("(%d, 0)", i*10+j))
+		}
+	}
+	if _, err := db.Exec("INSERT INTO foo (id, val) VALUES " + strings.Join(inserts, ",")); err != nil {
+		t.Fatal(err)
+	}
+	for v := 1; v <= maxVal; v++ {
+		if _, err := db.Exec(fmt.Sprintf("UPDATE foo SET val = %d", v)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// getCatchupRanges scrapes /_status/vars on all CRDB nodes and sums
+	// distsender_rangefeed_catchup_ranges.
+	getCatchupRanges := func() (int, error) {
+		uiAddrs, err := c.ExternalAdminUIAddr(ctx, t.L(), crdbNodes)
+		if err != nil {
+			return 0, err
+		}
+		var total int
+		for _, addr := range uiAddrs {
+			varsURL := fmt.Sprintf("https://%s/_status/vars", addr)
+			out, err := exec.Command("curl", "-kf", varsURL).Output()
+			if err != nil {
+				continue
+			}
+			parser := expfmt.TextParser{}
+			families, err := parser.TextToMetricFamilies(bytes.NewReader(out))
+			if err != nil {
+				continue
+			}
+			if fam, ok := families["distsender_rangefeed_catchup_ranges"]; ok {
+				for _, m := range fam.GetMetric() {
+					total += int(m.GetGauge().GetValue())
+				}
+			}
+		}
+		return total, nil
+	}
+
+	// Monitor catchup_ranges in the background, logging whenever catchup
+	// scans start and complete. The transient sink errors (every 500ms)
+	// force many changefeed restarts, each exercising the sequential (or
+	// parallel) startup path.
+	beginTime := timeutil.Now()
+	t.Go(func(ctx context.Context, l *logger.Logger) error {
+		const pollInterval = 2 * time.Second
+		ticker := time.NewTicker(pollInterval)
+		defer ticker.Stop()
+		inCatchup := false
+		var catchupStart time.Time
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-ticker.C:
+			}
+			catchup, err := getCatchupRanges()
+			if err != nil {
+				continue
+			}
+			if !inCatchup && catchup > 0 {
+				inCatchup = true
+				catchupStart = timeutil.Now()
+				l.Printf("[%s] catchup scans started: catchup_ranges=%d",
+					timeutil.Since(beginTime), catchup)
+			} else if inCatchup && catchup == 0 {
+				l.Printf("[%s] catchup scans completed in %s",
+					timeutil.Since(beginTime), timeutil.Since(catchupStart))
+				inCatchup = false
+			} else if inCatchup {
+				l.Printf("[%s] catchup_ranges=%d elapsed=%s",
+					timeutil.Since(beginTime), catchup, timeutil.Since(catchupStart))
+			}
+		}
+	})
+
+	// Wait for the sink to receive all expected messages, same as the
+	// fine-grained test.
+	get := func(p string) (int, error) {
+		b, err := sink.Get(sinkURL + p)
+		if err != nil {
+			return 0, err
+		}
+		body, err := io.ReadAll(b.Body)
+		if err != nil {
+			return 0, err
+		}
+		i, err := strconv.Atoi(string(body))
+		if err != nil {
+			return 0, err
+		}
+		return i, nil
+	}
+
+	// 10 keys per range, each updated maxVal+1 times, except one key per
+	// range was inserted before the changefeed started (only maxVal updates).
+	expected := 10*numRanges*(maxVal+1) - numRanges
+	t.L().Printf("expecting %d unique messages from changefeed %d", expected, jobID)
+
+	testutils.SucceedsWithin(t, func() error {
+		unique, err := get("/unique")
+		if err != nil {
+			t.L().Printf("error getting unique count: %v", err)
+			return err
+		}
+		dupes, err := get("/dupes")
+		if err != nil {
+			t.L().Printf("error getting dupes count: %v", err)
+			return err
+		}
+		t.L().Printf("[%s] sink: unique=%d dupes=%d (expecting %d)",
+			timeutil.Since(beginTime), unique, dupes, expected)
+		if unique != expected {
+			return fmt.Errorf("expected %d unique messages, got %d", expected, unique)
+		}
+		return nil
+	}, 30*time.Minute)
+
+	t.L().Printf("[%s] changefeed %d completed with sequential=%t",
+		timeutil.Since(beginTime), jobID, sequential)
+}
+
 type fineGrainedCheckpointingParams struct {
 	numRanges               int
 	transientErrorFrequency time.Duration
@@ -2474,6 +2687,25 @@ CONFIGURE ZONE USING
 			})
 		},
 	})
+	for _, sequential := range []bool{true, false} {
+		label := "sequential"
+		if !sequential {
+			label = "parallel"
+		}
+		sequential := sequential
+		r.Add(registry.TestSpec{
+			Name:             fmt.Sprintf("cdc/sequential-startup/%s", label),
+			Owner:            registry.OwnerCDC,
+			Benchmark:        true,
+			Cluster:          r.MakeClusterSpec(4),
+			CompatibleClouds: registry.OnlyGCE,
+			Suites:           registry.Suites(registry.Nightly),
+			Timeout:          45 * time.Minute,
+			Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
+				runCDCSequentialStartup(ctx, t, c, sequential)
+			},
+		})
+	}
 	r.Add(registry.TestSpec{
 		Name:             "cdc/fine-grained-checkpointing",
 		Owner:            registry.OwnerCDC,

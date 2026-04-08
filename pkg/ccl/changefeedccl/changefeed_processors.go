@@ -557,7 +557,7 @@ func (ca *changeAggregator) makeKVFeedCfg(
 	// TODO(darrylwong): Consider gating this on the sink type once we have
 	// a reliable way to detect cloud storage sinks (external connections
 	// make URI-based detection unreliable).
-	sequentialRFStartup := true
+	sequentialRFStartup := changefeedbase.SequentialRangefeedStartup.Get(&cfg.Settings.SV)
 
 	return kvfeed.Config{
 		Writer:                  buf,

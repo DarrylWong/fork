@@ -9,10 +9,12 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net/url"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cockroach/pkg/base"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/cdctest"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/changefeedbase"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/resolvedspan"
@@ -20,12 +22,15 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobfrontier"
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
+	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/desctestutils"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfra"
 	"github.com/cockroachdb/cockroach/pkg/sql/isql"
 	"github.com/cockroachdb/cockroach/pkg/sql/rowenc"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/eval"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
+	"github.com/cockroachdb/cockroach/pkg/testutils/pgurlutils"
+	"github.com/cockroachdb/cockroach/pkg/testutils/serverutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/sqlutils"
 	"github.com/cockroachdb/cockroach/pkg/util/encoding"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
@@ -538,4 +543,122 @@ WITH resolved='1ns', min_checkpoint_frequency='1ns'`)
 
 	cdcTest(t, testFn, feedTestForceSink("sinkless"),
 		withAllowChangefeedErr("test injects retryable error"))
+}
+
+// BenchmarkResumePartialCheckpoint measures the time it takes for a changefeed
+// to resume from a partial checkpoint with many spans at different timestamps
+// and advance the high water mark past all of them. It runs with sequential
+// rangefeed startup both enabled and disabled.
+func BenchmarkResumePartialCheckpoint(b *testing.B) {
+	defer leaktest.AfterTest(b)()
+	defer log.Scope(b).Close(b)
+
+	ctx := context.Background()
+	const numSpans = 3000
+
+	// Set up the test server.
+	resetRetry := testingUseFastRetry()
+	defer resetRetry()
+	resetFlushFrequency := changefeedbase.TestingSetDefaultMinCheckpointFrequency(
+		testSinkFlushFrequency)
+	defer resetFlushFrequency()
+
+	srv, db, _ := serverutils.StartServer(b, base.TestServerArgs{
+		DefaultTestTenant: base.TestControlsTenantsExplicitly,
+		UseDatabase:       "d",
+		Knobs: base.TestingKnobs{
+			DistSQL:          &execinfra.TestingKnobs{Changefeed: &TestingKnobs{}},
+			JobsTestingKnobs: jobs.NewTestingKnobsWithShortIntervals(),
+		},
+	})
+	defer srv.Stopper().Stop(ctx)
+	s := srv.ApplicationLayer()
+
+	sqlDB := sqlutils.MakeSQLRunner(db)
+	sqlDB.Exec(b, `SET CLUSTER SETTING kv.rangefeed.enabled = true`)
+	// Disable quantization so we get distinct spans.
+	sqlDB.Exec(b, `SET CLUSTER SETTING changefeed.resolved_timestamp.granularity = '0s'`)
+	sqlDB.Exec(b, `CREATE DATABASE d`)
+
+	sqlDB.Exec(b, `CREATE TABLE bench (a INT PRIMARY KEY)`)
+	sqlDB.Exec(b, fmt.Sprintf(
+		`INSERT INTO bench SELECT generate_series(0, %d)`, numSpans-1))
+	sqlDB.Exec(b, fmt.Sprintf(
+		`ALTER TABLE bench SPLIT AT (SELECT generate_series(0, %d))`, numSpans-1))
+
+	// Get table descriptor info for building row spans.
+	codec := s.Codec()
+	benchDesc := desctestutils.TestingGetPublicTableDescriptor(
+		srv.DB(), codec, "d", "bench")
+	tableSpan := benchDesc.PrimaryIndexSpan(codec)
+	rowSpan := func(key int64) roachpb.Span {
+		keyPrefix := func() []byte {
+			return rowenc.MakeIndexKeyPrefix(
+				codec, benchDesc.GetID(), benchDesc.GetPrimaryIndexID())
+		}
+		return roachpb.Span{
+			Key:    encoding.EncodeVarintAscending(keyPrefix(), key),
+			EndKey: encoding.EncodeVarintAscending(keyPrefix(), key+1),
+		}
+	}
+	sinkURI, sinkCleanup := pgurlutils.PGUrl(
+		b, s.SQLAddr(), b.Name(), url.User(username.RootUser))
+	defer sinkCleanup()
+	feedFactory := makeTableFeedFactory(srv, db, sinkURI)
+
+	for _, sequential := range []bool{true, false} {
+		name := "sequential"
+		if !sequential {
+			name = "parallel"
+		}
+		b.Run(name, func(b *testing.B) {
+			changefeedbase.SequentialRangefeedStartup.Override(
+				ctx, &srv.ClusterSettings().SV, sequential)
+
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+
+				foo := feed(b, feedFactory,
+					`CREATE CHANGEFEED FOR bench WITH no_initial_scan, resolved='10ms'`)
+				jobFeed := foo.(cdctest.EnterpriseTestFeed)
+				require.NoError(b, jobFeed.Pause())
+
+				hw, err := jobFeed.HighWaterMark()
+				require.NoError(b, err)
+				b.Logf("hw: %d", hw)
+
+				// Construct a frontier with numSpans row-level spans, with
+				// each span j receiving timestamp hw + j so we get
+				// numSpans distinct spans.
+				checkpoint, err := span.MakeFrontierAt(hw, tableSpan)
+				require.NoError(b, err)
+				for j := int64(0); j < numSpans; j++ {
+					ts := hlc.Timestamp{WallTime: hw.WallTime + j}
+					_, err := checkpoint.Forward(rowSpan(j), ts)
+					require.NoError(b, err)
+				}
+
+				// Persist the frontier to the job_info table.
+				err = srv.InternalDB().(isql.DB).Txn(
+					ctx, func(ctx context.Context, txn isql.Txn) error {
+						return jobfrontier.Store(
+							ctx, txn, jobFeed.JobID(), coordinatorFrontierName, checkpoint)
+					})
+				require.NoError(b, err)
+				checkpoint.Release()
+
+				// Actually start running the benchmark.
+				b.StartTimer()
+				require.NoError(b, jobFeed.Resume())
+
+				// Wait for the high water mark to advance past the highest
+				// frontier timestamp.
+				target := hlc.Timestamp{WallTime: hw.WallTime + numSpans}
+				require.NoError(b, jobFeed.WaitForHighWaterMark(target))
+				b.StopTimer()
+
+				closeFeed(b, foo)
+			}
+		})
+	}
 }
