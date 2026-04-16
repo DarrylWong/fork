@@ -24,9 +24,9 @@ import (
 // The tableID parameter specifies the ID to use for the descriptor. Pass
 // descpb.InvalidID if the ID will be set later (e.g., by InjectLegacyTable).
 func GetOldStatementHintsDescriptor(tableID descpb.ID) *descpb.TableDescriptor {
-	uniqueRowIDString := "unique_rowid()"
-	nowTZString := "now():::TIMESTAMPTZ"
-	statementHintsComputeExpr := "fnv64(fingerprint)"
+	uniqueRowIDString := descpb.Expression("unique_rowid()")
+	nowTZString := descpb.Expression("now():::TIMESTAMPTZ")
+	statementHintsComputeExpr := descpb.Expression("fnv64(fingerprint)")
 
 	return &descpb.TableDescriptor{
 		Name:                    string(catconstants.StatementHintsTableName),

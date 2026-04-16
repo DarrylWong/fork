@@ -64,7 +64,6 @@ import (
 	"github.com/cockroachdb/errors/oserror"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/proto"
 )
 
 // TestIndexBackfiller tests the MVCC-compatible index backfill with temporary indexes.
@@ -304,12 +303,13 @@ INSERT INTO foo VALUES (1), (10), (100);
 				{"100", "42", "142"},
 			},
 			setupDesc: func(t *testing.T, ctx context.Context, mut *tabledesc.Mutable, settings *cluster.Settings) {
+				defaultExpr := descpb.Expression("42")
 				columnWithDefault := descpb.ColumnDescriptor{
 					Name:           "def",
 					ID:             mut.NextColumnID,
 					Type:           types.Int,
 					Nullable:       false,
-					DefaultExpr:    proto.String("42"),
+					DefaultExpr:    &defaultExpr,
 					Hidden:         false,
 					PGAttributeNum: descpb.PGAttributeNum(mut.NextColumnID),
 				}
@@ -317,12 +317,13 @@ INSERT INTO foo VALUES (1), (10), (100);
 				mut.AddColumnMutation(&columnWithDefault, descpb.DescriptorMutation_ADD)
 				// Cheat and jump right to WRITE_ONLY.
 				mut.Mutations[len(mut.Mutations)-1].State = descpb.DescriptorMutation_WRITE_ONLY
+				computeExpr := descpb.Expression("i + def")
 				computedColumnNotInPrimaryIndex := descpb.ColumnDescriptor{
 					Name:           "comp",
 					ID:             mut.NextColumnID,
 					Type:           types.Int,
 					Nullable:       false,
-					ComputeExpr:    proto.String("i + def"),
+					ComputeExpr:    &computeExpr,
 					Hidden:         false,
 					PGAttributeNum: descpb.PGAttributeNum(mut.NextColumnID),
 				}

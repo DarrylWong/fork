@@ -286,7 +286,7 @@ func TestFixMissingSequenceIdentityRefs(t *testing.T) {
 		name                  string
 		input, expectedOutput descpb.TableDescriptor
 	}
-	defaultExpr := "nextval('sq1')"
+	defaultExpr := descpb.Expression("nextval('sq1')")
 	testData := []testCase{
 		{
 			name: "missing sequence references for identity",
