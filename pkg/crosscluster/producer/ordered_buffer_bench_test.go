@@ -3,7 +3,7 @@
 // Use of this software is governed by the CockroachDB Software License
 // included in the /LICENSE file.
 
-package producer
+package producer_test
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/base"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
+	"github.com/cockroachdb/cockroach/pkg/repstream"
 	"github.com/cockroachdb/cockroach/pkg/repstream/streampb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
@@ -20,10 +21,11 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 )
 
-// makeDiskBackedConfig creates a config with disk-backed temp storage for benchmarks.
+const benchDefaultBatchSize = 1 << 20
+
 func makeDiskBackedConfig(
 	b *testing.B, flushByteSizeThreshold int64,
-) (OrderedBufferConfig, func()) {
+) (repstream.OrderedBufferConfig, func()) {
 	ctx := context.Background()
 	st := cluster.MakeTestingClusterSettings()
 	tempDir := b.TempDir()
@@ -42,17 +44,16 @@ func makeDiskBackedConfig(
 		b.Fatal(err)
 	}
 
-	cfg := OrderedBufferConfig{
-		settings:               st,
-		streamID:               streampb.StreamID(1),
-		tempStorage:            tempEngine,
-		flushByteSizeThreshold: flushByteSizeThreshold,
+	cfg := repstream.OrderedBufferConfig{
+		Settings:               st,
+		StreamID:               streampb.StreamID(1),
+		TempStorage:            tempEngine,
+		FlushByteSizeThreshold: flushByteSizeThreshold,
 	}
 	return cfg, func() { tempEngine.Close() }
 }
 
-// makeBenchKV returns a RangeFeedValue with the given key index and timestamp.
-func makeBenchKV(keyIdx int, ts int64) *kvpb.RangeFeedValue {
+func makeBenchKV(keyIdx int, wall int64) *kvpb.RangeFeedValue {
 	value := make([]byte, 1024)
 	for i := range value {
 		value[i] = byte(keyIdx % 256)
@@ -61,7 +62,7 @@ func makeBenchKV(keyIdx int, ts int64) *kvpb.RangeFeedValue {
 		Key: roachpb.Key(fmt.Sprintf("key%08d", keyIdx)),
 		Value: roachpb.Value{
 			RawBytes:  value,
-			Timestamp: hlc.Timestamp{WallTime: ts},
+			Timestamp: hlc.Timestamp{WallTime: wall},
 		},
 	}
 }
@@ -69,7 +70,7 @@ func makeBenchKV(keyIdx int, ts int64) *kvpb.RangeFeedValue {
 func BenchmarkOrderedBufferFlushToDisk(b *testing.B) {
 	defer log.Scope(b).Close(b)
 	ctx := context.Background()
-	cfg, cleanup := makeDiskBackedConfig(b, defaultBatchSize)
+	cfg, cleanup := makeDiskBackedConfig(b, benchDefaultBatchSize)
 	defer cleanup()
 
 	for _, numEvents := range []int{100, 1000, 10000} {
@@ -82,7 +83,7 @@ func BenchmarkOrderedBufferFlushToDisk(b *testing.B) {
 			b.ResetTimer()
 			var totalFlushes int64
 			for i := 0; i < b.N; i++ {
-				buf := newOrderedBuffer(cfg)
+				buf := repstream.NewOrderedBuffer(cfg)
 				for j := 0; j < numEvents; j++ {
 					if err := buf.Add(ctx, kvs[j]); err != nil {
 						b.Fatal(err)
@@ -103,7 +104,7 @@ func BenchmarkOrderedBufferFlushToDisk(b *testing.B) {
 func BenchmarkOrderedBufferGetEventsFromDisk(b *testing.B) {
 	defer log.Scope(b).Close(b)
 	ctx := context.Background()
-	cfg, cleanup := makeDiskBackedConfig(b, defaultBatchSize)
+	cfg, cleanup := makeDiskBackedConfig(b, benchDefaultBatchSize)
 	defer cleanup()
 
 	for _, numEvents := range []int{100, 1000, 10000} {
@@ -116,7 +117,7 @@ func BenchmarkOrderedBufferGetEventsFromDisk(b *testing.B) {
 			b.ResetTimer()
 			var totalFlushes int64
 			for i := 0; i < b.N; i++ {
-				buf := newOrderedBuffer(cfg)
+				buf := repstream.NewOrderedBuffer(cfg)
 				for j := 0; j < numEvents; j++ {
 					if err := buf.Add(ctx, kvs[j]); err != nil {
 						b.Fatal(err)

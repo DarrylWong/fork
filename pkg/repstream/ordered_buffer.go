@@ -3,7 +3,7 @@
 // Use of this software is governed by the CockroachDB Software License
 // included in the /LICENSE file.
 
-package producer
+package repstream
 
 import (
 	"context"
@@ -50,10 +50,10 @@ func decodeTimestampKey(encoded []byte) (hlc.Timestamp, error) {
 
 // OrderedBufferConfig holds dependencies for the disk-backed buffer.
 type OrderedBufferConfig struct {
-	settings               *cluster.Settings
-	streamID               streampb.StreamID
-	tempStorage            diskmap.Factory
-	flushByteSizeThreshold int64
+	Settings               *cluster.Settings
+	StreamID               streampb.StreamID
+	TempStorage            diskmap.Factory
+	FlushByteSizeThreshold int64
 }
 
 // bufferedEvent is the in-memory form of one event before flush.
@@ -74,7 +74,7 @@ type OrderedBuffer struct {
 	flushCount    int64 // Number of times FlushToDisk was called.
 }
 
-func newOrderedBuffer(cfg OrderedBufferConfig) *OrderedBuffer {
+func NewOrderedBuffer(cfg OrderedBufferConfig) *OrderedBuffer {
 	return &OrderedBuffer{cfg: cfg, events: make([]bufferedEvent, 0)}
 }
 
@@ -130,9 +130,9 @@ func (b *OrderedBuffer) AddDelRange(ctx context.Context, d *kvpb.RangeFeedDelete
 	return b.addEvent(ctx, ts, &kvpb.RangeFeedEvent{DeleteRange: d})
 }
 
-// MaybeFlushToDisk flushes when the buffer size exceeds the configured threshold,
+// maybeFlushToDisk flushes when the buffer size exceeds the configured threshold.
 func (b *OrderedBuffer) maybeFlushToDisk(ctx context.Context) error {
-	if b.cfg.flushByteSizeThreshold > b.inMemoryBytes {
+	if b.cfg.FlushByteSizeThreshold > b.inMemoryBytes {
 		return nil
 	}
 	return b.FlushToDisk(ctx, hlc.MaxTimestamp)
@@ -158,7 +158,7 @@ func (b *OrderedBuffer) FlushToDisk(ctx context.Context, resolvedTs hlc.Timestam
 		return nil
 	}
 	if b.diskMap == nil {
-		b.diskMap = b.cfg.tempStorage.NewSortedDiskMap()
+		b.diskMap = b.cfg.TempStorage.NewSortedDiskMap()
 	}
 	writer := b.diskMap.NewBatchWriter()
 	defer func() {
@@ -250,7 +250,7 @@ func (b *OrderedBuffer) GetEventsFromDisk(
 			return nil, false, errors.AssertionFailedf("unexpected RangeFeedEvent variant: %v", event)
 		}
 		result = append(result, event)
-		if resultByteSize >= b.cfg.flushByteSizeThreshold {
+		if resultByteSize >= b.cfg.FlushByteSizeThreshold {
 			break
 		}
 		iter.Next()

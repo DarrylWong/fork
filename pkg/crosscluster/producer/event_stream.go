@@ -12,13 +12,13 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/crosscluster"
-	"github.com/cockroachdb/cockroach/pkg/crosscluster/replicationutils"
 	"github.com/cockroachdb/cockroach/pkg/jobs"
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/kv"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvclient/rangefeed"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
+	"github.com/cockroachdb/cockroach/pkg/repstream"
 	"github.com/cockroachdb/cockroach/pkg/repstream/streampb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/settings"
@@ -60,12 +60,13 @@ type eventStream struct {
 	acc   mon.BoundAccount
 	stats *rangescanstats.RangeStatsPoller
 
-	// The remaining fields are used to process rangefeed messages.
-	seb                streamEventBatcher
+	// sink receives processed events for delivery to the consumer.
+	sink repstream.EventSink
+
 	lastCheckpointTime time.Time
 	lastCheckpointLen  int
 
-	adapter RangefeedHandler
+	adapter repstream.RangefeedHandler
 
 	seqNum uint64
 	debug  streampb.DebugProducerStatusHolder
@@ -136,30 +137,27 @@ func (s *eventStream) Start(ctx context.Context, txn *kv.Txn) (retErr error) {
 	// the channel.
 	s.errCh = make(chan error, 1)
 
-	// Stream channel receives datums to be sent to the consumer.
-	s.streamCh = make(chan tree.Datums)
-
 	// Common rangefeed options.
 	opts := []rangefeed.Option{
 		rangefeed.WithPProfLabel("job", fmt.Sprintf("id=%d", s.streamID)),
 		rangefeed.WithMemoryMonitor(s.mon),
 		rangefeed.WithFrontierSpanVisitor(s.maybeCheckpoint),
-		rangefeed.WithOnFrontierAdvance(s.adapter.onFrontier),
-		rangefeed.WithOnCheckpoint(s.adapter.onCheckpoint),
+		rangefeed.WithOnFrontierAdvance(s.adapter.OnFrontier),
+		rangefeed.WithOnCheckpoint(s.adapter.OnCheckpoint),
 		rangefeed.WithOnInternalError(func(ctx context.Context, err error) {
-			s.setErr(err)
+			s.SetErr(err)
 		}),
-		rangefeed.WithOnSSTable(s.adapter.onSSTable),
-		rangefeed.WithOnDeleteRange(s.adapter.onDeleteRange),
+		rangefeed.WithOnSSTable(s.adapter.OnSSTable),
+		rangefeed.WithOnDeleteRange(s.adapter.OnDeleteRange),
 		rangefeed.WithFrontierQuantized(quantize.Get(&s.execCfg.Settings.SV)),
-		rangefeed.WithOnValues(s.adapter.onValues),
+		rangefeed.WithOnValues(s.adapter.OnValues),
 		rangefeed.WithDiff(s.spec.WithDiff),
 		rangefeed.WithConsumerID(int64(s.streamID)),
 		rangefeed.WithInvoker(func(fn func() error) error { return fn() }),
 		rangefeed.WithFiltering(s.spec.WithFiltering),
 	}
 	if emitMetadata.Get(&s.execCfg.Settings.SV) {
-		opts = append(opts, rangefeed.WithOnMetadata(s.adapter.onMetadata))
+		opts = append(opts, rangefeed.WithOnMetadata(s.adapter.OnMetadata))
 	}
 	if s.spec.Type == streampb.ReplicationType_LOGICAL {
 		// To prevent data looping during Logical Replication, only emit events that
@@ -183,7 +181,7 @@ func (s *eventStream) Start(ctx context.Context, txn *kv.Txn) (retErr error) {
 	if s.spec.PreviousReplicatedTimestamp.IsEmpty() {
 		log.Dev.Infof(ctx, "starting event stream with initial scan at %s", initialTimestamp)
 		opts = append(opts,
-			rangefeed.WithInitialScan(s.adapter.onInitialScanDone),
+			rangefeed.WithInitialScan(s.adapter.OnInitialScanDone),
 			rangefeed.WithRowTimestampInInitialScan(true),
 		)
 	} else {
@@ -202,7 +200,7 @@ func (s *eventStream) Start(ctx context.Context, txn *kv.Txn) (retErr error) {
 
 	// Start rangefeed, which spins up a separate go routine to perform its job.
 	s.rf = s.execCfg.RangeFeedFactory.New(
-		fmt.Sprintf("streamID=%d", s.streamID), initialTimestamp, s.adapter.onValue, opts...,
+		fmt.Sprintf("streamID=%d", s.streamID), initialTimestamp, s.adapter.OnValue, opts...,
 	)
 
 	if err := s.rf.StartFromFrontier(ctx, s.frontier); err != nil {
@@ -215,7 +213,8 @@ func (s *eventStream) Start(ctx context.Context, txn *kv.Txn) (retErr error) {
 	return nil
 }
 
-func (s *eventStream) setErr(err error) bool {
+// SetErr implements RangefeedHandler.
+func (s *eventStream) SetErr(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -270,70 +269,90 @@ func (s *eventStream) Close(ctx context.Context) {
 	if s.stats != nil {
 		s.stats.Close()
 	}
+	if s.sink != nil {
+		s.sink.Close(ctx)
+	}
 	s.acc.Close(ctx)
 }
 
-func (s *eventStream) onInitialScanDone(ctx context.Context) {
+// OnInitialScanDone implements RangefeedHandler.
+func (s *eventStream) OnInitialScanDone(ctx context.Context) {
 	log.Dev.VInfof(ctx, 2, "initial scan completed")
 }
 
-func (s *eventStream) onValues(ctx context.Context, values []kvpb.RangeFeedValue) {
+// OnValues implements RangefeedHandler.
+func (s *eventStream) OnValues(ctx context.Context, values []kvpb.RangeFeedValue) {
 	for _, i := range values {
-		s.seb.addKV(streampb.StreamEvent_KV{
+		if s.SetErr(s.sink.OnKV(ctx, streampb.StreamEvent_KV{
 			KeyValue:  roachpb.KeyValue{Key: i.Key, Value: i.Value},
 			PrevValue: i.PrevValue,
-		})
+		})) {
+			return
+		}
 	}
-	s.setErr(s.maybeFlushBatch(ctx))
+	s.SetErr(s.sink.MaybeFlush(ctx))
 }
 
-func (s *eventStream) onValue(ctx context.Context, value *kvpb.RangeFeedValue) {
-	s.seb.addKV(streampb.StreamEvent_KV{
+// OnValue implements RangefeedHandler.
+func (s *eventStream) OnValue(ctx context.Context, value *kvpb.RangeFeedValue) {
+	if s.SetErr(s.sink.OnKV(ctx, streampb.StreamEvent_KV{
 		KeyValue:  roachpb.KeyValue{Key: value.Key, Value: value.Value},
 		PrevValue: value.PrevValue,
-	})
-	s.setErr(s.maybeFlushBatch(ctx))
-}
-
-// OnFrontierAdvance is called by the ordered adapter after it has fed all
-// events up to timestamp into this stream's batch; flush that batch to the
-// consumer.
-func (s *eventStream) OnFrontierAdvance(ctx context.Context, timestamp hlc.Timestamp) {
-	if s.setErr(s.flushBatch(ctx, streampb.FlushCheckpoint)) {
+	})) {
 		return
 	}
-	s.onFrontier(ctx, timestamp)
+	s.SetErr(s.sink.MaybeFlush(ctx))
+}
+
+// OnFrontierAdvance implements RangefeedHandler. It is called by the ordered
+// adapter after it has fed all events up to timestamp into this stream's batch;
+// flush that batch to the consumer.
+func (s *eventStream) OnFrontierAdvance(ctx context.Context, timestamp hlc.Timestamp) {
+	if s.SetErr(s.sink.Flush(ctx)) {
+		return
+	}
+	s.OnFrontier(ctx, timestamp)
 	s.debug.Advance(timestamp.GoTime())
 }
 
-func (s *eventStream) onCheckpoint(ctx context.Context, checkpoint *kvpb.RangeFeedCheckpoint) {
+// OnCheckpoint implements RangefeedHandler.
+func (s *eventStream) OnCheckpoint(ctx context.Context, checkpoint *kvpb.RangeFeedCheckpoint) {
 	s.debug.Checkpoint()
 }
 
-func (s *eventStream) onFrontier(ctx context.Context, timestamp hlc.Timestamp) {
+// OnFrontier implements RangefeedHandler.
+func (s *eventStream) OnFrontier(ctx context.Context, timestamp hlc.Timestamp) {
 	s.debug.Advance(timestamp.GoTime())
 }
 
-func (s *eventStream) onSSTable(
+// OnSSTable implements RangefeedHandler.
+func (s *eventStream) OnSSTable(
 	ctx context.Context, sst *kvpb.RangeFeedSSTable, registeredSpan roachpb.Span,
 ) {
-	if s.setErr(s.addSST(sst, registeredSpan)) {
+	if s.SetErr(s.addSST(ctx, sst, registeredSpan)) {
 		return
 	}
-	s.setErr(s.maybeFlushBatch(ctx))
+	s.SetErr(s.sink.MaybeFlush(ctx))
 }
 
-func (s *eventStream) onDeleteRange(ctx context.Context, delRange *kvpb.RangeFeedDeleteRange) {
-	s.seb.addDelRange(*delRange)
-	s.setErr(s.maybeFlushBatch(ctx))
+// OnDeleteRange implements RangefeedHandler.
+func (s *eventStream) OnDeleteRange(ctx context.Context, delRange *kvpb.RangeFeedDeleteRange) {
+	if s.SetErr(s.sink.OnDelRange(ctx, *delRange)) {
+		return
+	}
+	s.SetErr(s.sink.MaybeFlush(ctx))
 }
-func (s *eventStream) onMetadata(ctx context.Context, metadata *kvpb.RangeFeedMetadata) {
+
+// OnMetadata implements RangefeedHandler.
+func (s *eventStream) OnMetadata(ctx context.Context, metadata *kvpb.RangeFeedMetadata) {
 	log.Dev.VInfof(ctx, 2, "received metadata event: %s, fromManualSplit: %t, parent start key %s", metadata.Span, metadata.FromManualSplit, metadata.ParentStartKey)
 	if metadata.FromManualSplit && !metadata.Span.Key.Equal(metadata.ParentStartKey) {
 		// Only send new manual split keys (i.e. a child rangefeed start key that
 		// differs from the parent start key)
-		s.seb.addSplitPoint(metadata.Span.Key)
-		s.setErr(s.maybeFlushBatch(ctx))
+		if s.SetErr(s.sink.OnSplitPoint(ctx, metadata.Span.Key)) {
+			return
+		}
+		s.SetErr(s.sink.MaybeFlush(ctx))
 	}
 }
 
@@ -347,20 +366,20 @@ func (s *eventStream) maybeCheckpoint(
 }
 
 func (s *eventStream) sendCheckpoint(ctx context.Context, frontier rangefeed.VisitableFrontier) {
-	if err := s.flushBatch(ctx, streampb.FlushCheckpoint); err != nil {
-		s.setErr(err)
+	if err := s.sink.Flush(ctx); err != nil {
+		s.SetErr(err)
 		return
 	}
 
 	spans := make([]jobspb.ResolvedSpan, 0, s.lastCheckpointLen)
 
 	if s.spec.WithMvccOrdering {
-		orderedHandler, ok := s.adapter.(*OrderedStreamHandler)
+		orderedAdapter, ok := s.adapter.(*orderedEventStreamAdapter)
 		if !ok {
-			s.setErr(errors.AssertionFailedf("expected adapter to be an ordered stream handler"))
+			s.SetErr(errors.AssertionFailedf("expected adapter to be an ordered stream handler"))
 			return
 		}
-		resolvedTs := orderedHandler.resolvedTs
+		resolvedTs := orderedAdapter.ResolvedTs
 		for sp := range frontier.Entries() {
 			spans = append(spans, jobspb.ResolvedSpan{Span: sp, Timestamp: resolvedTs})
 		}
@@ -372,34 +391,18 @@ func (s *eventStream) sendCheckpoint(ctx context.Context, frontier rangefeed.Vis
 	s.lastCheckpointLen = len(spans)
 
 	s.seqNum++
-	err := s.sendFlush(ctx, &streampb.StreamEvent{StreamSeq: s.seqNum, Checkpoint: &streampb.StreamEvent_StreamCheckpoint{
+	err := s.sendCheckpointEvent(ctx, &streampb.StreamEvent{StreamSeq: s.seqNum, Checkpoint: &streampb.StreamEvent_StreamCheckpoint{
 		ResolvedSpans: spans,
 		RangeStats:    s.stats.MaybeStats(),
 	}})
 	if err != nil {
-		s.setErr(err)
+		s.SetErr(err)
 		return
 	}
 	// set the local time for pacing.
 	s.lastCheckpointTime = timeutil.Now()
 
 	s.debug.CheckpointEmitted(s.lastCheckpointTime, spans, s.seqNum)
-}
-
-func (s *eventStream) maybeFlushBatch(ctx context.Context) error {
-	// If the consumer is ready to ingest, flush at a lower threshold. This
-	// ensures the consumer always has work to do.
-	//
-	// If the consumer is not ready, the larger batch delays the flush call and
-	// preventing the slow consumer from blocking rangefeed progress, avoiding
-	// catchup scans.
-	if s.seb.size > int(s.spec.Config.BatchByteSize) {
-		return s.flushBatch(ctx, streampb.FlushFull)
-	}
-	if s.consumerReady.Load() && s.seb.size > minBatchByteSize {
-		return s.flushBatch(ctx, streampb.FlushReady)
-	}
-	return nil
 }
 
 var debugSettingDropData = settings.RegisterBoolSetting(
@@ -410,22 +413,10 @@ var debugSettingDropData = settings.RegisterBoolSetting(
 	settings.WithUnsafe,
 )
 
-func (s *eventStream) flushBatch(ctx context.Context, reason streampb.FlushReason) error {
-	if s.seb.size == 0 {
-		return nil
-	}
-	defer s.seb.reset()
-
-	if debugSettingDropData.Get(s.execCfg.SV()) {
-		return nil
-	}
-
-	s.seqNum++
-	s.debug.Flushed(int64(s.seb.size), reason, s.seqNum)
-
-	return s.sendFlush(ctx, &streampb.StreamEvent{StreamSeq: s.seqNum, Batch: &s.seb.batch})
-}
-func (s *eventStream) sendFlush(ctx context.Context, event *streampb.StreamEvent) error {
+// sendCheckpointEvent serializes and sends a checkpoint event over streamCh.
+// This is separate from EventSink because checkpoints are part of the
+// replication protocol framing, not the event delivery abstraction.
+func (s *eventStream) sendCheckpointEvent(ctx context.Context, event *streampb.StreamEvent) error {
 	event.EmitUnixNanos = timeutil.Now().UnixNano()
 	data, err := protoutil.Marshal(event)
 	if err != nil {
@@ -442,13 +433,16 @@ func (s *eventStream) sendFlush(ctx context.Context, event *streampb.StreamEvent
 	}
 }
 
-// Add a RangeFeedSSTable into current batch.
-func (s *eventStream) addSST(sst *kvpb.RangeFeedSSTable, registeredSpan roachpb.Span) error {
+// addSST processes a RangeFeedSSTable, sending individual KVs and delete ranges
+// through the sink. If the SST span is within the registered span, the whole
+// SST is forwarded; otherwise, it is trimmed to the registered span.
+func (s *eventStream) addSST(
+	ctx context.Context, sst *kvpb.RangeFeedSSTable, registeredSpan roachpb.Span,
+) error {
 	// We send over the whole SSTable if the sst span is within
 	// the registered span boundaries.
 	if registeredSpan.Contains(sst.Span) {
-		s.seb.addSST(*sst)
-		return nil
+		return s.sink.OnSST(ctx, *sst)
 	}
 	// If the sst span exceeds boundaries of the watched spans,
 	// we trim the sst data to avoid sending unnecessary data.
@@ -458,7 +452,7 @@ func (s *eventStream) addSST(sst *kvpb.RangeFeedSSTable, registeredSpan roachpb.
 	// Extract the received SST to only contain data within the boundaries of
 	// matching registered span. Execute the specified operations on each MVCC
 	// key value and each MVCCRangeKey value in the trimmed SSTable.
-	return replicationutils.ScanSST(sst, registeredSpan,
+	return repstream.ScanSST(sst, registeredSpan,
 		func(k storage.MVCCKeyValue) error {
 			// TODO(ssd): We technically get MVCCValueHeaders in our
 			// SSTs. But currently there are so many ways _not_ to
@@ -468,17 +462,15 @@ func (s *eventStream) addSST(sst *kvpb.RangeFeedSSTable, registeredSpan roachpb.
 			if err != nil {
 				return err
 			}
-			s.seb.addKV(
+			return s.sink.OnKV(ctx,
 				streampb.StreamEvent_KV{KeyValue: roachpb.KeyValue{
 					Key: k.Key.Key, Value: roachpb.Value{RawBytes: v.RawBytes, Timestamp: k.Key.Timestamp}},
 				})
-			return nil
 		}, func(rk storage.MVCCRangeKeyValue) error {
-			s.seb.addDelRange(kvpb.RangeFeedDeleteRange{
+			return s.sink.OnDelRange(ctx, kvpb.RangeFeedDeleteRange{
 				Span:      roachpb.Span{Key: rk.RangeKey.StartKey, EndKey: rk.RangeKey.EndKey},
 				Timestamp: rk.RangeKey.Timestamp,
 			})
-			return nil
 		})
 }
 
@@ -543,14 +535,28 @@ func streamPartition(
 		spec:     spec,
 		execCfg:  execCfg,
 		mon:      evalCtx.Planner.TxnMon(),
-		seb:      streamEventBatcher{wrappedKVs: spec.WrappedEvents},
 	}
+
+	// Stream channel receives datums to be sent to the consumer.
+	handler.streamCh = make(chan tree.Datums)
+
+	handler.sink = &replicationSink{
+		seb:           streamEventBatcher{wrappedKVs: spec.WrappedEvents},
+		seqNum:        &handler.seqNum,
+		debug:         &handler.debug,
+		streamCh:      handler.streamCh,
+		spec:          spec,
+		execCfg:       execCfg,
+		sv:            execCfg.SV(),
+		consumerReady: &handler.consumerReady,
+	}
+
 	if spec.WithMvccOrdering {
-		oes := NewOrderedEventStream(handler, &OrderedBufferConfig{
-			settings:               execCfg.Settings,
-			streamID:               streamID,
-			tempStorage:            execCfg.DistSQLSrv.TempStorage,
-			flushByteSizeThreshold: spec.Config.BatchByteSize,
+		oes := newOrderedEventStreamAdapter(handler, &repstream.OrderedBufferConfig{
+			Settings:               execCfg.Settings,
+			StreamID:               streamID,
+			TempStorage:            execCfg.DistSQLSrv.TempStorage,
+			FlushByteSizeThreshold: spec.Config.BatchByteSize,
 		}, spec.InitialScanTimestamp)
 		handler.adapter = oes
 		return oes, nil
