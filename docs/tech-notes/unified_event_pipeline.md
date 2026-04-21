@@ -578,22 +578,28 @@ Purely a refactor — no behavioral change.
 ### PR 3: Changefeed sink behind feature gate
 
 1. Add `var UseUnifiedEventPipeline = false` in changefeedbase.
+   **Done.**
 2. Create `changefeedSink` implementing `EventSink` in
-   `pkg/ccl/changefeedccl/`:
+   `pkg/ccl/changefeedccl/changefeed_sink_event.go`:
    - `OnKV` → wraps as `kvevent.Event`, writes to `kvevent.Writer`
    - `OnSST` → error
    - `OnDelRange` → no-op
-   - Tracks `backfillTimestamp` as internal state
-3. Create schemafeed adapter implementing `SchemaWatcher` — wraps
-   `schemafeed.SchemaFeed`.
-4. Create `makeChangefeedSchemaChangeCallback` with policy logic.
-5. Modify `changeAggregator.startKVFeed`:
-   - When gate is on, create an `eventStream` (from `repstream`)
-     with `changefeedSink` instead of calling `kvfeed.Run`
-   - Return the same `kvevent.Reader` (the buffer) to the caller
-   - `tick()` is **unchanged** — reads `kvevent.Event` as before
-   - `ConsumeEvent` is **unchanged**
-6. Wire behind `UseUnifiedEventPipeline`, flip in tests, fix failures.
+   - `emitResolvedSpan` — helper for checkpoint/boundary events
+   **Done.**
+3. Create CDC rangefeed orchestrator in
+   `pkg/ccl/changefeedccl/unified_kvfeed.go`:
+   - `startUnifiedKVFeed` — drop-in for `startKVFeed`
+   - `runUnifiedKVFeed` — scan/rangefeed/schema-change loop
+   - Schema changes detected via `schemafeed.SchemaFeed.Peek()`
+     on frontier advance
+   - Uses `schemafeed.SchemaFeed` directly (no `SchemaWatcher`
+     adapter needed — the existing interface works)
+   **Done.**
+4. Wire behind `UseUnifiedEventPipeline` in `startKVFeed`.
+   **Done.**
+5. `tick()` is **unchanged** — reads `kvevent.Event` as before.
+   `ConsumeEvent` is **unchanged**.
+6. Flip gate in tests, fix failures — **not done yet**.
 
 ### PR 4: Delete kvfeed
 

@@ -460,6 +460,10 @@ func (ca *changeAggregator) startKVFeed(
 	memLimit int64,
 	opts changefeedbase.StatementOptions,
 ) (kvevent.Reader, chan struct{}, chan error, error) {
+	if changefeedbase.UseUnifiedEventPipeline {
+		return ca.startUnifiedKVFeed(ctx, spans, initialHighWater, needsInitialScan,
+			config, parentMemMon, memLimit, opts)
+	}
 	cfg := ca.FlowCtx.Cfg
 	kvFeedMemMon := mon.NewMonitorInheritWithLimit(mon.MakeName("kvFeed"), memLimit, parentMemMon, false /* longLiving */)
 	kvFeedMemMon.StartNoReserved(ctx, parentMemMon)
