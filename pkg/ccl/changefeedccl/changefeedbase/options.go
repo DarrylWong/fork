@@ -386,12 +386,6 @@ func (o OptionPermittedValues) thatCanBeZero() OptionPermittedValues {
 	return o2
 }
 
-// UseUnifiedEventPipeline gates the unified event pipeline behind a
-// temporary variable. When true, changefeeds use the unified rangefeed
-// orchestrator (via repstream.EventSink) instead of kvfeed.Run.
-// TODO: remove this once the unified path is validated and kvfeed is deleted.
-var UseUnifiedEventPipeline = false
-
 var stringOption = OptionPermittedValues{Type: OptionTypeString}
 var durationOption = OptionPermittedValues{Type: OptionTypeDuration}
 var timestampOption = OptionPermittedValues{Type: OptionTypeTimestamp}

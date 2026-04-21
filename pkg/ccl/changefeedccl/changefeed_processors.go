@@ -460,46 +460,8 @@ func (ca *changeAggregator) startKVFeed(
 	memLimit int64,
 	opts changefeedbase.StatementOptions,
 ) (kvevent.Reader, chan struct{}, chan error, error) {
-	if changefeedbase.UseUnifiedEventPipeline {
-		return ca.startUnifiedKVFeed(ctx, spans, initialHighWater, needsInitialScan,
-			config, parentMemMon, memLimit, opts)
-	}
-	cfg := ca.FlowCtx.Cfg
-	kvFeedMemMon := mon.NewMonitorInheritWithLimit(mon.MakeName("kvFeed"), memLimit, parentMemMon, false /* longLiving */)
-	kvFeedMemMon.StartNoReserved(ctx, parentMemMon)
-
-	var options []kvevent.BlockingBufferOption
-	if ca.knobs.MakeKVFeedToAggregatorBufferKnobs != nil {
-		options = append(options,
-			kvevent.WithBlockingBufferTestingKnobs(ca.knobs.MakeKVFeedToAggregatorBufferKnobs()))
-	}
-	buf := kvevent.NewThrottlingBuffer(
-		kvevent.NewMemBuffer(kvFeedMemMon.MakeBoundAccount(), &cfg.Settings.SV,
-			&ca.metrics.KVFeedMetrics.AggregatorBufferMetrics, options...),
-		cdcutils.NodeLevelThrottler(&cfg.Settings.SV, &ca.metrics.ThrottleMetrics))
-
-	// KVFeed takes ownership of the kvevent.Writer portion of the buffer, while
-	// we return the kvevent.Reader part to the caller.
-	kvfeedCfg, err := ca.makeKVFeedCfg(ctx, config, spans, buf, initialHighWater, needsInitialScan, kvFeedMemMon, opts)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	errCh := make(chan error, 1)
-	doneCh := make(chan struct{})
-	// If RunAsyncTask immediately returns an error, the kvfeed was not run and
-	// will not run.
-	if err := ca.FlowCtx.Stopper().RunAsyncTask(ctx, "changefeed-poller", func(ctx context.Context) {
-		defer close(doneCh)
-		defer kvFeedMemMon.Stop(ctx)
-		errCh <- kvfeed.Run(ctx, kvfeedCfg)
-	}); err != nil {
-		// Ensure that the memory monitor is closed properly.
-		kvFeedMemMon.Stop(ctx)
-		return nil, nil, nil, err
-	}
-
-	return buf, doneCh, errCh, nil
+	return ca.startUnifiedKVFeed(ctx, spans, initialHighWater, needsInitialScan,
+		config, parentMemMon, memLimit, opts)
 }
 
 func (ca *changeAggregator) checkKVFeedErr() error {
@@ -509,89 +471,6 @@ func (ca *changeAggregator) checkKVFeedErr() error {
 	default:
 		return nil
 	}
-}
-
-func (ca *changeAggregator) makeKVFeedCfg(
-	ctx context.Context,
-	config ChangefeedConfig,
-	spans []roachpb.Span,
-	buf kvevent.Writer,
-	initialHighWater hlc.Timestamp,
-	needsInitialScan bool,
-	memMon *mon.BytesMonitor,
-	opts changefeedbase.StatementOptions,
-) (kvfeed.Config, error) {
-	schemaChange, err := config.Opts.GetSchemaChangeHandlingOptions()
-	if err != nil {
-		return kvfeed.Config{}, err
-	}
-	filters := config.Opts.GetFilters()
-	cfg := ca.FlowCtx.Cfg
-
-	initialScanOnly := config.EndTime == initialHighWater
-	var sf schemafeed.SchemaFeed
-
-	if schemaChange.Policy == changefeedbase.OptSchemaChangePolicyIgnore || initialScanOnly {
-		sf = schemafeed.DoNothingSchemaFeed
-	} else {
-		sf = schemafeed.New(ctx, cfg, schemaChange.EventClass, ca.targets,
-			initialHighWater, &ca.metrics.SchemaFeedMetrics, config.Opts.GetCanHandle(),
-			isDBLevelChangefeed(ca.spec.Feed))
-	}
-
-	monitoringCfg, err := makeKVFeedMonitoringCfg(ctx, ca.sliMetrics, opts, ca.FlowCtx.Cfg.Settings)
-	if err != nil {
-		return kvfeed.Config{}, err
-	}
-
-	// Create the initial span-timestamp pairs from the frontier
-	// (which already has checkpoint info restored).
-	var initialSpanTimePairs []kvcoord.SpanTimePair
-	for sp, ts := range ca.frontier.Entries() {
-		initialSpanTimePairs = append(initialSpanTimePairs, kvcoord.SpanTimePair{
-			Span:       sp,
-			StartAfter: ts,
-		})
-	}
-
-	return kvfeed.Config{
-		Writer:               buf,
-		Settings:             cfg.Settings,
-		DB:                   cfg.DB.KV(),
-		Codec:                cfg.Codec,
-		Clock:                cfg.DB.KV().Clock(),
-		Spans:                spans,
-		Targets:              ca.targets,
-		Metrics:              &ca.metrics.KVFeedMetrics,
-		MM:                   memMon,
-		InitialHighWater:     initialHighWater,
-		InitialSpanTimePairs: initialSpanTimePairs,
-		EndTime:              config.EndTime,
-		WithDiff:             filters.WithDiff,
-		WithFiltering:        filters.WithFiltering,
-		WithFrontierQuantize: changefeedbase.Quantize.Get(&cfg.Settings.SV),
-		WithBulkDelivery:     changefeedbase.BulkDelivery.Get(&cfg.Settings.SV),
-		NeedsInitialScan:     needsInitialScan,
-		SchemaChangeEvents:   schemaChange.EventClass,
-		SchemaChangePolicy:   schemaChange.Policy,
-		SchemaFeed:           sf,
-		Knobs:                ca.knobs.FeedKnobs,
-		ScopedTimers:         ca.sliMetrics.Timers,
-		MonitoringCfg:        monitoringCfg,
-		ConsumerID:           int64(ca.spec.JobID),
-	}, nil
-}
-
-func makeKVFeedMonitoringCfg(
-	ctx context.Context,
-	sliMetrics *sliMetrics,
-	opts changefeedbase.StatementOptions,
-	settings *cluster.Settings,
-) (kvfeed.MonitoringConfig, error) {
-	return kvfeed.MonitoringConfig{
-		OnBackfillCallback:      sliMetrics.getBackfillCallback(),
-		OnBackfillRangeCallback: sliMetrics.getBackfillRangeCallback(),
-	}, nil
 }
 
 // getInitialHighWaterAndSpans returns the initial highwater and spans the
