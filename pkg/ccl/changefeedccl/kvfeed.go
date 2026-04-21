@@ -90,7 +90,7 @@ func (ca *changeAggregator) startKVFeed(
 	if err := ca.FlowCtx.Stopper().RunAsyncTask(ctx, "changefeed-poller", func(ctx context.Context) {
 		defer close(doneCh)
 		defer kvFeedMemMon.Stop(ctx)
-		errCh <- runKVFeed(ctx, unifiedKVFeedConfig{
+		errCh <- runKVFeed(ctx, kvFeedConfig{
 			sink:                 sink,
 			spans:                spans,
 			initialHighWater:     initialHighWater,
@@ -114,8 +114,8 @@ func (ca *changeAggregator) startKVFeed(
 	return buf, doneCh, errCh, nil
 }
 
-// unifiedKVFeedConfig holds the configuration for runKVFeed.
-type unifiedKVFeedConfig struct {
+// kvFeedConfig holds the configuration for runKVFeed.
+type kvFeedConfig struct {
 	sink                 *changefeedSink
 	spans                []roachpb.Span
 	initialHighWater     hlc.Timestamp
@@ -136,7 +136,7 @@ var errChangefeedCompleted = errors.New("changefeed completed")
 
 // runKVFeed sets up a rangefeed, wires callbacks to the changefeedSink,
 // and handles the scan/rangefeed/schema-change loop.
-func runKVFeed(ctx context.Context, c unifiedKVFeedConfig) error {
+func runKVFeed(ctx context.Context, c kvFeedConfig) error {
 	log.Changefeed.Infof(ctx, "kv feed starting")
 
 	// Build the resume frontier from initial span-time pairs.
@@ -258,9 +258,7 @@ func (e schemaChangeDetectedError) Error() string {
 
 // runRangefeedUntilBoundary starts a rangefeed and runs until a schema change
 // boundary is detected or the end time is reached.
-func runRangefeedUntilBoundary(
-	ctx context.Context, c unifiedKVFeedConfig, frontier span.Frontier,
-) error {
+func runRangefeedUntilBoundary(ctx context.Context, c kvFeedConfig, frontier span.Frontier) error {
 	errCh := make(chan error, 1)
 
 	// Set up rangefeed options.
@@ -378,10 +376,7 @@ func runRangefeedUntilBoundary(
 
 // runRangefeedWithScan runs a rangefeed with initial scan for the initial-scan-only case.
 func runRangefeedWithScan(
-	ctx context.Context,
-	c unifiedKVFeedConfig,
-	frontier span.Frontier,
-	initialTimestamp hlc.Timestamp,
+	ctx context.Context, c kvFeedConfig, frontier span.Frontier, initialTimestamp hlc.Timestamp,
 ) error {
 	errCh := make(chan error, 1)
 	scanDone := make(chan struct{})
@@ -419,7 +414,7 @@ func runRangefeedWithScan(
 	}
 
 	rf := c.execCfg.RangeFeedFactory.New(
-		fmt.Sprintf("changefeed-unified-scan-jobID=%d", c.jobID),
+		fmt.Sprintf("changefeed-scan-jobID=%d", c.jobID),
 		initialTimestamp,
 		func(ctx context.Context, value *kvpb.RangeFeedValue) {
 			if err := c.sink.OnKV(ctx, streampb.StreamEvent_KV{
