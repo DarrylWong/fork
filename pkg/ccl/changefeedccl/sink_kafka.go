@@ -80,13 +80,13 @@ type kafkaSinkKnobs struct {
 var _ sarama.StdLogger = (*kafkaLogAdapter)(nil)
 
 func (l *kafkaLogAdapter) Print(v ...interface{}) {
-	log.Changefeed.InfofDepth(l.ctx, 1, "", v...)
+	log.Changefeed.InfofDepth(l.ctx, 1, "%v", v...)
 }
 func (l *kafkaLogAdapter) Printf(format string, v ...interface{}) {
 	log.Changefeed.InfofDepth(l.ctx, 1, format, v...)
 }
 func (l *kafkaLogAdapter) Println(v ...interface{}) {
-	log.Changefeed.InfofDepth(l.ctx, 1, "", v...)
+	log.Changefeed.InfofDepth(l.ctx, 1, "%v", v...)
 }
 
 func init() {

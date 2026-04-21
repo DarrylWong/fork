@@ -1,16 +1,46 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library")
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "repstream",
-    srcs = ["api.go"],
+    srcs = [
+        "api.go",
+        "event_sink.go",
+        "ordered_buffer.go",
+        "ordered_event_stream.go",
+        "scan_sst.go",
+    ],
     importpath = "github.com/cockroachdb/cockroach/pkg/repstream",
     visibility = ["//visibility:public"],
     deps = [
+        "//pkg/kv/kvpb",
+        "//pkg/kv/kvserver/diskmap",
+        "//pkg/repstream/streampb",
+        "//pkg/roachpb",
+        "//pkg/settings/cluster",
         "//pkg/sql/catalog/descs",
         "//pkg/sql/catalog/resolver",
         "//pkg/sql/clusterunique",
         "//pkg/sql/isql",
         "//pkg/sql/sem/eval",
+        "//pkg/storage",
+        "//pkg/storage/mvccencoding",
+        "//pkg/util/hlc",
+        "//pkg/util/protoutil",
         "@com_github_cockroachdb_errors//:errors",
+    ],
+)
+
+go_test(
+    name = "repstream_test",
+    srcs = ["ordered_buffer_internal_test.go"],
+    embed = [":repstream"],
+    deps = [
+        "//pkg/kv/kvpb",
+        "//pkg/roachpb",
+        "//pkg/util/hlc",
+        "//pkg/util/leaktest",
+        "//pkg/util/log",
+        "@com_github_cockroachdb_errors//:errors",
+        "@com_github_stretchr_testify//require",
     ],
 )

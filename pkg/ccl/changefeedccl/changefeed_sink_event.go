@@ -43,9 +43,7 @@ func (s *changefeedSink) OnKV(ctx context.Context, kv streampb.StreamEvent_KV) e
 	}
 	var ev kvevent.Event
 	if !s.backfillTimestamp.IsEmpty() {
-		ev = kvevent.MakeKVEvent(rfEvent)
-		// TODO(darryl): set backfill timestamp on the event once we have
-		// a kvevent constructor that supports it without allocating.
+		ev = kvevent.MakeBackfillKVEventFromRangefeedEvent(rfEvent, s.backfillTimestamp)
 	} else {
 		ev = kvevent.MakeKVEvent(rfEvent)
 	}

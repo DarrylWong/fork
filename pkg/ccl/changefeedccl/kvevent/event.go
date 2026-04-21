@@ -303,6 +303,18 @@ func MakeKVEvent(ev *kvpb.RangeFeedEvent) Event {
 	return Event{ev: ev, et: TypeKV}
 }
 
+// MakeBackfillKVEventFromRangefeedEvent returns a KV event from a RangeFeedEvent
+// with a backfill timestamp. The backfill timestamp tells downstream decoders
+// which schema version to use for interpreting the KV.
+func MakeBackfillKVEventFromRangefeedEvent(
+	ev *kvpb.RangeFeedEvent, backfillTS hlc.Timestamp,
+) Event {
+	if ev.Val == nil {
+		panic("expected initialized RangeFeedValue")
+	}
+	return Event{ev: ev, et: TypeKV, backfillTimestamp: backfillTS}
+}
+
 // NewBackfillKVEvent returns new KV event constructed during the backfill.
 // Method intended to be used during backfill.
 func NewBackfillKVEvent(

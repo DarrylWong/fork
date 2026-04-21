@@ -522,136 +522,82 @@ much cleaner with the unified pipeline since the ordered buffer, schema
 boundary detection, and frontier management are already in the same
 place.
 
-## Implementation Plan
+## Implementation Status
 
-### PR 1: Introduce EventSink, extract replicationSink, move generic infrastructure to repstream
+All steps below are **done**.
 
-1. Export `RangefeedHandler` methods (capitalize). **Done.**
-2. Define `EventSink` interface in `pkg/repstream/`.
-3. Extract `replicationSink` from `eventStream` in
-   `pkg/crosscluster/producer/`:
-   - Move batching/flushing logic off `eventStream` onto
-     `replicationSink`.
-   - `replicationSink` implements `EventSink`.
-4. Update `eventStream` handler methods to call through the sink.
-   **Done.**
-5. Move shared event stream building blocks from
-   `pkg/crosscluster/producer/` to `pkg/repstream/`:
-   - `EventSink` interface **Done.**
-   - `RangefeedHandler` interface + `OrderedStreamHandler` **Done.**
-   - `OrderedBuffer` + `OrderedBufferConfig` **Done.**
-   - `ScanSST` (from `replicationutils`) **Done.**
-   - `streamEventBatcher` stays in producer (replication-specific).
-   - `eventStream` stays in producer (has replication-specific code;
-     CDC will build its own rangefeed setup using the shared
-     primitives from `repstream`).
-6. `streamPartition()` stays in `crosscluster/producer/`, creates
-   `replicationSink` and `orderedEventStreamAdapter` (thin wrapper
-   adding `eval.ValueGenerator` for pgwire streaming).
+### Step 1: EventSink + replicationSink + move to repstream
 
-**Current status**: Steps 1–5 are done. All production code and
-tests compile. `eventStream` stays in producer — CDC will have its
-own rangefeed orchestrator using the shared `repstream` building
-blocks rather than sharing `eventStream`.
+- Exported `RangefeedHandler` interface.
+- Defined `EventSink` interface in `pkg/repstream/`.
+- Extracted `replicationSink` from `eventStream` (batching/flushing
+  logic), implements `EventSink`.
+- Updated `eventStream` handler methods to call through the sink.
+- Moved shared building blocks to `pkg/repstream/`:
+  `EventSink`, `RangefeedHandler`, `OrderedStreamHandler`,
+  `OrderedBuffer`, `OrderedBufferConfig`, `ScanSST`.
+- `streamEventBatcher`, `eventStream`, `replicationSink` stay in
+  `crosscluster/producer` (replication-specific).
+- `orderedEventStreamAdapter` in producer wraps
+  `repstream.OrderedStreamHandler` + `eval.ValueGenerator`.
 
-**Validation**: all existing PCR and LDR tests must pass unchanged.
-Purely a refactor — no behavioral change.
+### Step 2: Replace kvfeed with new CDC rangefeed orchestrator
 
-### PR 2: Schema change support types in repstream
+- `changefeedSink` (`changefeed_sink_event.go`) implements
+  `repstream.EventSink`:
+  - `OnKV` → wraps as `kvevent.Event`, writes to `kvevent.Writer`
+  - `OnSST` → error
+  - `OnDelRange` → no-op
+  - `emitResolvedSpan` — helper for checkpoint/boundary events
+- `kvfeed.go` contains the CDC rangefeed orchestrator:
+  - `startKVFeed` — creates buffer, sink, rangefeed
+  - `runKVFeed` — scan/rangefeed/schema-change loop
+  - Schema changes detected via `schemafeed.SchemaFeed.Peek()`
+    on frontier advance
+- Old `pkg/ccl/changefeedccl/kvfeed/` package deleted
+  (`kv_feed.go`, `physical_kv_feed.go`, `scanner.go`).
+- `KVFeedTestingKnobs` moved from `kvfeed.TestingKnobs` into
+  `changefeedccl/testing_knobs.go`.
+- `tick()` and `ConsumeEvent` are **unchanged** — still read
+  `kvevent.Event` from `kvevent.Reader`.
 
-1. Add shared schema change types to `pkg/repstream/`:
-   - `SchemaWatcher` interface (`Run`, `Peek`, `Pop`)
-   - `OnSchemaChangeFn` callback type
-   - `SchemaChangeAction` enum (`SchemaChangePause`,
-     `SchemaChangeContinue`)
-2. Events are opaque (`[]any`) since their contents are
-   consumer-specific (e.g. `schemafeed.TableEvent` for CDC).
-   The event stream doesn't interpret them — only passes them
-   to the `OnSchemaChangeFn` callback.
-3. Wiring into the rangefeed setup is consumer-specific:
-   - CDC's rangefeed orchestrator checks `Peek()` on frontier
-     advance and invokes the callback
-   - PCR/LDR don't use schema watching
+### Step 3: Wire testing knobs
 
-**Done.** Types defined in `pkg/repstream/schema_watcher.go`.
+All 6 `KVFeedTestingKnobs` wired:
+- `BeforeScanRequest` — via new `rangefeed.WithBeforeScanRequest`
+- `OnRangeFeedValue` — called before each value in OnValues
+- `ShouldSkipCheckpoint` — skips checkpoint emission
+- `OnRangeFeedStart` — called after rangefeed starts
+- `EndTimeReached` — additional end-time check on frontier advance
+- `RangefeedOptions` — via new `rangefeed.WithExtraRangeFeedOptions`
 
-### PR 3: Changefeed sink behind feature gate
+Added two new `rangefeed.Option`s to `pkg/kv/kvclient/rangefeed/`:
+- `WithBeforeScanRequest` — hooks into scan path in `db_adapter.go`
+- `WithExtraRangeFeedOptions` — passes through `kvcoord.RangeFeedOption`
 
-1. Add `var UseUnifiedEventPipeline = false` in changefeedbase.
-   **Done.**
-2. Create `changefeedSink` implementing `EventSink` in
-   `pkg/ccl/changefeedccl/changefeed_sink_event.go`:
-   - `OnKV` → wraps as `kvevent.Event`, writes to `kvevent.Writer`
-   - `OnSST` → error
-   - `OnDelRange` → no-op
-   - `emitResolvedSpan` — helper for checkpoint/boundary events
-   **Done.**
-3. Create CDC rangefeed orchestrator in
-   `pkg/ccl/changefeedccl/unified_kvfeed.go`:
-   - `startUnifiedKVFeed` — drop-in for `startKVFeed`
-   - `runUnifiedKVFeed` — scan/rangefeed/schema-change loop
-   - Schema changes detected via `schemafeed.SchemaFeed.Peek()`
-     on frontier advance
-   - Uses `schemafeed.SchemaFeed` directly (no `SchemaWatcher`
-     adapter needed — the existing interface works)
-   **Done.**
-4. Wire behind `UseUnifiedEventPipeline` in `startKVFeed`.
-   **Done.**
-5. `tick()` is **unchanged** — reads `kvevent.Event` as before.
-   `ConsumeEvent` is **unchanged**.
-6. Flip gate in tests, fix failures — **not done yet**.
+## What Changed for CDC
 
-### PR 4: Delete kvfeed
+1. **No intermediate copy loop.** The old `copyFromSourceToDestUntilTableEvent`
+   read events from an internal `memBuf` and wrote to `kvevent.Writer` one
+   at a time. The new path writes directly from rangefeed callbacks.
 
-1. Remove `UseUnifiedEventPipeline` var and the branch.
-2. Delete `pkg/ccl/changefeedccl/kvfeed/`.
-3. Clean up any remaining references.
+2. **`rangefeed.Factory` instead of `DistSender.RangeFeed`.** The old kvfeed
+   used the low-level API. The new path uses the managed higher-level API.
 
-### PR 5 (follow-up): Remove kvevent.Buffer from changefeed path
+3. **Schema change detection on frontier advance instead of per-event.** The
+   old kvfeed checked `schemafeed.Peek()` on every event timestamp. The new
+   path checks on frontier advance only. This is safe because events past a
+   boundary haven't been decoded yet — decoding happens downstream in
+   `ConsumeEvent`.
+
+4. **No `kvfeed.Config`, `physicalFeedFactory`, `kvScanner`.** Scan is
+   handled by rangefeed's built-in `WithInitialScan`. Schema feed, scan,
+   and rangefeed are wired directly.
+
+## Remaining Work
+
+### Remove kvevent.Buffer from changefeed path
 
 1. Replace `changefeedSink` → `kvevent.Writer` with direct channel.
 2. Adapt `changeAggregator.tick()` to read from channel.
 3. Remove `kvevent.Writer`/`Reader`/`Buffer` if no longer used.
-
-## Open Questions
-
-### 1. Schema boundary timing: per-event vs per-frontier-advance
-
-kvfeed checks `schemafeed.Peek()` on every event timestamp via
-`copyFromSourceToDestUntilTableEvent`. The new approach checks on
-frontier advance only. This means events between the schema change
-timestamp and the next frontier advance could reach the handler.
-
-This is safe because:
-- The frontier only advances when all ranges have resolved past a
-  timestamp. If a schema change happened at T, the frontier advances
-  to T only after all ranges are past T.
-- `schemafeed.Peek(frontierTs)` detects the change at T.
-- `eventStream` stops the rangefeed. Events already delivered to the
-  handler at timestamps > T haven't been decoded yet (decoding happens
-  downstream in `changeAggregator`).
-- The changefeed handler can tag these events so the decoder knows to
-  use the new schema, or the `OnSchemaChangeFn` callback can flush/
-  discard them before returning.
-
-This needs careful testing with the existing changefeed schema change
-tests to verify no behavioral regression.
-
-### 2. Boundary resolved span emission
-
-kvfeed emits resolved spans with boundary types (`BACKFILL`, `RESTART`,
-`EXIT`) to signal the `changeAggregator`. This is changefeed-specific.
-The `OnSchemaChangeFn` callback emits these via the handler's channel
-before returning its action. `eventStream` doesn't know about boundary
-types.
-
-### 3. ConsumeEvent adaptation — resolved
-
-With the `eventSink` approach, `changefeedSink` writes `kvevent.Event`
-to `kvevent.Writer`. `ConsumeEvent` receives the same `kvevent.Event`
-type as today — no adaptation needed. This is a non-issue as long as
-the `kvevent.Buffer` is kept in the initial integration.
-
-When the buffer is removed in the follow-up (PR 5), `ConsumeEvent`
-will need to accept a different type. At that point kvfeed is already
-deleted, so it's a straightforward refactor.
