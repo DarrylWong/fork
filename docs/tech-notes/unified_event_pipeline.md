@@ -557,26 +557,23 @@ blocks rather than sharing `eventStream`.
 **Validation**: all existing PCR and LDR tests must pass unchanged.
 Purely a refactor — no behavioral change.
 
-### PR 2: Schema change support in eventStream
+### PR 2: Schema change support types in repstream
 
-1. Add `OnSchemaChangeFn`, `SchemaChangeAction`, `SchemaChangeEvent`
-   types to `pkg/repstream/`.
-2. Add a `SchemaWatcher` interface:
-   ```go
-   type SchemaWatcher interface {
-       Run(ctx context.Context) error
-       Peek(ctx context.Context, atOrBefore hlc.Timestamp) ([]SchemaChangeEvent, error)
-       Pop(ctx context.Context, atOrBefore hlc.Timestamp) ([]SchemaChangeEvent, error)
-   }
-   ```
-3. Add optional `SchemaWatcher` and `OnSchemaChangeFn` fields to
-   `eventStream`.
-4. Wire into `eventStream.Start()`:
-   - Start `SchemaWatcher.Run` in a goroutine if non-nil
-   - Check `Peek()` on frontier advance
-   - On boundary: stop rangefeed, `Pop()` events, invoke
-     `OnSchemaChangeFn`, act on `SchemaChangeAction`
-5. Tests for schema boundary detection with mock `SchemaWatcher`.
+1. Add shared schema change types to `pkg/repstream/`:
+   - `SchemaWatcher` interface (`Run`, `Peek`, `Pop`)
+   - `OnSchemaChangeFn` callback type
+   - `SchemaChangeAction` enum (`SchemaChangePause`,
+     `SchemaChangeContinue`)
+2. Events are opaque (`[]any`) since their contents are
+   consumer-specific (e.g. `schemafeed.TableEvent` for CDC).
+   The event stream doesn't interpret them — only passes them
+   to the `OnSchemaChangeFn` callback.
+3. Wiring into the rangefeed setup is consumer-specific:
+   - CDC's rangefeed orchestrator checks `Peek()` on frontier
+     advance and invokes the callback
+   - PCR/LDR don't use schema watching
+
+**Done.** Types defined in `pkg/repstream/schema_watcher.go`.
 
 ### PR 3: Changefeed sink behind feature gate
 
