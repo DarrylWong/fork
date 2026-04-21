@@ -27,13 +27,10 @@ import (
 	"github.com/cockroachdb/errors"
 )
 
-// startUnifiedKVFeed creates a rangefeed using the unified event pipeline
-// (repstream.EventSink) instead of kvfeed.Run. It writes kvevent.Events to
-// the provided kvevent.Writer so that changeAggregator.tick() works unchanged.
-//
-// The returned kvevent.Reader, doneCh, and errCh have the same semantics as
-// startKVFeed.
-func (ca *changeAggregator) startUnifiedKVFeed(
+// startKVFeed creates a rangefeed that streams KV changes for the watched
+// spans. Events are written as kvevent.Events to a kvevent.Writer buffer,
+// which changeAggregator.tick() reads from unchanged.
+func (ca *changeAggregator) startKVFeed(
 	ctx context.Context,
 	spans []roachpb.Span,
 	initialHighWater hlc.Timestamp,
@@ -90,10 +87,10 @@ func (ca *changeAggregator) startUnifiedKVFeed(
 
 	errCh := make(chan error, 1)
 	doneCh := make(chan struct{})
-	if err := ca.FlowCtx.Stopper().RunAsyncTask(ctx, "changefeed-unified-poller", func(ctx context.Context) {
+	if err := ca.FlowCtx.Stopper().RunAsyncTask(ctx, "changefeed-poller", func(ctx context.Context) {
 		defer close(doneCh)
 		defer kvFeedMemMon.Stop(ctx)
-		errCh <- runUnifiedKVFeed(ctx, unifiedKVFeedConfig{
+		errCh <- runKVFeed(ctx, unifiedKVFeedConfig{
 			sink:                 sink,
 			spans:                spans,
 			initialHighWater:     initialHighWater,
@@ -117,7 +114,7 @@ func (ca *changeAggregator) startUnifiedKVFeed(
 	return buf, doneCh, errCh, nil
 }
 
-// unifiedKVFeedConfig holds the configuration for runUnifiedKVFeed.
+// unifiedKVFeedConfig holds the configuration for runKVFeed.
 type unifiedKVFeedConfig struct {
 	sink                 *changefeedSink
 	spans                []roachpb.Span
@@ -137,11 +134,10 @@ type unifiedKVFeedConfig struct {
 
 var errChangefeedCompleted = errors.New("changefeed completed")
 
-// runUnifiedKVFeed is the CDC rangefeed orchestrator. It sets up a rangefeed,
-// wires callbacks to the changefeedSink, and handles the scan/rangefeed/
-// schema-change loop.
-func runUnifiedKVFeed(ctx context.Context, c unifiedKVFeedConfig) error {
-	log.Changefeed.Infof(ctx, "unified kv feed starting")
+// runKVFeed sets up a rangefeed, wires callbacks to the changefeedSink,
+// and handles the scan/rangefeed/schema-change loop.
+func runKVFeed(ctx context.Context, c unifiedKVFeedConfig) error {
+	log.Changefeed.Infof(ctx, "kv feed starting")
 
 	// Build the resume frontier from initial span-time pairs.
 	frontier, err := span.MakeFrontier(c.spans...)
@@ -351,7 +347,7 @@ func runRangefeedUntilBoundary(
 	}
 
 	rf := c.execCfg.RangeFeedFactory.New(
-		fmt.Sprintf("changefeed-unified-jobID=%d", c.jobID),
+		fmt.Sprintf("changefeed-kvfeed-jobID=%d", c.jobID),
 		frontier.Frontier(),
 		func(ctx context.Context, value *kvpb.RangeFeedValue) {
 			if err := c.sink.OnKV(ctx, streampb.StreamEvent_KV{

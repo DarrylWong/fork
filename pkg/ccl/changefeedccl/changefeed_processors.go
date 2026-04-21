@@ -450,20 +450,6 @@ func (ca *changeAggregator) Start(ctx context.Context) {
 	ca.lastSpanFlush = timeutil.Now()
 }
 
-func (ca *changeAggregator) startKVFeed(
-	ctx context.Context,
-	spans []roachpb.Span,
-	initialHighWater hlc.Timestamp,
-	needsInitialScan bool,
-	config ChangefeedConfig,
-	parentMemMon *mon.BytesMonitor,
-	memLimit int64,
-	opts changefeedbase.StatementOptions,
-) (kvevent.Reader, chan struct{}, chan error, error) {
-	return ca.startUnifiedKVFeed(ctx, spans, initialHighWater, needsInitialScan,
-		config, parentMemMon, memLimit, opts)
-}
-
 func (ca *changeAggregator) checkKVFeedErr() error {
 	select {
 	case err := <-ca.errCh:
