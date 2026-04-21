@@ -105,6 +105,7 @@ func (ca *changeAggregator) startKVFeed(
 			execCfg:              execCfg,
 			jobID:                ca.spec.JobID,
 			mon:                  kvFeedMemMon,
+			knobs:                ca.knobs.FeedKnobs,
 		})
 	}); err != nil {
 		kvFeedMemMon.Stop(ctx)
@@ -130,6 +131,7 @@ type kvFeedConfig struct {
 	execCfg              *execinfra.ServerConfig
 	jobID                jobspb.JobID
 	mon                  *mon.BytesMonitor
+	knobs                KVFeedTestingKnobs
 }
 
 var errChangefeedCompleted = errors.New("changefeed completed")
@@ -285,7 +287,11 @@ func runRangefeedUntilBoundary(ctx context.Context, c kvFeedConfig, frontier spa
 				}
 			}
 			// Check for end time.
-			if !c.endTime.IsEmpty() && c.endTime.LessEq(resolvedTS) {
+			endTimeReached := !c.endTime.IsEmpty() && c.endTime.LessEq(resolvedTS)
+			if !endTimeReached && c.knobs.EndTimeReached != nil {
+				endTimeReached = c.knobs.EndTimeReached()
+			}
+			if endTimeReached {
 				select {
 				case errCh <- &errEndTimeReached{ts: resolvedTS}:
 				default:
@@ -293,6 +299,9 @@ func runRangefeedUntilBoundary(ctx context.Context, c kvFeedConfig, frontier spa
 			}
 		}),
 		rangefeed.WithOnCheckpoint(func(ctx context.Context, checkpoint *kvpb.RangeFeedCheckpoint) {
+			if c.knobs.ShouldSkipCheckpoint != nil && c.knobs.ShouldSkipCheckpoint(checkpoint) {
+				return
+			}
 			// Emit resolved span for this checkpoint.
 			if err := c.sink.emitResolvedSpan(ctx, checkpoint.Span, checkpoint.ResolvedTS,
 				jobspb.ResolvedSpan_NONE); err != nil {
@@ -310,6 +319,15 @@ func runRangefeedUntilBoundary(ctx context.Context, c kvFeedConfig, frontier spa
 		}),
 		rangefeed.WithOnValues(func(ctx context.Context, values []kvpb.RangeFeedValue) {
 			for _, v := range values {
+				if c.knobs.OnRangeFeedValue != nil {
+					if err := c.knobs.OnRangeFeedValue(); err != nil {
+						select {
+						case errCh <- err:
+						default:
+						}
+						return
+					}
+				}
 				if err := c.sink.OnKV(ctx, streampb.StreamEvent_KV{
 					KeyValue:  roachpb.KeyValue{Key: v.Key, Value: v.Value},
 					PrevValue: v.PrevValue,
@@ -365,6 +383,10 @@ func runRangefeedUntilBoundary(ctx context.Context, c kvFeedConfig, frontier spa
 		return err
 	}
 	defer rf.Close()
+
+	if c.knobs.OnRangeFeedStart != nil {
+		c.knobs.OnRangeFeedStart(c.initialSpanTimePairs)
+	}
 
 	select {
 	case <-ctx.Done():
