@@ -10,8 +10,10 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/changefeedbase"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/kvevent"
-	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/kvfeed"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/resolvedspan"
+	"github.com/cockroachdb/cockroach/pkg/kv"
+	"github.com/cockroachdb/cockroach/pkg/kv/kvclient/kvcoord"
+	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
 	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
@@ -43,7 +45,7 @@ type TestingKnobs struct {
 	// be skipped. This method takes a pointer in case resolved spans need to be mutated.
 	FilterSpanWithMutation func(resolved *jobspb.ResolvedSpan) (bool, error)
 	// FeedKnobs are kvfeed testing knobs.
-	FeedKnobs kvfeed.TestingKnobs
+	FeedKnobs KVFeedTestingKnobs
 	// NullSinkIsExternalIOAccounted controls whether we record
 	// tenant usage for the null sink. By default the null sink is
 	// not accounted but it is useful to treat it as accounted in
@@ -145,3 +147,21 @@ type TestingKnobs struct {
 
 // ModuleTestingKnobs is part of the base.ModuleTestingKnobs interface.
 func (*TestingKnobs) ModuleTestingKnobs() {}
+
+// KVFeedTestingKnobs are the testing knobs for the kv feed.
+type KVFeedTestingKnobs struct {
+	// BeforeScanRequest is a callback invoked before issuing Scan request.
+	BeforeScanRequest func(b *kv.Batch) error
+	// OnRangeFeedValue invoked when rangefeed receives a value.
+	OnRangeFeedValue func() error
+	// ShouldSkipCheckpoint invoked when rangefeed receives a checkpoint.
+	// Returns true if checkpoint should be skipped.
+	ShouldSkipCheckpoint func(*kvpb.RangeFeedCheckpoint) bool
+	// OnRangeFeedStart invoked when rangefeed starts.
+	OnRangeFeedStart func(spans []kvcoord.SpanTimePair)
+	// EndTimeReached is a callback that may return true to indicate the
+	// feed should exit because its end time has been reached.
+	EndTimeReached func() bool
+	// RangefeedOptions lets the kvfeed override rangefeed settings.
+	RangefeedOptions []kvcoord.RangeFeedOption
+}
