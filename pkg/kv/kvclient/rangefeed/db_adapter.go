@@ -125,7 +125,7 @@ func (dbc *dbAdapter) Scan(
 	// If we don't have parallelism configured, just scan each span in turn.
 	if cfg.scanParallelism == nil {
 		for _, sp := range spans {
-			if err := dbc.scanSpan(ctx, sp, asOf, rowFn, rowsFn, cfg.targetScanBytes, cfg.OnSpanDone, cfg.overSystemTable, acc); err != nil {
+			if err := dbc.scanSpan(ctx, sp, asOf, rowFn, rowsFn, cfg.targetScanBytes, cfg.OnSpanDone, cfg.overSystemTable, cfg.beforeScanRequest, acc); err != nil {
 				return err
 			}
 		}
@@ -161,7 +161,7 @@ func (dbc *dbAdapter) Scan(
 	g := ctxgroup.WithContext(ctx)
 	err := dbc.divideAndSendScanRequests(
 		ctx, &g, spans, asOf, rowFn, rowsFn,
-		parallelismFn, cfg.targetScanBytes, cfg.OnSpanDone, cfg.overSystemTable, acc)
+		parallelismFn, cfg.targetScanBytes, cfg.OnSpanDone, cfg.overSystemTable, acc, cfg.beforeScanRequest)
 	if err != nil {
 		cancel()
 	}
@@ -177,6 +177,7 @@ func (dbc *dbAdapter) scanSpan(
 	targetScanBytes int64,
 	onScanDone OnScanCompleted,
 	overSystemTable bool,
+	beforeScanRequest func(*kv.Batch) error,
 	acc *mon.ConcurrentBoundAccount,
 ) error {
 	if acc != nil {
@@ -203,6 +204,11 @@ func (dbc *dbAdapter) scanSpan(
 			for {
 				b.Header.TargetBytes = targetScanBytes
 				b.Scan(sp.Key, sp.EndKey)
+				if beforeScanRequest != nil {
+					if err := beforeScanRequest(&b); err != nil {
+						return err
+					}
+				}
 				if err := txn.Run(ctx, &b); err != nil {
 					return err
 				}
@@ -257,6 +263,7 @@ func (dbc *dbAdapter) divideAndSendScanRequests(
 	onSpanDone OnScanCompleted,
 	overSystemTable bool,
 	acc *mon.ConcurrentBoundAccount,
+	beforeScanRequest func(*kv.Batch) error,
 ) error {
 	// Build a span group so that we can iterate spans in order.
 	var sg roachpb.SpanGroup
@@ -293,7 +300,7 @@ func (dbc *dbAdapter) divideAndSendScanRequests(
 			sp := partialRS.AsRawSpanWithNoLocals()
 			workGroup.GoCtx(func(ctx context.Context) error {
 				defer limAlloc.Release()
-				return dbc.scanSpan(ctx, sp, asOf, rowFn, rowsFn, targetScanBytes, onSpanDone, overSystemTable, acc)
+				return dbc.scanSpan(ctx, sp, asOf, rowFn, rowsFn, targetScanBytes, onSpanDone, overSystemTable, beforeScanRequest, acc)
 			})
 
 			if !ri.NeedAnother(nextRS) {

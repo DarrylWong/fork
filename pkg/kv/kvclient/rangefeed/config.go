@@ -10,6 +10,8 @@ import (
 	"iter"
 	"time"
 
+	"github.com/cockroachdb/cockroach/pkg/kv"
+	"github.com/cockroachdb/cockroach/pkg/kv/kvclient/kvcoord"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
@@ -50,6 +52,7 @@ type config struct {
 	onDeleteRange         OnDeleteRange
 	onMetadata            OnMetadata
 	extraPProfLabels      []string
+	extraRangeFeedOptions []kvcoord.RangeFeedOption
 }
 
 type scanConfig struct {
@@ -73,6 +76,10 @@ type scanConfig struct {
 	// treated with a more appropriate admission pri (NormalPri instead of
 	// BulkNormalPri).
 	overSystemTable bool
+
+	// beforeScanRequest, if set, is called before each Scan KV request
+	// is issued. Primarily used for testing.
+	beforeScanRequest func(b *kv.Batch) error
 }
 
 type optionFunc func(*config)
@@ -369,5 +376,21 @@ func WithSystemTablePriority() Option {
 func WithFrontierQuantized(d time.Duration) Option {
 	return optionFunc(func(c *config) {
 		c.frontierQuantize = d
+	})
+}
+
+// WithBeforeScanRequest sets a callback invoked before each Scan KV request
+// during the initial scan. Primarily used for testing.
+func WithBeforeScanRequest(fn func(b *kv.Batch) error) Option {
+	return optionFunc(func(c *config) {
+		c.beforeScanRequest = fn
+	})
+}
+
+// WithExtraRangeFeedOptions appends low-level kvcoord.RangeFeedOption values
+// to the rangefeed request. This is primarily used for testing knobs.
+func WithExtraRangeFeedOptions(opts ...kvcoord.RangeFeedOption) Option {
+	return optionFunc(func(c *config) {
+		c.extraRangeFeedOptions = append(c.extraRangeFeedOptions, opts...)
 	})
 }

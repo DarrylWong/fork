@@ -361,6 +361,12 @@ func runRangefeedUntilBoundary(ctx context.Context, c kvFeedConfig, frontier spa
 		rangefeed.WithConsumerID(int64(c.jobID)),
 		rangefeed.WithFiltering(c.withFiltering),
 	}
+	if c.knobs.BeforeScanRequest != nil {
+		opts = append(opts, rangefeed.WithBeforeScanRequest(c.knobs.BeforeScanRequest))
+	}
+	if len(c.knobs.RangefeedOptions) > 0 {
+		opts = append(opts, rangefeed.WithExtraRangeFeedOptions(c.knobs.RangefeedOptions...))
+	}
 
 	rf := c.execCfg.RangeFeedFactory.New(
 		fmt.Sprintf("changefeed-kvfeed-jobID=%d", c.jobID),
