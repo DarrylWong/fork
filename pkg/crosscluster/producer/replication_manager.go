@@ -110,17 +110,7 @@ func (r *replicationStreamManagerImpl) StartReplicationStreamForTables(
 	}
 
 	registry := execConfig.JobRegistry
-
-	// When a revision stream URI is configured, the producer's
-	// rangefeed catch-up reads from the revlog instead of KV's MVCC
-	// history. The revlog job maintains its own PTS, so we skip
-	// creating a redundant one for the LDR producer.
-	skipPTS := revisionStreamURI.Get(&execConfig.Settings.SV) != ""
-
-	var ptsID uuid.UUID
-	if !skipPTS {
-		ptsID = uuid.MakeV4()
-	}
+	ptsID := uuid.MakeV4()
 	jr := makeProducerJobRecordForLogicalReplication(
 		registry,
 		defaultExpirationWindow,
@@ -134,15 +124,13 @@ func (r *replicationStreamManagerImpl) StartReplicationStreamForTables(
 		return streampb.ReplicationProducerSpec{}, err
 	}
 
-	if !skipPTS {
-		targetToProtect := ptpb.MakeClusterTarget()
-		pts := jobsprotectedts.MakeRecord(ptsID, int64(jr.JobID), replicationStartTime,
-			jobsprotectedts.Jobs, targetToProtect)
+	targetToProtect := ptpb.MakeClusterTarget()
+	pts := jobsprotectedts.MakeRecord(ptsID, int64(jr.JobID), replicationStartTime,
+		jobsprotectedts.Jobs, targetToProtect)
 
-		ptp := execConfig.ProtectedTimestampProvider.WithTxn(r.txn)
-		if err := ptp.Protect(ctx, pts); err != nil {
-			return streampb.ReplicationProducerSpec{}, err
-		}
+	ptp := execConfig.ProtectedTimestampProvider.WithTxn(r.txn)
+	if err := ptp.Protect(ctx, pts); err != nil {
+		return streampb.ReplicationProducerSpec{}, err
 	}
 
 	if _, err := registry.CreateAdoptableJobWithTxn(ctx, jr, jr.JobID, r.txn); err != nil {
