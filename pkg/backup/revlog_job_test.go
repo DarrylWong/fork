@@ -47,6 +47,13 @@ func TestRevlogSiblingJobE2E(t *testing.T) {
 	_, sqlDB, dir, cleanup := backupRestoreTestSetup(t, singleNode, numAccounts, InitManualReplication)
 	defer cleanup()
 
+	// The revlog job needs rangefeeds (one over the user keyspace,
+	// one over system.descriptor) to function; the cluster setting
+	// defaults to true on most builds but can be off depending on
+	// test fixtures, so set it explicitly to avoid 30+ seconds of
+	// rangefeed retries before the first checkpoint arrives.
+	sqlDB.Exec(t, `SET CLUSTER SETTING kv.rangefeed.enabled = true`)
+
 	const destSubdir = "revlog-e2e"
 	dest := "nodelocal://1/" + destSubdir
 
