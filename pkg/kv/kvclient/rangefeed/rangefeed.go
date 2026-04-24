@@ -95,6 +95,20 @@ type TestingKnobs struct {
 	// StoreTestingKnobs.GlobalMVCCRangeTombstone, to prevent the global tombstone
 	// causing rangefeed errors for consumers who don't expect it.
 	IgnoreOnDeleteRangeError bool
+
+	// OnRevisionStreamHandoff, if set, is called when the revision
+	// stream catch-up phase completes and hands off to the live KV
+	// rangefeed. The cursor timestamp indicates how far replay
+	// progressed before handing off.
+	OnRevisionStreamHandoff func(cursor hlc.Timestamp)
+
+	// OnRevisionStreamEvent, if set, is called for each event
+	// emitted from the revision stream during catch-up replay.
+	OnRevisionStreamEvent func()
+
+	// RevisionStreamHandoffThreshold, if non-zero, overrides the
+	// default handoff threshold for the revision stream wrapper.
+	RevisionStreamHandoffThreshold time.Duration
 }
 
 // ModuleTestingKnobs is part of the base.ModuleTestingKnobs interface.
@@ -165,7 +179,7 @@ func (f *Factory) New(
 	}
 	initConfig(&r.config, options)
 	if r.config.revisionStream != nil {
-		r.client = newRevisionStreamDB(r.client, r.config.revisionStream)
+		r.client = newRevisionStreamDB(r.client, r.config.revisionStream, r.knobs)
 	}
 	return &r
 }

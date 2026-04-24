@@ -118,6 +118,9 @@ func (p *producerJobResumer) releaseProtectedTimestamp(
 	ctx context.Context, executorConfig *sql.ExecutorConfig,
 ) error {
 	ptr := p.job.Details().(jobspb.StreamReplicationDetails).ProtectedTimestampRecordID
+	if ptr == (uuid.UUID{}) {
+		return nil
+	}
 	return executorConfig.InternalDB.Txn(ctx, func(ctx context.Context, txn isql.Txn) error {
 		err := executorConfig.ProtectedTimestampProvider.WithTxn(txn).Release(ctx, ptr)
 		// In case that a retry happens, the record might have been released.

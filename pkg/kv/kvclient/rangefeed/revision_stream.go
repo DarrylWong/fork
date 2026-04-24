@@ -7,6 +7,7 @@ package rangefeed
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/kv/kvclient/kvcoord"
@@ -14,10 +15,10 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/revlog"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
+	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/span"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
-	"slices"
 )
 
 // revisionStreamHandoffThreshold controls how close the frontier must
@@ -31,10 +32,11 @@ var revisionStreamHandoffThreshold = 30 * time.Second
 type revisionStreamDB struct {
 	inner  DB
 	reader revlog.LogReader
+	knobs  *TestingKnobs
 }
 
-func newRevisionStreamDB(inner DB, reader revlog.LogReader) *revisionStreamDB {
-	return &revisionStreamDB{inner: inner, reader: reader}
+func newRevisionStreamDB(inner DB, reader revlog.LogReader, knobs *TestingKnobs) *revisionStreamDB {
+	return &revisionStreamDB{inner: inner, reader: reader, knobs: knobs}
 }
 
 // RangeFeed implements DB.
@@ -65,8 +67,12 @@ func (rs *revisionStreamDB) RangeFeed(
 	onCheckpoint := func(sp roachpb.Span, ts hlc.Timestamp) {
 		_, _ = frontier.Forward(sp, ts)
 	}
-	if err := rs.replayLog(ctx, spans, startFrom, eventC, onCheckpoint); err != nil {
+	cursor, err := rs.replayLog(ctx, spans, startFrom, eventC, onCheckpoint)
+	if err != nil {
 		return err
+	}
+	if rs.knobs != nil && rs.knobs.OnRevisionStreamHandoff != nil {
+		rs.knobs.OnRevisionStreamHandoff(cursor)
 	}
 	return rs.inner.RangeFeedFromFrontier(ctx, frontier, eventC, opts...)
 }
@@ -82,8 +88,12 @@ func (rs *revisionStreamDB) RangeFeedFromFrontier(
 	for sp := range frontier.Entries() {
 		spans = append(spans, sp)
 	}
-	if err := rs.replayLog(ctx, spans, frontier.Frontier(), eventC, nil); err != nil {
+	replayCursor, err := rs.replayLog(ctx, spans, frontier.Frontier(), eventC, nil)
+	if err != nil {
 		return err
+	}
+	if rs.knobs != nil && rs.knobs.OnRevisionStreamHandoff != nil {
+		rs.knobs.OnRevisionStreamHandoff(replayCursor)
 	}
 
 	// TODO(darryl): think about if it's possible processEvent races with
@@ -113,9 +123,16 @@ func (rs *revisionStreamDB) replayLog(
 	startFrom hlc.Timestamp,
 	eventC chan<- kvcoord.RangeFeedMessage,
 	onCheckpoint func(roachpb.Span, hlc.Timestamp),
-) error {
+) (hlc.Timestamp, error) {
+	log.Dev.Infof(ctx, "revision stream: starting replay from %s (%d spans)", startFrom, len(spans))
 	watchedSpans := slices.Clone(spans)
 	cursor := startFrom
+
+	threshold := revisionStreamHandoffThreshold
+	if rs.knobs != nil && rs.knobs.RevisionStreamHandoffThreshold > 0 {
+		threshold = rs.knobs.RevisionStreamHandoffThreshold
+	}
+
 	for {
 		// If the cursor is within the handoff threshold of the
 		// current wall clock, hand off to KV. Note we attempt to
@@ -126,13 +143,15 @@ func (rs *revisionStreamDB) replayLog(
 		//
 		// TODO(darryl) If revisionStreamHandoffThreshold ends up being on the order of
 		// magnitude of minutes, maybe we consider doing (now - delta)
-		if timeutil.Since(cursor.GoTime()) <= revisionStreamHandoffThreshold {
-			return nil
+		if timeutil.Since(cursor.GoTime()) <= threshold {
+			log.Dev.Infof(ctx, "revision stream: handing off to KV rangefeed at cursor %s (within %s of now)",
+				cursor, threshold)
+			return cursor, nil
 		}
 		now := hlc.Timestamp{WallTime: timeutil.Now().UnixNano()}
 		for tick, err := range rs.reader.Ticks(ctx, cursor, now) {
 			if err != nil {
-				return err
+				return hlc.Timestamp{}, err
 			}
 
 			// Filter out spans that are not covered by the revlog. Note that
@@ -142,18 +161,18 @@ func (rs *revisionStreamDB) replayLog(
 			// covers all spans with no gaps, so this behavior should be fine.
 			watchedSpans = rs.reader.CoveredSpans(ctx, tick, watchedSpans)
 			if len(watchedSpans) == 0 {
-				return nil
+				return cursor, nil
 			}
 
 			tr := rs.reader.GetTickReader(ctx, tick, watchedSpans)
 			if err := rs.emitEvents(ctx, tr, eventC); err != nil {
-				return err
+				return hlc.Timestamp{}, err
 			}
 
 			// Note that because the Ticks iterator only returns closed Ticks,
 			// we will never have to re-emit older events.
 			if err := rs.emitCheckpoints(ctx, watchedSpans, tick.EndTime, eventC, onCheckpoint); err != nil {
-				return err
+				return hlc.Timestamp{}, err
 			}
 			cursor = tick.EndTime
 		}
@@ -162,7 +181,8 @@ func (rs *revisionStreamDB) replayLog(
 		//  2. The revlog is lagging behind.
 		// In either case we want to hand off to the inner rangefeed.
 		if cursor.Less(now) {
-			return nil
+			log.Dev.Infof(ctx, "revision stream: hit unclosed tick, handing off to KV rangefeed at cursor %s", cursor)
+			return cursor, nil
 		}
 	}
 }
@@ -202,6 +222,9 @@ func (rs *revisionStreamDB) emitEvents(
 		case eventC <- msg:
 		case <-ctx.Done():
 			return ctx.Err()
+		}
+		if rs.knobs != nil && rs.knobs.OnRevisionStreamEvent != nil {
+			rs.knobs.OnRevisionStreamEvent()
 		}
 	}
 	return nil

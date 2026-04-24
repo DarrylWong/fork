@@ -51,7 +51,7 @@ type config struct {
 	onDeleteRange         OnDeleteRange
 	onMetadata            OnMetadata
 	extraPProfLabels      []string
-	revisionStream        revlog.LogReader
+	revisionStream revlog.LogReader
 }
 
 type scanConfig struct {

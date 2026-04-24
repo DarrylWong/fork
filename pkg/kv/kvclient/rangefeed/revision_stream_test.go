@@ -660,3 +660,167 @@ func TestRevisionStreamPrevValue(t *testing.T) {
 		t.Fatal("timed out waiting for event")
 	}
 }
+
+// TestRevisionStreamPartialCoverage verifies that when the revision
+// stream only covers a subset of spans, the covered spans have their
+// frontier advanced while the uncovered spans remain at startFrom.
+// The inner rangefeed receives a frontier reflecting this split, so
+// it performs a KV catch-up scan only for the uncovered spans.
+func TestRevisionStreamPartialCoverage(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx := context.Background()
+	stopper := stop.NewStopper()
+	defer stopper.Stop(ctx)
+
+	coveredSpan := roachpb.Span{Key: key("a"), EndKey: key("m")}
+	uncoveredSpan := roachpb.Span{Key: key("n"), EndKey: key("z")}
+	bothSpans := []roachpb.Span{coveredSpan, uncoveredSpan}
+
+	reader := revlog.NewTestLogReader(nil)
+	rng := rand.New(rand.NewSource(123))
+
+	// Only coveredSpan is in the coverage epoch.
+	reader.AddCoverageEpoch(revlog.CoverageEpoch{
+		EffectiveFrom: ts(0),
+		Spans:         []roachpb.Span{coveredSpan},
+	})
+
+	// Generate ticks with events in both spans, but only
+	// coveredSpan's events will be replayed.
+	endTS := reader.Generate(rng, ts(0), 5, bothSpans)
+
+	var coveredEventCount atomic.Int64
+
+	ready := make(chan struct{}, 1)
+	mc := &mockClient{
+		rangeFeedFromFrontier: func(
+			ctx context.Context,
+			frontier span.Frontier,
+			eventC chan<- kvcoord.RangeFeedMessage,
+		) error {
+			// coveredSpan should be advanced to endTS.
+			// uncoveredSpan should remain at ts(0) (startFrom).
+			for sp, fts := range frontier.Entries() {
+				if sp.Equal(coveredSpan) {
+					require.Equal(t, endTS, fts,
+						"covered span should be advanced to end of last tick")
+				} else if sp.Equal(uncoveredSpan) {
+					require.Equal(t, ts(0), fts,
+						"uncovered span should remain at startFrom")
+				}
+			}
+
+			// The overall frontier is the min, which should be ts(0).
+			require.Equal(t, ts(0), frontier.Frontier())
+
+			select {
+			case ready <- struct{}{}:
+			default:
+			}
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}
+
+	f := rangefeed.NewFactoryWithDB(stopper, mc, &rangefeed.TestingKnobs{
+		OnRevisionStreamEvent: func() {
+			coveredEventCount.Add(1)
+		},
+	})
+	rf, err := f.RangeFeed(ctx, "partial-coverage", bothSpans, ts(0),
+		func(ctx context.Context, v *kvpb.RangeFeedValue) {},
+		rangefeed.WithRevisionStream(reader),
+	)
+	require.NoError(t, err)
+	defer rf.Close()
+
+	select {
+	case <-ready:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for inner DB call")
+	}
+
+	// Events were replayed only for the covered span.
+	require.Greater(t, coveredEventCount.Load(), int64(0),
+		"expected events from covered span")
+}
+
+// TestRevisionStreamPartialCoverageFromFrontier is the
+// StartFromFrontier variant of PartialCoverage.
+func TestRevisionStreamPartialCoverageFromFrontier(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx := context.Background()
+	stopper := stop.NewStopper()
+	defer stopper.Stop(ctx)
+
+	coveredSpan := roachpb.Span{Key: key("a"), EndKey: key("m")}
+	uncoveredSpan := roachpb.Span{Key: key("n"), EndKey: key("z")}
+	bothSpans := []roachpb.Span{coveredSpan, uncoveredSpan}
+
+	reader := revlog.NewTestLogReader(nil)
+	rng := rand.New(rand.NewSource(123))
+
+	reader.AddCoverageEpoch(revlog.CoverageEpoch{
+		EffectiveFrom: ts(0),
+		Spans:         []roachpb.Span{coveredSpan},
+	})
+
+	endTS := reader.Generate(rng, ts(0), 5, bothSpans)
+
+	ready := make(chan struct{}, 1)
+	mc := &mockClient{
+		rangeFeedFromFrontier: func(
+			ctx context.Context,
+			frontier span.Frontier,
+			eventC chan<- kvcoord.RangeFeedMessage,
+		) error {
+			// Poll until the covered span reaches endTS. The
+			// uncovered span should still be at ts(0).
+			require.NoError(t, waitForFrontier(frontier, ts(0)))
+
+			for sp, fts := range frontier.Entries() {
+				if sp.Equal(uncoveredSpan) {
+					require.Equal(t, ts(0), fts,
+						"uncovered span should remain at startFrom")
+				}
+			}
+
+			select {
+			case ready <- struct{}{}:
+			default:
+			}
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}
+
+	f := rangefeed.NewFactoryWithDB(stopper, mc, nil)
+	frontier := makeConcurrentFrontier(t,
+		frontierEntry(coveredSpan, ts(0)),
+		frontierEntry(uncoveredSpan, ts(0)),
+	)
+
+	rf := f.New("partial-coverage-frontier", ts(0),
+		func(ctx context.Context, v *kvpb.RangeFeedValue) {},
+		rangefeed.WithRevisionStream(reader),
+	)
+	require.NoError(t, rf.StartFromFrontier(ctx, frontier))
+	defer rf.Close()
+
+	select {
+	case <-ready:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for inner DB call")
+	}
+
+	// After handoff, verify the frontier split.
+	for sp, fts := range frontier.Entries() {
+		if sp.Equal(coveredSpan) {
+			require.Equal(t, endTS, fts,
+				"covered span should be advanced to end of last tick")
+		} else if sp.Equal(uncoveredSpan) {
+			require.Equal(t, ts(0), fts,
+				"uncovered span should remain at startFrom")
+		}
+	}
+}
