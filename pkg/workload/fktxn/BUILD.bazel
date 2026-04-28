@@ -14,6 +14,7 @@ go_library(
 go_test(
     name = "fktxn_test",
     srcs = [
+        "graph_test.go",
         "main_test.go",
         "schema_discover_test.go",
     ],

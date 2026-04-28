@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/cockroachdb/errors"
 )
 
 // Column represents a column in a table.
@@ -133,6 +135,15 @@ func (s *Schema) String() string {
 	return b.String()
 }
 
+// FKGraph is a connected component of tables and FK edges determined by
+// column-overlap transitivity. Nodes are tables, edges are FK constraints.
+// A table can appear in multiple FKGraphs if it has UCs connecting to
+// non-overlapping FK edge sets.
+type FKGraph struct {
+	Tables map[string]*Table
+	Edges  []FKEdge
+}
+
 // Finalize cross-links InboundFKs on each parent table from the OutboundFKs
 // on child tables. Call after all tables and FKs have been added.
 func (s *Schema) Finalize() {
@@ -147,5 +158,350 @@ func (s *Schema) Finalize() {
 			}
 			parent.InboundFKs = append(parent.InboundFKs, fk)
 		}
+	}
+}
+
+// BuildFKGraphs computes connected components of tables and FK edges using
+// column-overlap transitivity. Two FK edges are in the same component if they
+// are connected through a UC on a shared table where one FK's referencing
+// columns overlap with the UC's columns.
+func BuildFKGraphs(s *Schema) []*FKGraph {
+	// Collect all FK edges with integer IDs.
+	var allEdges []FKEdge
+	for _, t := range s.Tables {
+		allEdges = append(allEdges, t.OutboundFKs...)
+	}
+	if len(allEdges) == 0 {
+		return nil
+	}
+
+	// Build index: constraint name → edge index.
+	edgeIdx := make(map[string]int, len(allEdges))
+	for i, e := range allEdges {
+		edgeIdx[e.Name] = i
+	}
+
+	uf := newUnionFind(len(allEdges))
+
+	// For each (table, UC), union inbound FKs targeting this UC with outbound
+	// FKs whose referencing columns overlap the UC's columns.
+	for _, t := range s.Tables {
+		for _, uc := range t.UniqueConstraints {
+			var inboundToUC []int
+			for _, fk := range t.InboundFKs {
+				if fk.ReferencedConstraint == uc.Name {
+					if idx, ok := edgeIdx[fk.Name]; ok {
+						inboundToUC = append(inboundToUC, idx)
+					}
+				}
+			}
+
+			var outboundOverlapping []int
+			for _, fk := range t.OutboundFKs {
+				if columnsOverlap(fk.ReferencingColumns, uc.Columns) {
+					if idx, ok := edgeIdx[fk.Name]; ok {
+						outboundOverlapping = append(outboundOverlapping, idx)
+					}
+				}
+			}
+
+			// Union all edges in both sets.
+			all := append(inboundToUC, outboundOverlapping...)
+			for i := 1; i < len(all); i++ {
+				uf.union(all[0], all[i])
+			}
+		}
+	}
+
+	// Group edges by union-find root.
+	groups := make(map[int][]int)
+	for i := range allEdges {
+		root := uf.find(i)
+		groups[root] = append(groups[root], i)
+	}
+
+	// Build FKGraphs from groups.
+	var graphs []*FKGraph
+	for _, indices := range groups {
+		g := &FKGraph{Tables: make(map[string]*Table)}
+		for _, i := range indices {
+			e := allEdges[i]
+			g.Edges = append(g.Edges, e)
+			if t, ok := s.Tables[e.ReferencingTable]; ok {
+				g.Tables[e.ReferencingTable] = t
+			}
+			if t, ok := s.Tables[e.ReferencedTable]; ok {
+				g.Tables[e.ReferencedTable] = t
+			}
+		}
+		graphs = append(graphs, g)
+	}
+
+	// Sort graphs deterministically by smallest table name.
+	sort.Slice(graphs, func(i, j int) bool {
+		return smallestTableName(graphs[i]) < smallestTableName(graphs[j])
+	})
+
+	return graphs
+}
+
+func smallestTableName(g *FKGraph) string {
+	var smallest string
+	for name := range g.Tables {
+		if smallest == "" || name < smallest {
+			smallest = name
+		}
+	}
+	return smallest
+}
+
+func columnsOverlap(a, b []string) bool {
+	for _, ca := range a {
+		for _, cb := range b {
+			if ca == cb {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// HasCycle reports whether the FKGraph contains a directed cycle.
+func (g *FKGraph) HasCycle() bool {
+	adj := g.adjacency()
+
+	type color int
+	const (
+		white color = iota
+		gray
+		black
+	)
+	colors := make(map[string]color)
+
+	var visit func(name string) bool
+	visit = func(name string) bool {
+		colors[name] = gray
+		for _, next := range adj[name] {
+			switch colors[next] {
+			case gray:
+				return true
+			case white:
+				if visit(next) {
+					return true
+				}
+			}
+		}
+		colors[name] = black
+		return false
+	}
+
+	for name := range g.Tables {
+		if colors[name] == white {
+			if visit(name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// adjacency builds a directed adjacency list from this graph's edges
+// (child → parent).
+func (g *FKGraph) adjacency() map[string][]string {
+	adj := make(map[string][]string)
+	for _, e := range g.Edges {
+		if _, ok := g.Tables[e.ReferencingTable]; !ok {
+			continue
+		}
+		if _, ok := g.Tables[e.ReferencedTable]; !ok {
+			continue
+		}
+		adj[e.ReferencingTable] = append(adj[e.ReferencingTable], e.ReferencedTable)
+	}
+	for k := range adj {
+		sort.Strings(adj[k])
+	}
+	return adj
+}
+
+// TopologicalSort returns tables in insertion order: parents before children.
+// Returns an error if the graph contains a cycle.
+func (g *FKGraph) TopologicalSort() ([]*Table, error) {
+	// Compute in-degree for each table within this graph.
+	// An outbound FK edge child→parent means child depends on parent,
+	// so parent must come first. In-degree counts how many parents a table has.
+	inDegree := make(map[string]int, len(g.Tables))
+	for name := range g.Tables {
+		inDegree[name] = 0
+	}
+	for _, e := range g.Edges {
+		if _, ok := g.Tables[e.ReferencingTable]; !ok {
+			continue
+		}
+		if _, ok := g.Tables[e.ReferencedTable]; !ok {
+			continue
+		}
+		// Skip self-referencing edges — they don't affect topological ordering.
+		if e.ReferencingTable == e.ReferencedTable {
+			continue
+		}
+		inDegree[e.ReferencingTable]++
+	}
+
+	// Seed queue with tables that have no dependencies (in-degree 0).
+	var queue []string
+	for name, deg := range inDegree {
+		if deg == 0 {
+			queue = append(queue, name)
+		}
+	}
+	sort.Strings(queue)
+
+	var result []*Table
+	for len(queue) > 0 {
+		name := queue[0]
+		queue = queue[1:]
+		result = append(result, g.Tables[name])
+
+		// For each table that depends on this one, decrement in-degree.
+		for _, e := range g.Edges {
+			if e.ReferencedTable != name {
+				continue
+			}
+			if e.ReferencingTable == e.ReferencedTable {
+				continue
+			}
+			if _, ok := g.Tables[e.ReferencingTable]; !ok {
+				continue
+			}
+			inDegree[e.ReferencingTable]--
+			if inDegree[e.ReferencingTable] == 0 {
+				queue = append(queue, e.ReferencingTable)
+				sort.Strings(queue)
+			}
+		}
+	}
+
+	if len(result) != len(g.Tables) {
+		return nil, errors.New("cycle detected: topological sort incomplete")
+	}
+	return result, nil
+}
+
+// FindCycles returns all simple cycles in the graph as lists of table names.
+// Each cycle is represented as a path from a table back to itself.
+func (g *FKGraph) FindCycles() [][]string {
+	adj := g.adjacency()
+
+	var cycles [][]string
+	blocked := make(map[string]bool)
+	var stack []string
+	inStack := make(map[string]bool)
+
+	// Johnson's algorithm simplified: find all elementary circuits.
+	// For each start node, DFS and record cycles back to start.
+	sortedNames := make([]string, 0, len(g.Tables))
+	for name := range g.Tables {
+		sortedNames = append(sortedNames, name)
+	}
+	sort.Strings(sortedNames)
+
+	var circuit func(v, start string) bool
+	circuit = func(v, start string) bool {
+		found := false
+		stack = append(stack, v)
+		inStack[v] = true
+		blocked[v] = true
+
+		for _, w := range adj[v] {
+			if w == start {
+				cycle := make([]string, len(stack))
+				copy(cycle, stack)
+				cycles = append(cycles, cycle)
+				found = true
+			} else if !blocked[w] && w >= start {
+				if circuit(w, start) {
+					found = true
+				}
+			}
+		}
+
+		if found {
+			blocked[v] = false
+		}
+		stack = stack[:len(stack)-1]
+		inStack[v] = false
+		return found
+	}
+
+	for _, start := range sortedNames {
+		for k := range blocked {
+			delete(blocked, k)
+		}
+		circuit(start, start)
+	}
+
+	return cycles
+}
+
+// String returns a deterministic text representation of the FKGraph.
+func (g *FKGraph) String() string {
+	names := make([]string, 0, len(g.Tables))
+	for name := range g.Tables {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	edges := make([]FKEdge, len(g.Edges))
+	copy(edges, g.Edges)
+	sort.Slice(edges, func(i, j int) bool { return edges[i].Name < edges[j].Name })
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "tables: [%s]\n", strings.Join(names, ", "))
+	for _, e := range edges {
+		fmt.Fprintf(&b, "  %s: %s(%s) -> %s(%s)\n",
+			e.Name,
+			e.ReferencingTable, strings.Join(e.ReferencingColumns, ", "),
+			e.ReferencedTable, strings.Join(e.ReferencedColumns, ", "),
+		)
+	}
+	return b.String()
+}
+
+type unionFind struct {
+	parent []int
+	rank   []int
+}
+
+func newUnionFind(n int) *unionFind {
+	uf := &unionFind{
+		parent: make([]int, n),
+		rank:   make([]int, n),
+	}
+	for i := range uf.parent {
+		uf.parent[i] = i
+	}
+	return uf
+}
+
+func (uf *unionFind) find(x int) int {
+	for uf.parent[x] != x {
+		uf.parent[x] = uf.parent[uf.parent[x]]
+		x = uf.parent[x]
+	}
+	return x
+}
+
+func (uf *unionFind) union(x, y int) {
+	rx, ry := uf.find(x), uf.find(y)
+	if rx == ry {
+		return
+	}
+	if uf.rank[rx] < uf.rank[ry] {
+		rx, ry = ry, rx
+	}
+	uf.parent[ry] = rx
+	if uf.rank[rx] == uf.rank[ry] {
+		uf.rank[rx]++
 	}
 }
