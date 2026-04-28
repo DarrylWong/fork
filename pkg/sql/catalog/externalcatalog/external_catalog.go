@@ -24,8 +24,11 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/tabledesc"
 	"github.com/cockroachdb/cockroach/pkg/sql/isql"
 	"github.com/cockroachdb/cockroach/pkg/sql/parser"
+	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
+	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlclustersettings"
+	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/errors"
 )
@@ -122,6 +125,7 @@ func IngestExternalCatalog(
 	setOffline bool,
 	ingestingUnqualifiedTableNames []string,
 	skipForeignKeys bool,
+	requireKvWriterCompatible bool,
 ) (externalpb.ExternalCatalog, error) {
 
 	ingestedCatalog := externalpb.ExternalCatalog{}
@@ -135,6 +139,7 @@ func IngestExternalCatalog(
 	// Perform validation that our replicated set is valid and prune descriptor fields.
 	mutTables, err := prepareTablesForIngest(
 		externalCatalog.Tables, ingestingUnqualifiedTableNames, setOffline, skipForeignKeys,
+		requireKvWriterCompatible,
 	)
 	if err != nil {
 		return ingestedCatalog, err
@@ -173,6 +178,7 @@ func prepareTablesForIngest(
 	ingestingUnqualifiedTableNames []string,
 	setOffline bool,
 	skipForeignKeys bool,
+	requireKvWriterCompatible bool,
 ) ([]*tabledesc.Mutable, error) {
 	if len(sourceTables) == 0 {
 		return nil, errors.AssertionFailedf("no tables to ingest")
@@ -207,6 +213,21 @@ func prepareTablesForIngest(
 
 		if t.ParentID != parentID {
 			return nil, errors.New("all tables must belong to the same parent")
+		}
+
+		// Validate that we aren't attempting to replicate any unsupported table features.
+		// Note that we will run this validation again after ingesting as part of the regular LDR
+		// CheckLogicalReplicationCompatibility check. However, we check up front for the CREATE
+		// TABLE flow as we want to throw a targeted error instead of the generic "unmapped
+		// descriptor ID" error we will hit when remapping.
+		if err := tabledesc.CheckLogicalReplicationUnsupportedFeatures(t.TableDesc(), requireKvWriterCompatible); err != nil {
+			return nil, err
+		}
+
+		// UDTs are a separate check since they are supported in the non
+		// CREATE TABLE flow.
+		if err := checkNoUserDefinedTypes(t.TableDesc()); err != nil {
+			return nil, err
 		}
 
 		if skipForeignKeys {
@@ -261,17 +282,47 @@ func remapDescIDs(
 	return idRewrites, nil
 }
 
+// checkNoUserDefinedTypes rejects tables with user-defined types, as they
+// are not currently supported in CREATE TABLE mode.
+func checkNoUserDefinedTypes(desc *descpb.TableDescriptor) error {
+	var check func(typ *types.T) error
+	check = func(typ *types.T) error {
+		if typ.UserDefined() {
+			return pgerror.Newf(pgcode.InvalidTableDefinition,
+				"user-defined types are not supported in CREATE TABLE mode")
+		}
+		switch typ.Family() {
+		case types.ArrayFamily:
+			return check(typ.ArrayContents())
+		case types.TupleFamily:
+			for _, t := range typ.TupleContents() {
+				if err := check(t); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	for _, col := range desc.Columns {
+		if err := check(col.Type); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ldrDescriptorRewriter builds a DescriptorRewriteFn for LDR ingestion.
-// IDs in the rewrite map are remapped; everything else is kept as-is.
+// Every non-zero ID must be present in the rewrite map. Zero IDs are
+// represent unset optional fields and are skipped.
 func ldrDescriptorRewriter(idRewrites map[descpb.ID]descpb.ID) catalog.DescriptorRewriteFn {
 	return func(id descpb.ID) (descpb.ID, error) {
+		if id == 0 {
+			return 0, nil
+		}
 		if newID, ok := idRewrites[id]; ok {
 			return newID, nil
 		}
-		// TODO(#169243): For now, we skip rewriting unknown IDs, i.e. keep them as is.
-		// We run validation that the source tables are valid replication targets after
-		// ingestion, so if we throw an error here we will obscure the more targeted error.
-		return id, nil
+		return 0, errors.AssertionFailedf("unmapped descriptor ID %d during LDR rewrite", id)
 	}
 }
 

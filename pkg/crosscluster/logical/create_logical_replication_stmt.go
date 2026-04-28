@@ -438,12 +438,21 @@ func doLDRPlan(
 			err             error
 			ingestedCatalog externalpb.ExternalCatalog
 		)
+
+		var writer sqlclustersettings.LDRWriterType
+		if details.Mode != jobspb.LogicalReplicationDetails_Transactional {
+			writer, err = getWriterType(ctx, details.Mode, execCfg.Settings)
+			if err != nil {
+				return err
+			}
+		}
+
 		if details.CreateTable {
 			ingestingTableNames := make([]string, len(resolvedDestObjects.TableNames))
 			for i := range resolvedDestObjects.TableNames {
 				ingestingTableNames[i] = resolvedDestObjects.TableNames[i].Table()
 			}
-			ingestedCatalog, err = externalcatalog.IngestExternalCatalog(ctx, execCfg, user, srcExternalCatalog, txn, txn.Descriptors(), resolvedDestObjects.ParentDatabaseID, resolvedDestObjects.ParentSchemaID, true /* setOffline */, ingestingTableNames, details.SkipForeignKeys)
+			ingestedCatalog, err = externalcatalog.IngestExternalCatalog(ctx, execCfg, user, srcExternalCatalog, txn, txn.Descriptors(), resolvedDestObjects.ParentDatabaseID, resolvedDestObjects.ParentSchemaID, true /* setOffline */, ingestingTableNames, details.SkipForeignKeys, writer == sqlclustersettings.LDRWriterTypeLegacyKV)
 			if err != nil {
 				return err
 			}
@@ -473,14 +482,6 @@ func doLDRPlan(
 		if buildutil.CrdbTestBuild {
 			if len(srcExternalCatalog.Tables) != len(dstTableDescs) {
 				return errors.AssertionFailedf("srcTableDescs and dstTableDescs should have the same length")
-			}
-		}
-
-		var writer sqlclustersettings.LDRWriterType
-		if details.Mode != jobspb.LogicalReplicationDetails_Transactional {
-			writer, err = getWriterType(ctx, details.Mode, execCfg.Settings)
-			if err != nil {
-				return err
 			}
 		}
 

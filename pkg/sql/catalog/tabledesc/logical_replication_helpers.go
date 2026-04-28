@@ -48,6 +48,10 @@ func CheckLogicalReplicationCompatibility(
 	if err := checkUniqueWithoutIndex(dst); err != nil {
 		return pgerror.Wrapf(err, pgcode.InvalidTableDefinition, cannotLDRMsg)
 	}
+
+	if err := CheckLogicalReplicationUnsupportedFeatures(dst, requireKvWriterCompatible); err != nil {
+		return err
+	}
 	if !skipTableEquivalenceCheck {
 		if err := checkUniqueIndexesMatch(src, dst); err != nil {
 			return pgerror.Wrapf(err, pgcode.InvalidTableDefinition, cannotLDRMsg)
@@ -57,14 +61,34 @@ func CheckLogicalReplicationCompatibility(
 			return pgerror.Wrapf(err, pgcode.InvalidTableDefinition, cannotLDRMsg)
 		}
 	}
-	if err := checkOutboundReferences(dst); err != nil {
+	return nil
+}
+
+// CheckLogicalReplicationUnsupportedFeatures verifies that a table
+// descriptor does not include any unsupported features that would
+// prevent logical replication.
+func CheckLogicalReplicationUnsupportedFeatures(
+	desc *descpb.TableDescriptor, requireKvWriterCompatible bool,
+) error {
+	const cannotLDRMsg = "cannot create logical replication stream"
+	if err := checkColumnFamilies(desc); err != nil {
 		return pgerror.Wrapf(err, pgcode.InvalidTableDefinition, cannotLDRMsg)
 	}
-
-	if err := checkForbiddenTypes(dst); err != nil {
+	if err := checkCompositeTypesInPrimaryKey(desc); err != nil {
 		return pgerror.Wrapf(err, pgcode.InvalidTableDefinition, cannotLDRMsg)
 	}
-
+	if err := checkExpressionEvaluation(desc, requireKvWriterCompatible); err != nil {
+		return pgerror.Wrapf(err, pgcode.InvalidTableDefinition, cannotLDRMsg)
+	}
+	if err := checkUniqueWithoutIndex(desc); err != nil {
+		return pgerror.Wrapf(err, pgcode.InvalidTableDefinition, cannotLDRMsg)
+	}
+	if err := checkOutboundReferences(desc); err != nil {
+		return pgerror.Wrapf(err, pgcode.InvalidTableDefinition, cannotLDRMsg)
+	}
+	if err := checkForbiddenTypes(desc); err != nil {
+		return pgerror.Wrapf(err, pgcode.InvalidTableDefinition, cannotLDRMsg)
+	}
 	return nil
 }
 
