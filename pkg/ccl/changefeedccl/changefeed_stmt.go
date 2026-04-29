@@ -73,6 +73,19 @@ import (
 	pbtypes "github.com/gogo/protobuf/types"
 )
 
+// useRevisionStreamRangefeed gates whether changefeeds skip creating
+// their own PTS records, relying on the revlog job's PTS instead.
+var useRevisionStreamRangefeed = true
+
+var changefeedRevisionStreamURI = settings.RegisterStringSetting(
+	settings.ApplicationLevel,
+	"changefeed.revision_stream.uri",
+	"if non-empty, the external storage URI of the revision stream "+
+		"used to serve the rangefeed catch-up phase instead of scanning "+
+		"KV's MVCC history",
+	"",
+)
+
 // featureChangefeedEnabled is used to enable and disable the CHANGEFEED feature.
 var featureChangefeedEnabled = settings.RegisterBoolSetting(
 	settings.ApplicationLevel,
@@ -347,49 +360,51 @@ func changefeedPlanHook(
 			// timestamp records. Its format matches what will be persisted to the job info table.
 			var ptsRecords *cdcprogresspb.ProtectedTimestampRecords
 
-			// We do not yet have the progress config here, so we need to check the settings directly.
-			perTableTrackingEnabled := changefeedbase.TrackPerTableProgress.Get(&p.ExecCfg().Settings.SV)
-			// TODO(#158779): Re-add per table protected timestamps setting and
-			// fetch this value from that cluster setting.
-			perTableProtectedTimestampsEnabled := false
-			usingPerTablePTS := perTableTrackingEnabled && perTableProtectedTimestampsEnabled
-			if usingPerTablePTS {
-				protectedTimestampRecords := make(map[descpb.ID]uuid.UUID)
-				if err := targets.EachTarget(func(target changefeedbase.Target) error {
-					// TODO(#155957): We are likely leaking PTS records here in
-					// the column families case.
-					ptsTargets := changefeedbase.Targets{}
-					ptsTargets.Add(target)
-					ptsRecord := createUserTablesProtectedTimestampRecord(
+			if !useRevisionStreamRangefeed {
+				// We do not yet have the progress config here, so we need to check the settings directly.
+				perTableTrackingEnabled := changefeedbase.TrackPerTableProgress.Get(&p.ExecCfg().Settings.SV)
+				// TODO(#158779): Re-add per table protected timestamps setting and
+				// fetch this value from that cluster setting.
+				perTableProtectedTimestampsEnabled := false
+				usingPerTablePTS := perTableTrackingEnabled && perTableProtectedTimestampsEnabled
+				if usingPerTablePTS {
+					protectedTimestampRecords := make(map[descpb.ID]uuid.UUID)
+					if err := targets.EachTarget(func(target changefeedbase.Target) error {
+						// TODO(#155957): We are likely leaking PTS records here in
+						// the column families case.
+						ptsTargets := changefeedbase.Targets{}
+						ptsTargets.Add(target)
+						ptsRecord := createUserTablesProtectedTimestampRecord(
+							ctx,
+							jobID,
+							ptsTargets,
+							details.StatementTime,
+						)
+						perTablePTSRecords = append(perTablePTSRecords, ptsRecord)
+						uuid := ptsRecord.ID.GetUUID()
+						protectedTimestampRecords[target.DescID] = uuid
+						return nil
+					}); err != nil {
+						return err
+					}
+					systemTablesPTSRecord = createSystemTablesProtectedTimestampRecord(
 						ctx,
 						jobID,
-						ptsTargets,
 						details.StatementTime,
 					)
-					perTablePTSRecords = append(perTablePTSRecords, ptsRecord)
-					uuid := ptsRecord.ID.GetUUID()
-					protectedTimestampRecords[target.DescID] = uuid
-					return nil
-				}); err != nil {
-					return err
+					ptsRecords = &cdcprogresspb.ProtectedTimestampRecords{
+						UserTables:   protectedTimestampRecords,
+						SystemTables: systemTablesPTSRecord.ID.GetUUID(),
+					}
+				} else {
+					ptr = createCombinedProtectedTimestampRecord(
+						ctx,
+						jobID,
+						targets,
+						details.StatementTime,
+					)
+					progress.GetChangefeed().ProtectedTimestampRecord = ptr.ID.GetUUID()
 				}
-				systemTablesPTSRecord = createSystemTablesProtectedTimestampRecord(
-					ctx,
-					jobID,
-					details.StatementTime,
-				)
-				ptsRecords = &cdcprogresspb.ProtectedTimestampRecords{
-					UserTables:   protectedTimestampRecords,
-					SystemTables: systemTablesPTSRecord.ID.GetUUID(),
-				}
-			} else {
-				ptr = createCombinedProtectedTimestampRecord(
-					ctx,
-					jobID,
-					targets,
-					details.StatementTime,
-				)
-				progress.GetChangefeed().ProtectedTimestampRecord = ptr.ID.GetUUID()
 			}
 			jr.Progress = *progress.GetChangefeed()
 
@@ -402,7 +417,7 @@ func changefeedPlanHook(
 						return err
 					}
 				}
-				if usingPerTablePTS {
+				if len(perTablePTSRecords) > 0 {
 					pts := p.ExecCfg().ProtectedTimestampProvider.WithTxn(p.InternalSQLTxn())
 					for _, perTableRecord := range perTablePTSRecords {
 						if err := pts.Protect(ctx, perTableRecord); err != nil {
@@ -447,7 +462,7 @@ func changefeedPlanHook(
 						return err
 					}
 				}
-				if usingPerTablePTS {
+				if len(perTablePTSRecords) > 0 {
 					pts := p.ExecCfg().ProtectedTimestampProvider.WithTxn(txn)
 					for _, perTableRecord := range perTablePTSRecords {
 						if err := pts.Protect(ctx, perTableRecord); err != nil {

@@ -110,7 +110,12 @@ func (r *replicationStreamManagerImpl) StartReplicationStreamForTables(
 	}
 
 	registry := execConfig.JobRegistry
-	ptsID := uuid.MakeV4()
+
+	var ptsID uuid.UUID
+	if !UseRevisionStreamRangefeed {
+		ptsID = uuid.MakeV4()
+	}
+
 	jr := makeProducerJobRecordForLogicalReplication(
 		registry,
 		defaultExpirationWindow,
@@ -124,13 +129,15 @@ func (r *replicationStreamManagerImpl) StartReplicationStreamForTables(
 		return streampb.ReplicationProducerSpec{}, err
 	}
 
-	targetToProtect := ptpb.MakeClusterTarget()
-	pts := jobsprotectedts.MakeRecord(ptsID, int64(jr.JobID), replicationStartTime,
-		jobsprotectedts.Jobs, targetToProtect)
+	if !UseRevisionStreamRangefeed {
+		targetToProtect := ptpb.MakeClusterTarget()
+		pts := jobsprotectedts.MakeRecord(ptsID, int64(jr.JobID), replicationStartTime,
+			jobsprotectedts.Jobs, targetToProtect)
 
-	ptp := execConfig.ProtectedTimestampProvider.WithTxn(r.txn)
-	if err := ptp.Protect(ctx, pts); err != nil {
-		return streampb.ReplicationProducerSpec{}, err
+		ptp := execConfig.ProtectedTimestampProvider.WithTxn(r.txn)
+		if err := ptp.Protect(ctx, pts); err != nil {
+			return streampb.ReplicationProducerSpec{}, err
+		}
 	}
 
 	if _, err := registry.CreateAdoptableJobWithTxn(ctx, jr, jr.JobID, r.txn); err != nil {
@@ -220,6 +227,12 @@ func getUDTs(
 	}
 	return typeDescriptors, foundTypeDescriptors, nil
 }
+
+// UseRevisionStreamRangefeed gates whether the LDR producer and
+// changefeed subsystems skip creating their own PTS records,
+// relying on the revlog job's PTS instead. TODO: hook up to 
+// cluster setting or automatically decide
+var UseRevisionStreamRangefeed = true
 
 var useStreaksInLDR = settings.RegisterBoolSetting(
 	settings.ApplicationLevel,

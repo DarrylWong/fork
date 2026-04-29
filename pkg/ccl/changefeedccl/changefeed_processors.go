@@ -23,6 +23,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/resolvedspan"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/schemafeed"
 	"github.com/cockroachdb/cockroach/pkg/changefeed/changefeedpb"
+	"github.com/cockroachdb/cockroach/pkg/cloud"
 	"github.com/cockroachdb/cockroach/pkg/clusterversion"
 	"github.com/cockroachdb/cockroach/pkg/jobs"
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobfrontier"
@@ -30,7 +31,9 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv/kvclient/kvcoord"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/closedts"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/protectedts"
+	"github.com/cockroachdb/cockroach/pkg/revlog"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
+	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/sql"
@@ -560,7 +563,7 @@ func (ca *changeAggregator) makeKVFeedCfg(
 		execCfg = ca.knobs.OverrideExecCfg(execCfg)
 	}
 
-	return kvfeed.Config{
+	kvfeedCfg := kvfeed.Config{
 		Writer:               buf,
 		Settings:             cfg.Settings,
 		DB:                   cfg.DB.KV(),
@@ -585,7 +588,33 @@ func (ca *changeAggregator) makeKVFeedCfg(
 		ScopedTimers:         ca.sliMetrics.Timers,
 		MonitoringCfg:        monitoringCfg,
 		ConsumerID:           int64(ca.spec.JobID),
-	}, nil
+	}
+
+	if uri := changefeedRevisionStreamURI.Get(&cfg.Settings.SV); uri != "" {
+		reader, err := newChangefeedRevisionStreamReader(ctx, execCfg, uri)
+		if err != nil {
+			log.Changefeed.Warningf(ctx,
+				"revision stream at %s unavailable, falling back to KV catch-up: %v", uri, err)
+		} else {
+			kvfeedCfg.RevisionStreamReader = reader
+		}
+	}
+
+	return kvfeedCfg, nil
+}
+
+func newChangefeedRevisionStreamReader(
+	ctx context.Context, execCfg *sql.ExecutorConfig, uri string,
+) (revlog.LogReader, error) {
+	conf, err := cloud.ExternalStorageConfFromURI(uri, username.RootUserName())
+	if err != nil {
+		return nil, errors.Wrap(err, "parsing revision stream URI")
+	}
+	es, err := execCfg.DistSQLSrv.ExternalStorage(ctx, conf)
+	if err != nil {
+		return nil, errors.Wrap(err, "opening revision stream storage")
+	}
+	return revlog.NewLogReaderImpl(es), nil
 }
 
 func makeKVFeedMonitoringCfg(
@@ -1959,6 +1988,10 @@ func (cf *changeFrontier) maybePersistFrontier(ctx context.Context) error {
 func (cf *changeFrontier) manageProtectedTimestamps(
 	ctx context.Context, txn isql.Txn, progress *jobspb.ChangefeedProgress,
 ) (updated bool, err error) {
+	if useRevisionStreamRangefeed {
+		return false, nil
+	}
+
 	ctx, sp := tracing.ChildSpan(ctx, "changefeed.frontier.manage_protected_timestamps")
 	defer sp.Finish()
 

@@ -196,25 +196,31 @@ func updateReplicationStreamProgress(
 			}
 
 			ptsID := md.Payload.GetStreamReplication().ProtectedTimestampRecordID
-			ptsRecord, err := pts.GetRecord(ctx, ptsID)
-			if err != nil {
-				return err
-			}
-			status.ProtectedTimestamp = &ptsRecord.Timestamp
-
-			if status.StreamStatus != streampb.StreamReplicationStatus_STREAM_ACTIVE {
-				return nil
-			}
-
-			// We only update the PTS if it should be pushed forward. We may receive heartbeat timestamps
-			// less than the current PTS after a cutover time has been issued, in which case, we'll receive
-			// heartbeats with the cutover timestamp, then the PTS should not be advanced as we still
-			// need to protect data at and above the cutover time.
-			if shouldUpdatePTS := ptsRecord.Timestamp.Less(consumedTime); shouldUpdatePTS {
-				if err = pts.UpdateTimestamp(ctx, ptsID, consumedTime); err != nil {
+			if ptsID == (uuid.UUID{}) {
+				if status.StreamStatus != streampb.StreamReplicationStatus_STREAM_ACTIVE {
+					return nil
+				}
+			} else {
+				ptsRecord, err := pts.GetRecord(ctx, ptsID)
+				if err != nil {
 					return err
 				}
-				status.ProtectedTimestamp = &consumedTime
+				status.ProtectedTimestamp = &ptsRecord.Timestamp
+
+				if status.StreamStatus != streampb.StreamReplicationStatus_STREAM_ACTIVE {
+					return nil
+				}
+
+				// We only update the PTS if it should be pushed forward. We may receive heartbeat timestamps
+				// less than the current PTS after a cutover time has been issued, in which case, we'll receive
+				// heartbeats with the cutover timestamp, then the PTS should not be advanced as we still
+				// need to protect data at and above the cutover time.
+				if shouldUpdatePTS := ptsRecord.Timestamp.Less(consumedTime); shouldUpdatePTS {
+					if err = pts.UpdateTimestamp(ctx, ptsID, consumedTime); err != nil {
+						return err
+					}
+					status.ProtectedTimestamp = &consumedTime
+				}
 			}
 			// Allow expiration time to go backwards as user may set a smaller timeout.
 			md.Progress.GetStreamReplication().Expiration = expiration

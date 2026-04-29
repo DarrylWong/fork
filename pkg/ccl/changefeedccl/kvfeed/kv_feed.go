@@ -23,6 +23,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvclient/kvcoord"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvclient/rangefeed"
+	"github.com/cockroachdb/cockroach/pkg/revlog"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/util/ctxgroup"
@@ -91,6 +92,10 @@ type Config struct {
 	// granularity.
 	WithFrontierQuantize time.Duration
 
+	// RevisionStreamReader, if non-nil, is passed to the rangefeed
+	// client so catch-up scans read from the revlog instead of KV.
+	RevisionStreamReader revlog.LogReader
+
 	// Knobs are kvfeed testing knobs.
 	Knobs TestingKnobs
 
@@ -148,7 +153,8 @@ func Run(ctx context.Context, cfg Config) (retErr error) {
 		cfg.InitialHighWater, cfg.InitialSpanTimePairs, cfg.EndTime,
 		cfg.Codec,
 		cfg.SchemaFeed,
-		sc, cfg.RangeFeedFactory, bf, cfg.Targets, cfg.ScopedTimers, cfg.Knobs)
+		sc, cfg.RangeFeedFactory, bf, cfg.Targets, cfg.ScopedTimers, cfg.Knobs,
+		cfg.RevisionStreamReader)
 	f.onBackfillCallback = cfg.MonitoringCfg.OnBackfillCallback
 
 	g.GoCtx(cfg.SchemaFeed.Run)
@@ -229,6 +235,8 @@ type kvFeed struct {
 	// factory is the production rangefeed client used by runRangeFeed.
 	factory *rangefeed.Factory
 
+	revisionStreamReader revlog.LogReader
+
 	// physicalFeedOverride, if non-nil, is used in place of the production
 	// rangefeed client. Tests inject a synthetic event source through this
 	// hook; production callers leave it nil and the kvFeed dispatches to
@@ -262,6 +270,7 @@ func newKVFeed(
 	targets changefeedbase.Targets,
 	ts *timers.ScopedTimers,
 	knobs TestingKnobs,
+	revisionStreamReader revlog.LogReader,
 ) *kvFeed {
 	return &kvFeed{
 		writer:               writer,
@@ -284,6 +293,7 @@ func newKVFeed(
 		targets:              targets,
 		timers:               ts,
 		knobs:                knobs,
+		revisionStreamReader: revisionStreamReader,
 	}
 }
 

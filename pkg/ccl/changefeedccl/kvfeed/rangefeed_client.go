@@ -193,6 +193,10 @@ func (f *kvFeed) runRangeFeed(ctx context.Context, sink kvevent.Writer, cfg rang
 		rangefeed.WithOnInternalError(rs.onInternalError),
 	}
 
+	if f.revisionStreamReader != nil {
+		opts = append(opts, rangefeed.WithRevisionStream(f.revisionStreamReader))
+	}
+
 	if cfg.Knobs.OnRangeFeedStart != nil {
 		cfg.Knobs.OnRangeFeedStart(cfg.Spans)
 	}

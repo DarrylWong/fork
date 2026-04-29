@@ -79,6 +79,28 @@ func registerLDRRevisionStreamTest(r registry.Registry) {
 			runLDRRevisionStreamGCStress(ctx, t, c, setup)
 		},
 	})
+
+	r.Add(registry.TestSpec{
+		Name:             "cdc/revision-stream",
+		Owner:            registry.OwnerCDC,
+		Timeout:          30 * time.Minute,
+		CompatibleClouds: registry.OnlyGCE,
+		Suites:           registry.Suites(registry.Nightly),
+		Cluster:          clusterSpec.ToSpec(r),
+		Leases:           registry.MetamorphicLeases,
+		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
+			rng, seed := randutil.NewPseudoRand()
+			t.L().Printf("random seed is %d", seed)
+			mc := multiCluster{
+				c:    c,
+				rng:  rng,
+				spec: clusterSpec,
+			}
+			setup, cleanup := mc.Start(ctx, t)
+			defer cleanup()
+			runCDCRevisionStream(ctx, t, c, setup)
+		},
+	})
 }
 
 func runLDRRevisionStream(
@@ -361,6 +383,91 @@ func runLDRRevisionStreamGCStress(
 	rightFP := setup.right.sysSQL.QueryStr(t, queryStmt)
 	require.Equal(t, leftFP, rightFP, "fingerprint mismatch for table %s", tableName)
 	t.L().Printf("fingerprints match")
+}
+
+func runCDCRevisionStream(
+	ctx context.Context, t test.Test, c cluster.Cluster, setup multiClusterSetup,
+) {
+	duration := 5 * time.Minute
+	maxBlockBytes := 1024
+
+	if c.IsLocal() {
+		duration = 30 * time.Second
+		maxBlockBytes = 32
+	}
+
+	dbName := "kv"
+	tableName := "kv"
+
+	kvWorkload := replicateKV{
+		readPercent:             0,
+		debugRunDuration:        duration,
+		maxBlockBytes:           maxBlockBytes,
+		initRows:                1000,
+		tolerateErrors:          true,
+		initWithSplitAndScatter: !c.IsLocal(),
+		uniform:                 true,
+	}
+
+	// Phase 1: Init workload and start continuous backup with revision stream.
+	t.Status("initializing kv workload on left cluster")
+	c.Run(ctx,
+		option.WithNodes(setup.workloadNode),
+		kvWorkload.sourceInitCmd("system", setup.left.nodes))
+
+	const backupDest = "nodelocal://1/revlog"
+	t.Status("starting continuous backup with revision stream")
+	setup.left.sysSQL.Exec(t, fmt.Sprintf(
+		"BACKUP DATABASE %s INTO '%s' WITH REVISION STREAM", dbName, backupDest))
+
+	var revlogJobID int
+	testutils.SucceedsWithin(t, func() error {
+		return setup.left.db.QueryRow(
+			"SELECT job_id FROM [SHOW JOBS] WHERE description LIKE 'REVLOG:%' ORDER BY created DESC LIMIT 1",
+		).Scan(&revlogJobID)
+	}, 30*time.Second)
+	t.L().Printf("revlog sibling job ID = %d", revlogJobID)
+
+	waitForJobRunning(t, setup.left.db, revlogJobID)
+	t.L().Printf("revlog job is running")
+
+	// Phase 2: Set GC TTL to 600 seconds and create a changefeed.
+	t.Status("setting gc.ttlseconds to 600 on source")
+	setup.left.sysSQL.Exec(t, fmt.Sprintf(
+		"ALTER DATABASE %s CONFIGURE ZONE USING gc.ttlseconds = 600", dbName))
+
+	t.Status("creating changefeed into null sink")
+	var changefeedJobID int
+	setup.left.sysSQL.QueryRow(t, fmt.Sprintf(
+		"CREATE CHANGEFEED FOR %s.%s INTO 'null://'", dbName, tableName),
+	).Scan(&changefeedJobID)
+	t.L().Printf("changefeed job ID = %d", changefeedJobID)
+
+	// Phase 3: Run workload and verify changefeed makes progress.
+	monitor := c.NewDeprecatedMonitor(ctx, setup.left.nodes.Merge(setup.right.nodes))
+
+	monitor.Go(func(ctx context.Context) error {
+		t.Status("running kv workload")
+		return c.RunE(ctx, option.WithNodes(setup.workloadNode),
+			kvWorkload.sourceRunCmd("system", setup.left.nodes))
+	})
+
+	t.Status("waiting for changefeed to make progress")
+	testutils.SucceedsWithin(t, func() error {
+		info, err := getChangefeedInfo(setup.left.db, changefeedJobID)
+		if err != nil {
+			return err
+		}
+		status := info.GetStatus()
+		if status != "running" {
+			return errors.Newf("changefeed %d status is %s, want running", changefeedJobID, status)
+		}
+		return nil
+	}, 2*time.Minute)
+	t.L().Printf("changefeed is running")
+
+	monitor.Wait()
+	t.L().Printf("changefeed with revision stream completed successfully")
 }
 
 func waitForJobRunning(t test.Test, db *gosql.DB, jobID int) {
