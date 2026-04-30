@@ -268,6 +268,7 @@ go_library(
         "//pkg/workload/cli",
         "//pkg/workload/debug",
         "//pkg/workload/examples",
+        "//pkg/workload/fktxn",
         "//pkg/workload/insights",
         "//pkg/workload/kv",
         "//pkg/workload/movr",

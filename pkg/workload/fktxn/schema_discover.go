@@ -8,6 +8,8 @@ package fktxn
 import (
 	gosql "database/sql"
 
+	"github.com/cockroachdb/cockroach/pkg/sql/parser"
+	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/errors"
 )
 
@@ -32,7 +34,7 @@ func DiscoverSchema(db *gosql.DB, dbName string) (*Schema, error) {
 
 func discoverColumns(db *gosql.DB, dbName string, s *Schema) error {
 	rows, err := db.Query(`
-		SELECT table_name, column_name, is_nullable, ordinal_position
+		SELECT table_name, column_name, is_nullable, crdb_sql_type, ordinal_position
 		FROM information_schema.columns
 		WHERE table_catalog = $1
 		  AND table_schema = 'public'
@@ -45,9 +47,9 @@ func discoverColumns(db *gosql.DB, dbName string, s *Schema) error {
 	defer rows.Close()
 
 	for rows.Next() {
-		var tableName, colName, isNullable string
+		var tableName, colName, isNullable, sqlType string
 		var ordinal int
-		if err := rows.Scan(&tableName, &colName, &isNullable, &ordinal); err != nil {
+		if err := rows.Scan(&tableName, &colName, &isNullable, &sqlType, &ordinal); err != nil {
 			return err
 		}
 
@@ -56,10 +58,20 @@ func discoverColumns(db *gosql.DB, dbName string, s *Schema) error {
 			t = &Table{Name: tableName}
 			s.AddTable(t)
 		}
-		t.Columns = append(t.Columns, Column{
+		col := Column{
 			Name:     colName,
 			Nullable: isNullable == "YES",
-		})
+		}
+		// Parse the column's SQL type. crdb_sql_type round-trips through the
+		// parser. We only retain types that resolve to a built-in *types.T —
+		// user-defined types (enums, etc.) leave Column.Type nil and the txn
+		// generator must skip such columns.
+		if typRef, err := parser.GetTypeFromValidSQLSyntax(sqlType); err == nil {
+			if typ, ok := tree.GetStaticallyKnownType(typRef); ok {
+				col.Type = typ
+			}
+		}
+		t.Columns = append(t.Columns, col)
 	}
 	return rows.Err()
 }

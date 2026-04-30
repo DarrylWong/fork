@@ -125,13 +125,16 @@ func TestDiscoverRandomizedSchema(t *testing.T) {
 		_, err := testDB.Exec(fmt.Sprintf("SELECT * FROM %s LIMIT 0", tree.NameString(tbl.Name)))
 		require.NoError(t, err, "table %s should exist in database", tbl.Name)
 
-		// Cross-validate: every column exists on the table.
+		// Cross-validate: every column exists on the table and its type was
+		// discovered. Type may be nil for user-defined types, but RandCreateTables
+		// only emits built-in types so we expect every column to have a type.
 		for _, col := range tbl.Columns {
 			_, err := testDB.Exec(fmt.Sprintf(
 				"SELECT %s FROM %s LIMIT 0",
 				tree.NameString(col.Name), tree.NameString(tbl.Name),
 			))
 			require.NoError(t, err, "column %s.%s should exist in database", tbl.Name, col.Name)
+			require.NotNil(t, col.Type, "column %s.%s should have a discovered type", tbl.Name, col.Name)
 		}
 
 		// Exactly one PK per table.

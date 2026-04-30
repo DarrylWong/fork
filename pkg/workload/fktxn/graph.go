@@ -10,13 +10,18 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/cockroachdb/errors"
+	"github.com/cockroachdb/cockroach/pkg/sql/types"
 )
 
 // Column represents a column in a table.
 type Column struct {
 	Name     string
 	Nullable bool
+	// Type is the column's SQL type. Used by the txn generator to produce
+	// type-appropriate random values via randgen.RandDatum. May be nil for
+	// columns whose type could not be parsed (e.g. user-defined types); the
+	// txn generator must skip such columns or treat them as opaque.
+	Type *types.T
 }
 
 // UniqueConstraint represents a UNIQUE or PRIMARY KEY constraint.
@@ -266,183 +271,6 @@ func columnsOverlap(a, b []string) bool {
 	return false
 }
 
-// HasCycle reports whether the FKGraph contains a directed cycle.
-func (g *FKGraph) HasCycle() bool {
-	adj := g.adjacency()
-
-	type color int
-	const (
-		white color = iota
-		gray
-		black
-	)
-	colors := make(map[string]color)
-
-	var visit func(name string) bool
-	visit = func(name string) bool {
-		colors[name] = gray
-		for _, next := range adj[name] {
-			switch colors[next] {
-			case gray:
-				return true
-			case white:
-				if visit(next) {
-					return true
-				}
-			}
-		}
-		colors[name] = black
-		return false
-	}
-
-	for name := range g.Tables {
-		if colors[name] == white {
-			if visit(name) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// adjacency builds a directed adjacency list from this graph's edges
-// (child → parent).
-func (g *FKGraph) adjacency() map[string][]string {
-	adj := make(map[string][]string)
-	for _, e := range g.Edges {
-		if _, ok := g.Tables[e.ReferencingTable]; !ok {
-			continue
-		}
-		if _, ok := g.Tables[e.ReferencedTable]; !ok {
-			continue
-		}
-		adj[e.ReferencingTable] = append(adj[e.ReferencingTable], e.ReferencedTable)
-	}
-	for k := range adj {
-		sort.Strings(adj[k])
-	}
-	return adj
-}
-
-// TopologicalSort returns tables in insertion order: parents before children.
-// Returns an error if the graph contains a cycle.
-func (g *FKGraph) TopologicalSort() ([]*Table, error) {
-	// Compute in-degree for each table within this graph.
-	// An outbound FK edge child→parent means child depends on parent,
-	// so parent must come first. In-degree counts how many parents a table has.
-	inDegree := make(map[string]int, len(g.Tables))
-	for name := range g.Tables {
-		inDegree[name] = 0
-	}
-	for _, e := range g.Edges {
-		if _, ok := g.Tables[e.ReferencingTable]; !ok {
-			continue
-		}
-		if _, ok := g.Tables[e.ReferencedTable]; !ok {
-			continue
-		}
-		// Skip self-referencing edges — they don't affect topological ordering.
-		if e.ReferencingTable == e.ReferencedTable {
-			continue
-		}
-		inDegree[e.ReferencingTable]++
-	}
-
-	// Seed queue with tables that have no dependencies (in-degree 0).
-	var queue []string
-	for name, deg := range inDegree {
-		if deg == 0 {
-			queue = append(queue, name)
-		}
-	}
-	sort.Strings(queue)
-
-	var result []*Table
-	for len(queue) > 0 {
-		name := queue[0]
-		queue = queue[1:]
-		result = append(result, g.Tables[name])
-
-		// For each table that depends on this one, decrement in-degree.
-		for _, e := range g.Edges {
-			if e.ReferencedTable != name {
-				continue
-			}
-			if e.ReferencingTable == e.ReferencedTable {
-				continue
-			}
-			if _, ok := g.Tables[e.ReferencingTable]; !ok {
-				continue
-			}
-			inDegree[e.ReferencingTable]--
-			if inDegree[e.ReferencingTable] == 0 {
-				queue = append(queue, e.ReferencingTable)
-				sort.Strings(queue)
-			}
-		}
-	}
-
-	if len(result) != len(g.Tables) {
-		return nil, errors.New("cycle detected: topological sort incomplete")
-	}
-	return result, nil
-}
-
-// FindCycles returns all simple cycles in the graph as lists of table names.
-// Each cycle is represented as a path from a table back to itself.
-func (g *FKGraph) FindCycles() [][]string {
-	adj := g.adjacency()
-
-	var cycles [][]string
-	blocked := make(map[string]bool)
-	var stack []string
-	inStack := make(map[string]bool)
-
-	// Johnson's algorithm simplified: find all elementary circuits.
-	// For each start node, DFS and record cycles back to start.
-	sortedNames := make([]string, 0, len(g.Tables))
-	for name := range g.Tables {
-		sortedNames = append(sortedNames, name)
-	}
-	sort.Strings(sortedNames)
-
-	var circuit func(v, start string) bool
-	circuit = func(v, start string) bool {
-		found := false
-		stack = append(stack, v)
-		inStack[v] = true
-		blocked[v] = true
-
-		for _, w := range adj[v] {
-			if w == start {
-				cycle := make([]string, len(stack))
-				copy(cycle, stack)
-				cycles = append(cycles, cycle)
-				found = true
-			} else if !blocked[w] && w >= start {
-				if circuit(w, start) {
-					found = true
-				}
-			}
-		}
-
-		if found {
-			blocked[v] = false
-		}
-		stack = stack[:len(stack)-1]
-		inStack[v] = false
-		return found
-	}
-
-	for _, start := range sortedNames {
-		for k := range blocked {
-			delete(blocked, k)
-		}
-		circuit(start, start)
-	}
-
-	return cycles
-}
 
 // String returns a deterministic text representation of the FKGraph.
 func (g *FKGraph) String() string {
