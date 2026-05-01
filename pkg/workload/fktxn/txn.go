@@ -77,7 +77,9 @@ func (s droppedEdgeSet) hasColumn(table, col string) bool {
 // exist.
 //
 // Returns the set of rows emitted, which the caller can use to chain a
-// subsequent UPDATE/DELETE on the same transaction.
+// subsequent UPDATE/DELETE on the same transaction. On failure the partial
+// emitted set is returned alongside the error so callers can inspect what
+// was attempted (e.g. to pivot on a unique-violation collision).
 func ExecuteUpsert(
 	ctx context.Context,
 	tx dbTx,
@@ -87,29 +89,78 @@ func ExecuteUpsert(
 	droppedEdges []FKEdge,
 	pks PKAssignment,
 ) (emittedSet, error) {
+	return ExecuteUpsertWithPinned(ctx, tx, rng, sorted, sub, droppedEdges, pks, nil)
+}
+
+// ExecuteUpsertWithPinned is ExecuteUpsert with an additional override map.
+// For any table in pinned, the pre-built row replaces what buildRow would
+// have produced — used by the worker's unique-violation pivot path to keep
+// the failing row's UC values stable across the retry while a fresh PK is
+// substituted.
+func ExecuteUpsertWithPinned(
+	ctx context.Context,
+	tx dbTx,
+	rng *rand.Rand,
+	sorted []*Table,
+	sub *FKGraph,
+	droppedEdges []FKEdge,
+	pks PKAssignment,
+	pinned map[string]emittedRow,
+) (emittedSet, error) {
 	emitted := make(emittedSet, len(sorted))
 	dropped := newDroppedEdgeSet(droppedEdges)
 
 	for _, t := range sorted {
 		pkVals, ok := pks[t.Name]
 		if !ok {
-			return nil, errors.AssertionFailedf("no PK assigned for table %s", t.Name)
+			return emitted, errors.AssertionFailedf("no PK assigned for table %s", t.Name)
 		}
-		row, err := buildRow(rng, t, sub, dropped, emitted, pkVals)
-		if err != nil {
-			return nil, errors.Wrapf(err, "building row for %s", t.Name)
-		}
-		if err := execUpsertRow(ctx, tx, t, row); err != nil {
-			return nil, errors.Wrapf(err, "upserting into %s", t.Name)
+		var row emittedRow
+		if pinnedRow, ok := pinned[t.Name]; ok {
+			// Use the caller's pre-built row, but ensure the PK columns reflect
+			// the (possibly pivoted) PK assignment.
+			row = make(emittedRow, len(pinnedRow))
+			for k, v := range pinnedRow {
+				row[k] = v
+			}
+			pkCols := primaryKeyColumns(t)
+			for i, c := range pkCols {
+				row[c] = pkVals[i]
+			}
+		} else {
+			built, err := buildRow(rng, t, sub, dropped, emitted, pkVals)
+			if err != nil {
+				return emitted, errors.Wrapf(err, "building row for %s", t.Name)
+			}
+			row = built
 		}
 		emitted[t.Name] = row
+		if err := execUpsertRow(ctx, tx, t, row); err != nil {
+			return emitted, &UpsertError{Table: t.Name, Row: row, Err: err}
+		}
 	}
 
 	if err := patchDroppedEdges(ctx, tx, sorted, droppedEdges, emitted); err != nil {
-		return nil, errors.Wrap(err, "patching dropped edges")
+		return emitted, errors.Wrap(err, "patching dropped edges")
 	}
 	return emitted, nil
 }
+
+// UpsertError tags an ExecuteUpsert failure with the table that hit the
+// error and the row we attempted to insert. The worker uses Table and Row
+// to look up the existing row's PK (via UC values) and pivot the chain on
+// a unique violation.
+type UpsertError struct {
+	Table string
+	Row   emittedRow
+	Err   error
+}
+
+func (e *UpsertError) Error() string {
+	return fmt.Sprintf("upserting into %s: %s", e.Table, e.Err)
+}
+
+func (e *UpsertError) Unwrap() error { return e.Err }
 
 // buildRow generates one row's worth of column values for t. PK columns are
 // filled from pkVals in PK column order (caller-supplied). FK columns on
@@ -294,9 +345,7 @@ func primaryKeyColumns(t *Table) []string {
 
 // execUpsertRow executes an UPSERT INTO t with the columns and values in row.
 // Column order is taken from t.Columns so the SQL is deterministic.
-func execUpsertRow(
-	ctx context.Context, tx dbTx, t *Table, row emittedRow,
-) error {
+func execUpsertRow(ctx context.Context, tx dbTx, t *Table, row emittedRow) error {
 	cols := make([]string, 0, len(t.Columns))
 	args := make([]interface{}, 0, len(t.Columns))
 	for _, col := range t.Columns {
@@ -336,10 +385,7 @@ func execUpsertRow(
 // The caller is expected to commit the transaction either way; the partial
 // SELECT FOR UPDATE locks acquired so far are released on commit.
 func ExecuteDelete(
-	ctx context.Context,
-	tx dbTx,
-	sorted []*Table,
-	pks PKAssignment,
+	ctx context.Context, tx dbTx, sorted []*Table, pks PKAssignment,
 ) (deleted bool, err error) {
 	for _, t := range sorted {
 		pkVals, ok := pks[t.Name]
@@ -367,9 +413,7 @@ func ExecuteDelete(
 
 // lockRow runs SELECT ... FOR UPDATE on t's PK and returns whether a row
 // matched. The selected columns are unused — only the lock matters.
-func lockRow(
-	ctx context.Context, tx dbTx, t *Table, pkVals []interface{},
-) (bool, error) {
+func lockRow(ctx context.Context, tx dbTx, t *Table, pkVals []interface{}) (bool, error) {
 	pkCols := primaryKeyColumns(t)
 	if len(pkVals) != len(pkCols) {
 		return false, errors.AssertionFailedf(
@@ -397,9 +441,7 @@ func lockRow(
 // not an error — we may have raced with another worker between the lock walk
 // and the delete walk. (The lock walk's FOR UPDATE makes this race rare but
 // not impossible if the txn was retried.)
-func deleteRow(
-	ctx context.Context, tx dbTx, t *Table, pkVals []interface{},
-) error {
+func deleteRow(ctx context.Context, tx dbTx, t *Table, pkVals []interface{}) error {
 	pkCols := primaryKeyColumns(t)
 	whereClauses := make([]string, len(pkCols))
 	for i, c := range pkCols {
@@ -431,12 +473,7 @@ func deleteRow(
 // columns are kept NULL by the workload's UPSERT path and re-pointing them
 // here would just NULL them again.
 func ExecuteUpdate(
-	ctx context.Context,
-	tx dbTx,
-	rng *rand.Rand,
-	sorted []*Table,
-	sub *FKGraph,
-	pks PKAssignment,
+	ctx context.Context, tx dbTx, rng *rand.Rand, sorted []*Table, sub *FKGraph, pks PKAssignment,
 ) (updated bool, err error) {
 	subEdges := make(map[string]bool, len(sub.Edges))
 	for _, e := range sub.Edges {
@@ -616,11 +653,7 @@ func resolveFKColumnValuesFromPKs(
 // yet been visited (cycle-breaking edges from RandomSubDAG). Both sides must
 // be present in emitted; otherwise the edge is left as NULL.
 func patchDroppedEdges(
-	ctx context.Context,
-	tx dbTx,
-	sorted []*Table,
-	droppedEdges []FKEdge,
-	emitted emittedSet,
+	ctx context.Context, tx dbTx, sorted []*Table, droppedEdges []FKEdge, emitted emittedSet,
 ) error {
 	if len(droppedEdges) == 0 {
 		return nil
@@ -649,11 +682,7 @@ func patchDroppedEdges(
 // execPatch runs an UPDATE that sets the FK columns on the child row to the
 // parent's referenced columns, identifying the child by its PK.
 func execPatch(
-	ctx context.Context,
-	tx dbTx,
-	e FKEdge,
-	childRow, parentRow emittedRow,
-	childPKCols []string,
+	ctx context.Context, tx dbTx, e FKEdge, childRow, parentRow emittedRow, childPKCols []string,
 ) error {
 	if len(childPKCols) == 0 {
 		return errors.AssertionFailedf("table %s has no primary key", e.ReferencingTable)

@@ -46,13 +46,22 @@ func (eventDelete) Event() {}
 // rewritten by the worker before every event, so the FSM action always sees
 // the current event's tx via Extended.tx. Typed as dbTx so a recording
 // wrapper can be substituted by tests; production sets it to a *sql.Tx.
+//
+// pinnedRows, if non-nil, lets the worker hand a pre-built row to the next
+// upsert for one or more tables. Used by the unique-violation pivot path:
+// after looking up the existing PK for a row that collided on a non-PK UC,
+// the worker pins the original attempted row (with the new PK substituted)
+// so the retry upsert preserves the UC values that already exist on that
+// row, instead of regenerating fresh random values that may collide again.
+// Cleared after each Apply.
 type chainExtended struct {
-	tx      dbTx
-	rng     *rand.Rand
-	sorted  []*Table
-	sub     *FKGraph
-	dropped []FKEdge
-	pks     PKAssignment
+	tx         dbTx
+	rng        *rand.Rand
+	sorted     []*Table
+	sub        *FKGraph
+	dropped    []FKEdge
+	pks        PKAssignment
+	pinnedRows map[string]emittedRow
 }
 
 // chainTransitions defines the valid (state, event) → (next state, action)
@@ -90,7 +99,7 @@ func runUpsert(a fsm.Args) error {
 	if !ok {
 		return errors.AssertionFailedf("chain action: bad extended state %T", a.Extended)
 	}
-	_, err := ExecuteUpsert(a.Ctx, c.tx, c.rng, c.sorted, c.sub, c.dropped, c.pks)
+	_, err := ExecuteUpsertWithPinned(a.Ctx, c.tx, c.rng, c.sorted, c.sub, c.dropped, c.pks, c.pinnedRows)
 	return err
 }
 

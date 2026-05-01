@@ -142,6 +142,13 @@ func (w *Worker) Run(ctx context.Context) (ChainResult, error) {
 // the corresponding action against ext.tx), and commits (or rolls back on
 // error). On commit failure, the FSM state has already advanced — but the
 // caller treats commit failure the same as action failure: end the chain.
+//
+// Special case: a unique-violation upsert from Gone means the row chain's
+// chosen non-PK unique values collided with an existing row. Rather than
+// abort the chain (which would waste the chain's setup and stall progress
+// once the keyspace saturates), the worker pivots to the existing row's PK
+// and retries the upsert once. The second upsert hits the PK-update path
+// instead of insert+UC violation.
 func (w *Worker) applyEvent(
 	ctx context.Context, m *fsm.Machine, ext *chainExtended, event fsm.Event,
 ) error {
@@ -153,9 +160,86 @@ func (w *Worker) applyEvent(
 
 	if err := m.Apply(ctx, event); err != nil {
 		_ = tx.Rollback()
+		if _, isUpsert := event.(eventUpsert); isUpsert && classifyError(err) == "unique_violation" {
+			if pivoted, perr := w.pivotAndRetryUpsert(ctx, m, ext, err); perr != nil {
+				return perr
+			} else if pivoted {
+				return nil
+			}
+		}
 		return err
 	}
 	return tx.Commit()
+}
+
+// pivotAndRetryUpsert handles a unique-violation upsert from Gone by looking
+// up the existing row on the failing table (via one of its non-PK UCs) and
+// re-running the upsert with that row's PK swapped into ext.pks. The second
+// upsert hits the PK-update path instead of insert+UC violation. Returns
+// (true, nil) when the retry committed (caller treats the event as
+// successful), (false, nil) when no pivot was possible (caller propagates
+// the original error), or (_, err) on a fatal secondary failure.
+func (w *Worker) pivotAndRetryUpsert(
+	ctx context.Context, m *fsm.Machine, ext *chainExtended, origErr error,
+) (bool, error) {
+	var ue *UpsertError
+	if !errors.As(origErr, &ue) {
+		return false, nil
+	}
+	var failingTable *Table
+	for _, t := range ext.sorted {
+		if t.Name == ue.Table {
+			failingTable = t
+			break
+		}
+	}
+	if failingTable == nil {
+		return false, nil
+	}
+
+	// Use a short-lived read-only tx for the lookup so we don't entangle it
+	// with the upsert retry. Could share a tx, but keeping them separate
+	// makes the lookup independently retryable.
+	lookupTx, err := w.cfg.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return false, errors.Wrap(err, "pivot lookup begin")
+	}
+	pivotPK, err := LookupExistingPK(ctx, lookupTx, failingTable, ue.Row)
+	_ = lookupTx.Rollback()
+	if err != nil {
+		return false, errors.Wrap(err, "pivot lookup")
+	}
+	if pivotPK == nil {
+		return false, nil
+	}
+	ext.pks[failingTable.Name] = pivotPK
+
+	// Pin the original row so the retry preserves the UC values that
+	// already exist on the pivoted-to row. Without this, buildRow would
+	// regenerate fresh random UC values that would likely collide again.
+	if ext.pinnedRows == nil {
+		ext.pinnedRows = make(map[string]emittedRow, 1)
+	}
+	ext.pinnedRows[failingTable.Name] = ue.Row
+	defer func() { delete(ext.pinnedRows, failingTable.Name) }()
+
+	// Restart the upsert in a fresh transaction.
+	tx, err := w.cfg.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return false, errors.Wrap(err, "pivot begin")
+	}
+	ext.tx = tx
+	applyErr := m.Apply(ctx, eventUpsert{})
+	if applyErr != nil {
+		// The retry hit another contention error. Roll back and let the
+		// caller report the original violation; the chain ends.
+		_ = tx.Rollback() //nolint:returnerrcheck
+		return false, nil //nolint:returnerrcheck
+	}
+	if err := tx.Commit(); err != nil {
+		return false, nil //nolint:returnerrcheck
+	}
+	return true, nil
 }
 
 func (w *Worker) pickChainLen() int {

@@ -6,9 +6,13 @@
 package fktxn
 
 import (
+	"context"
+	"fmt"
 	"math/rand"
+	"strings"
 
 	"github.com/cockroachdb/cockroach/pkg/sql/randgen"
+	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	randworkload "github.com/cockroachdb/cockroach/pkg/workload/rand"
 	"github.com/cockroachdb/errors"
 )
@@ -95,6 +99,116 @@ func AssignPKs(rng *rand.Rand, sorted []*Table, sub *FKGraph) (PKAssignment, err
 		pks[tbl.Name] = picked
 	}
 	return pks, nil
+}
+
+// LookupExistingPK searches for a row in t whose values match the attempted
+// upsert on any non-PK unique constraint, and returns the existing row's PK
+// values in PK column order. The chain pivots to that row when an upsert
+// fails with a unique violation: the worker rewrites pks[t.Name] with the
+// returned PK and re-runs the upsert, which now hits the PK-update path
+// instead of insert+UC violation.
+//
+// attempted is the row we tried to insert (column name → value); the lookup
+// uses each non-PK UC's columns to find a matching existing row. The first
+// UC that yields a match wins. Returns (nil, nil) if no UC matched any
+// existing row — the conflict was on the PK itself or on a UC whose values
+// changed mid-flight.
+func LookupExistingPK(
+	ctx context.Context, q dbTx, t *Table, attempted emittedRow,
+) ([]interface{}, error) {
+	pkCols := primaryKeyColumns(t)
+	if len(pkCols) == 0 {
+		return nil, errors.AssertionFailedf("table %s has no primary key", t.Name)
+	}
+	pkSet := make(map[string]bool, len(pkCols))
+	for _, c := range pkCols {
+		pkSet[c] = true
+	}
+
+	pkSelect := make([]string, len(pkCols))
+	for i, c := range pkCols {
+		pkSelect[i] = tree.NameString(c)
+	}
+
+	for _, uc := range t.UniqueConstraints {
+		if uc.IsPrimary {
+			continue
+		}
+		// Skip UCs that overlap with the PK; UPSERT already handles PK
+		// conflicts on its own.
+		if ucOverlapsPK(uc, pkSet) {
+			continue
+		}
+		args := make([]interface{}, 0, len(uc.Columns))
+		whereParts := make([]string, 0, len(uc.Columns))
+		skip := false
+		for _, c := range uc.Columns {
+			v, ok := attempted[c]
+			if !ok || v == nil {
+				// Missing or NULL value: NULL never matches in a UNIQUE check
+				// so no row can match this UC; skip it.
+				skip = true
+				break
+			}
+			args = append(args, v)
+			whereParts = append(whereParts, fmt.Sprintf("%s = $%d", tree.NameString(c), len(args)))
+		}
+		if skip {
+			continue
+		}
+		query := fmt.Sprintf(
+			"SELECT %s FROM %s WHERE %s LIMIT 1",
+			strings.Join(pkSelect, ", "),
+			tree.NameString(t.Name),
+			strings.Join(whereParts, " AND "),
+		)
+		rows, err := q.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, errors.Wrapf(err, "querying %s for existing UC %s row", t.Name, uc.Name)
+		}
+		pk, err := scanPKRow(rows, len(pkCols))
+		if err != nil {
+			return nil, errors.Wrapf(err, "scanning %s lookup for UC %s", t.Name, uc.Name)
+		}
+		if pk != nil {
+			return pk, nil
+		}
+	}
+	return nil, nil
+}
+
+// ucOverlapsPK reports whether any column of uc is part of the table's PK.
+func ucOverlapsPK(uc UniqueConstraint, pkSet map[string]bool) bool {
+	for _, c := range uc.Columns {
+		if pkSet[c] {
+			return true
+		}
+	}
+	return false
+}
+
+// scanPKRow scans a single row of nCols values into a []interface{}. Returns
+// (nil, nil) if the result set is empty.
+func scanPKRow(
+	rows interface {
+	Next() bool
+	Scan(...interface{}) error
+	Close() error
+}, nCols int,
+) ([]interface{}, error) {
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		return nil, nil
+	}
+	out := make([]interface{}, nCols)
+	dest := make([]interface{}, nCols)
+	for i := range dest {
+		dest[i] = &out[i]
+	}
+	if err := rows.Scan(dest...); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // lookupFKParent returns the in-sub FK parent (if any) for childCol on tbl.
