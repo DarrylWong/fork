@@ -42,7 +42,7 @@ func TestWorker_SingleChain(t *testing.T) {
 
 			dbName := "wrk_single_" + tc.name
 			discoverSchemaFromDDL(t, srv, sqlDB, dbName, tc.ddl)
-			setup := newShardSetup(t, srv, dbName, rng, 50)
+			setup := newShardSetup(t, srv, dbName, rng)
 
 			testDB := srv.ApplicationLayer().SQLConn(t, serverutils.DBName(dbName))
 			worker := NewWorker(WorkerConfig{
@@ -50,7 +50,6 @@ func TestWorker_SingleChain(t *testing.T) {
 				Sorted:            setup.sorted,
 				Sub:               setup.sub,
 				Dropped:           setup.dropped,
-				Pool:              setup.pool,
 				Mix:               OpMix{Update: 70, Delete: 30},
 				MinChainLen:       3,
 				MaxChainLen:       6,
@@ -83,8 +82,9 @@ func TestWorker_ConcurrentContention(t *testing.T) {
 	const dbName = "wrk_concurrent"
 	discoverSchemaFromDDL(t, srv, sqlDB, dbName, chainDDL)
 
-	// Build a single shared sub-DAG and pool. Workers contend on the same
-	// rows by sampling from the same small pool.
+	// Build a single shared sub-DAG. Workers sample PKs from the column
+	// type domain so they only occasionally collide; the test still exercises
+	// the source-error tolerance path when they do.
 	testDB := srv.ApplicationLayer().SQLConn(t, serverutils.DBName(dbName))
 	s, err := DiscoverSchema(testDB, dbName)
 	require.NoError(t, err)
@@ -92,8 +92,6 @@ func TestWorker_ConcurrentContention(t *testing.T) {
 	require.NotEmpty(t, graphs)
 	rngV2 := randv2.New(randv2.NewPCG(rng.Uint64(), rng.Uint64()))
 	sorted, sub, dropped, err := RandomSubDAG(rngV2, graphs[0])
-	require.NoError(t, err)
-	pool, err := BuildPKPool(rng, sorted, 5)
 	require.NoError(t, err)
 
 	const numWorkers = 4
@@ -116,7 +114,6 @@ func TestWorker_ConcurrentContention(t *testing.T) {
 				Sorted:            sorted,
 				Sub:               sub,
 				Dropped:           dropped,
-				Pool:              pool,
 				Mix:               OpMix{Update: 70, Delete: 30},
 				MinChainLen:       2,
 				MaxChainLen:       5,
@@ -188,4 +185,3 @@ func TestPickEvent_ExistsRespectsMix(t *testing.T) {
 	require.InDelta(t, 0.7, float64(updateCount)/trials, 0.05)
 	require.InDelta(t, 0.3, float64(deleteCount)/trials, 0.05)
 }
-

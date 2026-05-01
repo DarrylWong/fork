@@ -161,7 +161,6 @@ func datadrivenWorker(
 	sorted []*Table,
 	sub *FKGraph,
 	dropped []FKEdge,
-	pool PKPool,
 	mix OpMix,
 	chains int,
 	maxEvents int,
@@ -172,7 +171,7 @@ func datadrivenWorker(
 
 	for c := 0; c < chains; c++ {
 		fmt.Fprintf(&out, "chain %d:\n", c+1)
-		pks, err := AssignPKs(rng, sorted, sub, pool)
+		pks, err := AssignPKs(rng, sorted, sub)
 		require.NoError(t, err)
 		fmt.Fprintf(&out, "  pks: %s\n", formatPKs(sorted, pks))
 
@@ -263,7 +262,6 @@ func TestWorkerDataDriven(t *testing.T) {
 			sorted  []*Table
 			sub     *FKGraph
 			dropped []FKEdge
-			pool    PKPool
 			testDB  *gosql.DB
 		)
 
@@ -300,7 +298,7 @@ func TestWorkerDataDriven(t *testing.T) {
 				}
 				args := parseRunArgs(t, td)
 
-				// Build sub-DAG and pool with the run's seed for reproducibility.
+				// Build sub-DAG with the run's seed for reproducibility.
 				rng := rand.New(rand.NewSource(args.seed))
 				rngV2 := randv2.New(randv2.NewPCG(uint64(args.seed), 0))
 				s, err := DiscoverSchema(testDB, currentDBName(testDB, t))
@@ -308,16 +306,14 @@ func TestWorkerDataDriven(t *testing.T) {
 				graphs := BuildFKGraphs(s)
 				sortedNew, subNew, droppedNew, err := RandomSubDAG(rngV2, graphs[0])
 				require.NoError(t, err)
-				poolNew, err := BuildPKPool(rng, sortedNew, args.poolSize)
-				require.NoError(t, err)
-				sorted, sub, dropped, pool = sortedNew, subNew, droppedNew, poolNew
+				sorted, sub, dropped = sortedNew, subNew, droppedNew
 
 				// Reset all tables so the run starts from a known state. This
 				// keeps the output independent of any prior runs in the file.
 				resetTables(t, testDB, sorted)
 
 				return datadrivenWorker(t, ctx, testDB, rng, sorted, sub, dropped,
-					pool, args.mix, args.chains, args.maxEvents)
+					args.mix, args.chains, args.maxEvents)
 
 			default:
 				t.Fatalf("unknown cmd %q", td.Cmd)
@@ -331,7 +327,6 @@ type runArgs struct {
 	seed      int64
 	chains    int
 	maxEvents int
-	poolSize  int
 	mix       OpMix
 }
 
@@ -341,7 +336,6 @@ func parseRunArgs(t *testing.T, td *datadriven.TestData) runArgs {
 		seed:      0,
 		chains:    1,
 		maxEvents: 5,
-		poolSize:  10,
 		mix:       OpMix{Update: 70, Delete: 30},
 	}
 	for _, arg := range td.CmdArgs {
@@ -358,10 +352,6 @@ func parseRunArgs(t *testing.T, td *datadriven.TestData) runArgs {
 			v, err := strconv.Atoi(arg.Vals[0])
 			require.NoError(t, err)
 			args.maxEvents = v
-		case "pool-size":
-			v, err := strconv.Atoi(arg.Vals[0])
-			require.NoError(t, err)
-			args.poolSize = v
 		case "mix":
 			// mix is UPDATE/DELETE; Upsert is forced from Gone and not weighted.
 			parts := strings.Split(arg.Vals[0], "/")

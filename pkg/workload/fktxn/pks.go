@@ -13,83 +13,21 @@ import (
 	"github.com/cockroachdb/errors"
 )
 
-// PKPool is a per-table set of PK candidate values that workers in a shard
-// sample from. The orchestrator builds one pool per shard at startup using a
-// shard-seeded RNG; the bounded pool size is what produces collisions across
-// transactions and drives FK constraint contention. The pool is type-agnostic:
-// candidates are generated via randgen.RandDatum so it works for INT, STRING,
-// UUID, composite PKs — whatever shape the schema has.
-//
-// Each map entry is the table's PK candidates; each candidate is one row's
-// worth of PK column values, in primary-key column order.
-type PKPool map[string][][]interface{}
-
-// BuildPKPool generates poolSize PK candidates per table in tables. Caller
-// supplies the RNG so the pool is reproducible from the shard seed.
-//
-// Tables without a discoverable PK or PK columns lacking a discovered type
-// produce an error — the workload cannot generate type-appropriate values
-// without the type, and the orchestrator should not have selected such a
-// schema for this shard.
-func BuildPKPool(rng *rand.Rand, tables []*Table, poolSize int) (PKPool, error) {
-	if poolSize <= 0 {
-		return nil, errors.AssertionFailedf("pool size must be positive, got %d", poolSize)
-	}
-	pool := make(PKPool, len(tables))
-	for _, tbl := range tables {
-		pkCols := primaryKeyColumns(tbl)
-		if len(pkCols) == 0 {
-			return nil, errors.Newf("table %s has no primary key", tbl.Name)
-		}
-		colByName := make(map[string]Column, len(tbl.Columns))
-		for _, c := range tbl.Columns {
-			colByName[c.Name] = c
-		}
-
-		candidates := make([][]interface{}, poolSize)
-		for i := range candidates {
-			vals := make([]interface{}, len(pkCols))
-			for j, name := range pkCols {
-				col, ok := colByName[name]
-				if !ok {
-					return nil, errors.AssertionFailedf(
-						"PK column %s.%s not found in column list", tbl.Name, name,
-					)
-				}
-				if col.Type == nil {
-					return nil, errors.Newf(
-						"PK column %s.%s has no discovered type", tbl.Name, name,
-					)
-				}
-				d := randgen.RandDatum(rng, col.Type, false /* nullOk */)
-				v, err := randworkload.DatumToGoSQL(d)
-				if err != nil {
-					return nil, errors.Wrapf(err, "converting PK datum for %s.%s", tbl.Name, name)
-				}
-				vals[j] = v
-			}
-			candidates[i] = vals
-		}
-		pool[tbl.Name] = candidates
-	}
-	return pool, nil
-}
-
 // AssignPKs builds a PKAssignment for one transaction by walking sorted in
 // topological order (parents before children). For each table it samples one
-// candidate from pool, then patches any PK column that is also an FK column
-// (to an in-sub parent) with the value already chosen for the parent. This
-// coordination is what makes schemas like the diamond — where a shared
-// composite-key component (e.g. org_id) is threaded through multiple tables
-// — produce coherent rows: the shared column gets a single agreed value
-// across all FKs that reference it.
+// fresh PK value per PK column from the column's full type domain, then
+// patches any PK column that is also an FK column (to an in-sub parent) with
+// the value already chosen for the parent. The propagation is what makes
+// schemas like the diamond — where a shared composite-key component (e.g.
+// org_id) is threaded through multiple tables — produce coherent rows: the
+// shared column gets a single agreed value across all FKs that reference it.
 //
-// Workers in the same shard call AssignPKs against the same pool and sub-DAG;
-// independent rng streams sample different candidates, but collisions on the
-// bounded pool size produce row-level contention.
-func AssignPKs(
-	rng *rand.Rand, sorted []*Table, sub *FKGraph, pool PKPool,
-) (PKAssignment, error) {
+// PKs come from the column's type domain (no shared pool), so cross-worker PK
+// collisions are statistically rare. The workload's role is to feed the
+// destination a stream of committed source transactions exercising FK
+// constraints; source-side write-write contention is incidental, not a goal.
+// See "Why no shared PK pool" in the design doc for the rationale.
+func AssignPKs(rng *rand.Rand, sorted []*Table, sub *FKGraph) (PKAssignment, error) {
 	subEdges := make(map[string]bool, len(sub.Edges))
 	for _, e := range sub.Edges {
 		subEdges[e.Name] = true
@@ -101,14 +39,36 @@ func AssignPKs(
 
 	pks := make(PKAssignment, len(sorted))
 	for _, tbl := range sorted {
-		candidates, ok := pool[tbl.Name]
-		if !ok {
-			return nil, errors.AssertionFailedf("table %s missing from PK pool", tbl.Name)
-		}
-		// Copy so we can patch without mutating the pool.
-		picked := append([]interface{}(nil), candidates[rng.Intn(len(candidates))]...)
-
 		pkCols := primaryKeyColumns(tbl)
+		if len(pkCols) == 0 {
+			return nil, errors.Newf("table %s has no primary key", tbl.Name)
+		}
+		colByName := make(map[string]Column, len(tbl.Columns))
+		for _, c := range tbl.Columns {
+			colByName[c.Name] = c
+		}
+
+		picked := make([]interface{}, len(pkCols))
+		for i, pkCol := range pkCols {
+			col, ok := colByName[pkCol]
+			if !ok {
+				return nil, errors.AssertionFailedf(
+					"PK column %s.%s not found in column list", tbl.Name, pkCol,
+				)
+			}
+			if col.Type == nil {
+				return nil, errors.Newf(
+					"PK column %s.%s has no discovered type", tbl.Name, pkCol,
+				)
+			}
+			d := randgen.RandDatum(rng, col.Type, false /* nullOk */)
+			v, err := randworkload.DatumToGoSQL(d)
+			if err != nil {
+				return nil, errors.Wrapf(err, "converting PK datum for %s.%s", tbl.Name, pkCol)
+			}
+			picked[i] = v
+		}
+
 		for i, pkCol := range pkCols {
 			parent, parentCol, ok := lookupFKParent(tbl, pkCol, subEdges)
 			if !ok {
@@ -117,7 +77,7 @@ func AssignPKs(
 			parentPK, parentOk := pks[parent]
 			if !parentOk {
 				// Parent is not in the sub-DAG (trimmed by RandomSubDAG); fall
-				// back to the sampled value.
+				// back to the freshly sampled value.
 				continue
 			}
 			parentTbl, ok := tableByName[parent]

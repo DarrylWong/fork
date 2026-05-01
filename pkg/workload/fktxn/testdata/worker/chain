@@ -9,46 +9,50 @@ loaded schema "chain": 4 table(s), 3 FK graph(s)
 run seed=3 chains=2 max-events=5 mix=70/30
 ----
 chain 1:
-  pks: a=[-4540794605557144664] b=[9223372036854775807]
+  pks: a=[-3203915339919981424] b=[7084814199037155581]
   txn 1: state=Gone event=Upsert
-  UPSERT INTO a (id) VALUES ($1)  args=[-4540794605557144664]
-  UPSERT INTO b (id, a_id) VALUES ($1, $2)  args=[9223372036854775807, -4540794605557144664]
+  UPSERT INTO a (id) VALUES ($1)  args=[-3203915339919981424]
+  UPSERT INTO b (id, a_id) VALUES ($1, $2)  args=[7084814199037155581, -3203915339919981424]
     -> committed (state=Exists)
   txn 2: state=Exists event=Delete
-  SELECT 1 FROM a WHERE id = $1 FOR UPDATE  args=[-4540794605557144664]
-  SELECT 1 FROM b WHERE id = $1 FOR UPDATE  args=[9223372036854775807]
-  DELETE FROM b WHERE id = $1  args=[9223372036854775807]
-  DELETE FROM a WHERE id = $1  args=[-4540794605557144664]
+  SELECT 1 FROM a WHERE id = $1 FOR UPDATE  args=[-3203915339919981424]
+  SELECT 1 FROM b WHERE id = $1 FOR UPDATE  args=[7084814199037155581]
+  DELETE FROM b WHERE id = $1  args=[7084814199037155581]
+  DELETE FROM a WHERE id = $1  args=[-3203915339919981424]
     -> committed (state=Gone)
   txn 3: state=Gone event=Upsert
-  UPSERT INTO a (id) VALUES ($1)  args=[-4540794605557144664]
-  UPSERT INTO b (id, a_id) VALUES ($1, $2)  args=[9223372036854775807, -4540794605557144664]
-    -> committed (state=Exists)
-  txn 4: state=Exists event=Update
-  UPDATE b SET a_id = $1 WHERE id = $2  args=[-4540794605557144664, 9223372036854775807]
-    -> committed (state=Exists)
-  txn 5: state=Exists event=Update
-  UPDATE b SET a_id = $1 WHERE id = $2  args=[-4540794605557144664, 9223372036854775807]
-    -> committed (state=Exists)
-chain 2:
-  pks: a=[3738357500160082556] b=[-7506986046880537923]
-  txn 1: state=Gone event=Upsert
-  UPSERT INTO a (id) VALUES ($1)  args=[3738357500160082556]
-  UPSERT INTO b (id, a_id) VALUES ($1, $2)  args=[-7506986046880537923, 3738357500160082556]
-    -> committed (state=Exists)
-  txn 2: state=Exists event=Update
-  UPDATE b SET a_id = $1 WHERE id = $2  args=[3738357500160082556, -7506986046880537923]
-    -> committed (state=Exists)
-  txn 3: state=Exists event=Update
-  UPDATE b SET a_id = $1 WHERE id = $2  args=[3738357500160082556, -7506986046880537923]
+  UPSERT INTO a (id) VALUES ($1)  args=[-3203915339919981424]
+  UPSERT INTO b (id, a_id) VALUES ($1, $2)  args=[7084814199037155581, -3203915339919981424]
     -> committed (state=Exists)
   txn 4: state=Exists event=Delete
-  SELECT 1 FROM a WHERE id = $1 FOR UPDATE  args=[3738357500160082556]
-  SELECT 1 FROM b WHERE id = $1 FOR UPDATE  args=[-7506986046880537923]
-  DELETE FROM b WHERE id = $1  args=[-7506986046880537923]
-  DELETE FROM a WHERE id = $1  args=[3738357500160082556]
+  SELECT 1 FROM a WHERE id = $1 FOR UPDATE  args=[-3203915339919981424]
+  SELECT 1 FROM b WHERE id = $1 FOR UPDATE  args=[7084814199037155581]
+  DELETE FROM b WHERE id = $1  args=[7084814199037155581]
+  DELETE FROM a WHERE id = $1  args=[-3203915339919981424]
     -> committed (state=Gone)
   txn 5: state=Gone event=Upsert
-  UPSERT INTO a (id) VALUES ($1)  args=[3738357500160082556]
-  UPSERT INTO b (id, a_id) VALUES ($1, $2)  args=[-7506986046880537923, 3738357500160082556]
+  UPSERT INTO a (id) VALUES ($1)  args=[-3203915339919981424]
+  UPSERT INTO b (id, a_id) VALUES ($1, $2)  args=[7084814199037155581, -3203915339919981424]
+    -> committed (state=Exists)
+chain 2:
+  pks: a=[-4540794605557144664] b=[4320568512501274871]
+  txn 1: state=Gone event=Upsert
+  UPSERT INTO a (id) VALUES ($1)  args=[-4540794605557144664]
+  UPSERT INTO b (id, a_id) VALUES ($1, $2)  args=[4320568512501274871, -4540794605557144664]
+    -> committed (state=Exists)
+  txn 2: state=Exists event=Update
+  UPDATE b SET a_id = $1 WHERE id = $2  args=[-4540794605557144664, 4320568512501274871]
+    -> committed (state=Exists)
+  txn 3: state=Exists event=Delete
+  SELECT 1 FROM a WHERE id = $1 FOR UPDATE  args=[-4540794605557144664]
+  SELECT 1 FROM b WHERE id = $1 FOR UPDATE  args=[4320568512501274871]
+  DELETE FROM b WHERE id = $1  args=[4320568512501274871]
+  DELETE FROM a WHERE id = $1  args=[-4540794605557144664]
+    -> committed (state=Gone)
+  txn 4: state=Gone event=Upsert
+  UPSERT INTO a (id) VALUES ($1)  args=[-4540794605557144664]
+  UPSERT INTO b (id, a_id) VALUES ($1, $2)  args=[4320568512501274871, -4540794605557144664]
+    -> committed (state=Exists)
+  txn 5: state=Exists event=Update
+  UPDATE b SET a_id = $1 WHERE id = $2  args=[-4540794605557144664, 4320568512501274871]
     -> committed (state=Exists)

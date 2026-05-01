@@ -29,7 +29,6 @@ type orchestratorConfig struct {
 	URLs               []string
 	ConnFlags          *workload.ConnFlags
 	Workers            int
-	PoolSize           int
 	MinChainLen        int
 	MaxChainLen        int
 	SubDAGRotateChains int
@@ -89,7 +88,6 @@ type sharedState struct {
 	sorted     []*Table
 	sub        *FKGraph
 	dropped    []FKEdge
-	pool       PKPool
 }
 
 // newOrchestrator wires up the connection pool, discovers the schema, builds
@@ -126,7 +124,7 @@ func newOrchestrator(
 	if len(graphs) == 0 {
 		mcp.Close()
 		return workload.QueryLoad{}, errors.Newf(
-			"no FK graphs discovered in database %q; fk-txn needs at least one FK constraint",
+			"no FK graphs discovered in database %q; fktxn needs at least one FK constraint",
 			dbName,
 		)
 	}
@@ -180,7 +178,6 @@ func (o *orchestrator) makeWorkerFn(rng *rand.Rand) func(context.Context) error 
 			Sorted:            state.sorted,
 			Sub:               state.sub,
 			Dropped:           state.dropped,
-			Pool:              state.pool,
 			Mix:               o.cfg.Mix,
 			MinChainLen:       o.cfg.MinChainLen,
 			MaxChainLen:       o.cfg.MaxChainLen,
@@ -232,35 +229,25 @@ func (o *orchestrator) maybeRotate(ctx context.Context, count uint64) {
 	}
 	state, err := o.buildState(wantGen)
 	if err != nil {
-		log.Dev.Warningf(ctx, "fk-txn: sub-DAG rotation failed: %v", err)
+		log.Dev.Warningf(ctx, "fktxn: sub-DAG rotation failed: %v", err)
 		return
 	}
 	o.state = state
 }
 
-// buildState picks a random FK graph, derives a random sub-DAG, and builds a
-// matching PK pool. Caller must hold stateMu's write lock — buildState reads
-// from o.orchRNG.
+// buildState picks a random FK graph and derives a random sub-DAG. Caller
+// must hold stateMu's write lock — buildState reads from o.orchRNG.
 func (o *orchestrator) buildState(generation uint64) (*sharedState, error) {
 	graph := o.graphs[o.orchRNG.IntN(len(o.graphs))]
 	sorted, sub, dropped, err := RandomSubDAG(o.orchRNG, graph)
 	if err != nil {
 		return nil, errors.Wrap(err, "selecting sub-DAG")
 	}
-	// PK pool generation uses a different RNG type (math/rand v1) because
-	// randgen.RandDatum does. Seed it from the orchestrator RNG so different
-	// rotations get different pool contents.
-	poolRNG := rand.New(rand.NewSource(int64(o.orchRNG.Uint64())))
-	pool, err := BuildPKPool(poolRNG, sorted, o.cfg.PoolSize)
-	if err != nil {
-		return nil, errors.Wrap(err, "building PK pool")
-	}
 	return &sharedState{
 		generation: generation,
 		sorted:     sorted,
 		sub:        sub,
 		dropped:    dropped,
-		pool:       pool,
 	}, nil
 }
 

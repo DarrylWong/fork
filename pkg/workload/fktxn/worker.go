@@ -26,17 +26,11 @@ type WorkerConfig struct {
 	DB *gosql.DB
 
 	// Sorted, Sub, Dropped describe the sub-DAG the worker drives. All
-	// workers on the same shard receive the same sub-DAG; conflicts arise
-	// across workers via overlapping PK assignments, not via sub-DAG variety.
+	// workers receive the same sub-DAG; PKs are sampled fresh per chain from
+	// each column's type domain, so cross-worker collisions are incidental.
 	Sorted  []*Table
 	Sub     *FKGraph
 	Dropped []FKEdge
-
-	// Pool is the per-table candidate keyspace the worker samples PKs from.
-	// Smaller pools per table → more frequent collisions across workers →
-	// more lock contention. The pool is shared across all workers on the
-	// shard so collisions are possible.
-	Pool PKPool
 
 	// Mix controls the relative frequency of Upsert/Update/Delete events
 	// when the chain is in the Exists state. Gone always advances via Upsert.
@@ -107,7 +101,7 @@ func (r ChainResult) FailureClass() string {
 // doesn't drift from the database. The early-ended attempt still counts in
 // Attempted (it was tried) but not in Committed.
 func (w *Worker) Run(ctx context.Context) (ChainResult, error) {
-	pks, err := AssignPKs(w.rng, w.cfg.Sorted, w.cfg.Sub, w.cfg.Pool)
+	pks, err := AssignPKs(w.rng, w.cfg.Sorted, w.cfg.Sub)
 	if err != nil {
 		return ChainResult{}, errors.Wrap(err, "assigning PKs")
 	}

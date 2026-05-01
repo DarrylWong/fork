@@ -17,9 +17,9 @@ import (
 	"github.com/spf13/pflag"
 )
 
-// RandomSeed seeds the workload's RNGs (orchestrator sub-DAG selection, PK
-// pool generation, per-worker op selection). Reproducible runs use the same
-// seed plus the same target schema.
+// RandomSeed seeds the workload's RNGs (orchestrator sub-DAG selection and
+// per-worker op selection). Reproducible runs use the same seed plus the
+// same target schema.
 var RandomSeed = workload.NewInt64RandomSeed()
 
 // fkConflict is the workload generator. The schema is discovered from the
@@ -31,8 +31,8 @@ type fkConflict struct {
 	connFlags *workload.ConnFlags
 
 	numTables          int
+	fkDensity          float64
 	workers            int
-	poolSize           int
 	minChainLen        int
 	maxChainLen        int
 	subdagRotateChains int
@@ -53,18 +53,17 @@ func init() {
 }
 
 var fkConflictMeta = workload.Meta{
-	Name: `fk-txn`,
+	Name: `fktxn`,
 	Description: `FK-txn generates concurrent transactions across foreign-key-` +
 		`related tables to stress LDR replication of FK constraints.`,
 	Version:    `1.0.0`,
 	RandomSeed: RandomSeed,
 	New: func() workload.Generator {
 		g := &fkConflict{}
-		g.flags.FlagSet = pflag.NewFlagSet(`fk-txn`, pflag.ContinueOnError)
+		g.flags.FlagSet = pflag.NewFlagSet(`fktxn`, pflag.ContinueOnError)
 		// num-tables affects schema generation; the rest are runtime-only.
 		g.flags.Meta = map[string]workload.FlagMeta{
 			`workers`:              {RuntimeOnly: true},
-			`pool-size`:            {RuntimeOnly: true},
 			`min-chain-len`:        {RuntimeOnly: true},
 			`max-chain-len`:        {RuntimeOnly: true},
 			`subdag-rotate-chains`: {RuntimeOnly: true},
@@ -74,16 +73,17 @@ var fkConflictMeta = workload.Meta{
 		}
 		g.flags.IntVar(&g.numTables, `num-tables`, 4,
 			`Number of random tables to generate during init.`)
+		g.flags.Float64Var(&g.fkDensity, `fk-density`, 0.4,
+			`Per-ordered-pair probability of an FK during schema generation. `+
+				`E[F] = num-tables*(num-tables-1)*fk-density.`)
 		g.flags.IntVar(&g.workers, `workers`, 8,
-			`Concurrent worker goroutines. More workers on the same pool → more contention.`)
-		g.flags.IntVar(&g.poolSize, `pool-size`, 50,
-			`PK candidates per table in the shared pool. Smaller → more PK collisions across workers.`)
+			`Concurrent worker goroutines.`)
 		g.flags.IntVar(&g.minChainLen, `min-chain-len`, 1,
 			`Minimum events per chain (one transaction per event).`)
 		g.flags.IntVar(&g.maxChainLen, `max-chain-len`, 5,
 			`Maximum events per chain.`)
 		g.flags.IntVar(&g.subdagRotateChains, `subdag-rotate-chains`, 1000,
-			`Re-pick the sub-DAG and rebuild the PK pool every N chains. 0 disables rotation.`)
+			`Re-pick the sub-DAG every N chains. 0 disables rotation.`)
 		g.flags.IntVar(&g.updatePct, `update-pct`, 70,
 			`Op-mix weight for UPDATE in the Exists state.`)
 		g.flags.IntVar(&g.deletePct, `delete-pct`, 30,
@@ -130,11 +130,11 @@ func (g *fkConflict) validate() error {
 	if g.numTables <= 0 {
 		return errors.Newf("num-tables must be positive, got %d", g.numTables)
 	}
+	if g.fkDensity < 0 || g.fkDensity > 1 {
+		return errors.Newf("fk-density must be in [0, 1], got %f", g.fkDensity)
+	}
 	if g.workers <= 0 {
 		return errors.Newf("workers must be positive, got %d", g.workers)
-	}
-	if g.poolSize <= 0 {
-		return errors.Newf("pool-size must be positive, got %d", g.poolSize)
 	}
 	if g.minChainLen <= 0 {
 		return errors.Newf("min-chain-len must be positive, got %d", g.minChainLen)
@@ -171,14 +171,14 @@ func (g *fkConflict) Tables() []workload.Table {
 
 func (g *fkConflict) ensureSchema() {
 	g.schemaOnce.Do(func() {
-		g.tables, g.fkStmts = generateSchema(RandomSeed.Seed(), g.numTables)
+		g.tables, g.fkStmts = generateSchema(RandomSeed.Seed(), g.numTables, g.fkDensity)
 	})
 }
 
 // Ops implements the Opser interface. It connects to the database, discovers
 // the schema, and hands the static run config to a fresh orchestrator that
-// produces per-worker functions. All workers share one sub-DAG and PK pool;
-// rotation happens in-band when --subdag-rotate-chains is positive.
+// produces per-worker functions. All workers share one sub-DAG; rotation
+// happens in-band when --subdag-rotate-chains is positive.
 func (g *fkConflict) Ops(
 	ctx context.Context, urls []string, reg *histogram.Registry,
 ) (workload.QueryLoad, error) {
@@ -186,7 +186,6 @@ func (g *fkConflict) Ops(
 		URLs:               urls,
 		ConnFlags:          g.connFlags,
 		Workers:            g.workers,
-		PoolSize:           g.poolSize,
 		MinChainLen:        g.minChainLen,
 		MaxChainLen:        g.maxChainLen,
 		SubDAGRotateChains: g.subdagRotateChains,

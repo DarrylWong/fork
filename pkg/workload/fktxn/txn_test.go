@@ -37,27 +37,20 @@ var txnSchemaCases = []struct {
 }
 
 // shardSetup mirrors what an orchestrator hands to a shard at startup: the
-// sub-DAG selected for this shard and a PK pool the shard's workers sample
-// from. Tests build one of these per scenario, then call runOnce to execute
-// individual transactions on top of it.
+// sub-DAG selected for this shard. Tests build one of these per scenario,
+// then call runOnce to execute individual transactions on top of it.
 type shardSetup struct {
 	srv     serverutils.TestServerInterface
 	dbName  string
 	sorted  []*Table
 	sub     *FKGraph
 	dropped []FKEdge
-	pool    PKPool
 }
 
-// newShardSetup discovers the schema, picks a sub-DAG, and builds a PK pool.
-// rng drives both the sub-DAG selection (via a seed derived from rng) and the
-// pool generation.
+// newShardSetup discovers the schema and picks a sub-DAG. rng drives the
+// sub-DAG selection (via a seed derived from rng).
 func newShardSetup(
-	t *testing.T,
-	srv serverutils.TestServerInterface,
-	dbName string,
-	rng *rand.Rand,
-	poolSize int,
+	t *testing.T, srv serverutils.TestServerInterface, dbName string, rng *rand.Rand,
 ) *shardSetup {
 	t.Helper()
 	testDB := srv.ApplicationLayer().SQLConn(t, serverutils.DBName(dbName))
@@ -72,28 +65,24 @@ func newShardSetup(
 	sorted, sub, dropped, err := RandomSubDAG(rngV2, graphs[0])
 	require.NoError(t, err)
 
-	pool, err := BuildPKPool(rng, sorted, poolSize)
-	require.NoError(t, err)
-
 	return &shardSetup{
 		srv:     srv,
 		dbName:  dbName,
 		sorted:  sorted,
 		sub:     sub,
 		dropped: dropped,
-		pool:    pool,
 	}
 }
 
-// runUpsertOnce samples a PK assignment from the shard's pool and executes
-// one UPSERT transaction. Returns the rows emitted and the PKs used (so the
-// caller can chain a delete on the same chain).
+// runUpsertOnce samples a fresh PK assignment and executes one UPSERT
+// transaction. Returns the rows emitted and the PKs used (so the caller can
+// chain a delete on the same chain).
 func (s *shardSetup) runUpsertOnce(t *testing.T, rng *rand.Rand) (emittedSet, PKAssignment) {
 	t.Helper()
 	ctx := context.Background()
 	testDB := s.srv.ApplicationLayer().SQLConn(t, serverutils.DBName(s.dbName))
 
-	pks, err := AssignPKs(rng, s.sorted, s.sub, s.pool)
+	pks, err := AssignPKs(rng, s.sorted, s.sub)
 	require.NoError(t, err)
 
 	tx, err := testDB.BeginTx(ctx, nil)
@@ -123,7 +112,7 @@ func TestExecuteUpsert(t *testing.T) {
 
 			dbName := "up_" + tc.name
 			discoverSchemaFromDDL(t, srv, sqlDB, dbName, tc.ddl)
-			setup := newShardSetup(t, srv, dbName, rng, 100)
+			setup := newShardSetup(t, srv, dbName, rng)
 
 			for i := 0; i < 10; i++ {
 				emitted, _ := setup.runUpsertOnce(t, rng)
@@ -131,41 +120,6 @@ func TestExecuteUpsert(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestExecuteUpsert_PKCollision verifies that repeated upserts sampling from
-// a small PK pool produce collisions, bounding the row count. This is the
-// contention pattern the orchestrator/shard model relies on, expressed in a
-// type-agnostic way: collisions come from the bounded pool size, not from
-// any INT-specific arithmetic.
-func TestExecuteUpsert_PKCollision(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	defer log.Scope(t).Close(t)
-
-	ctx := context.Background()
-	srv, db, _ := serverutils.StartServer(t, base.TestServerArgs{})
-	defer srv.Stopper().Stop(ctx)
-	sqlDB := sqlutils.MakeSQLRunner(db)
-
-	rng, seed := randutil.NewTestRand()
-	t.Logf("seed=%d", seed)
-
-	const dbName = "up_collision"
-	const poolSize = 5
-	discoverSchemaFromDDL(t, srv, sqlDB, dbName, simplePairDDL)
-
-	setup := newShardSetup(t, srv, dbName, rng, poolSize)
-	for i := 0; i < 50; i++ {
-		setup.runUpsertOnce(t, rng)
-	}
-
-	testDB := srv.ApplicationLayer().SQLConn(t, serverutils.DBName(dbName))
-	testSQL := sqlutils.MakeSQLRunner(testDB)
-	var aRows, bRows int
-	testSQL.QueryRow(t, "SELECT count(*) FROM a").Scan(&aRows)
-	testSQL.QueryRow(t, "SELECT count(*) FROM b").Scan(&bRows)
-	require.LessOrEqual(t, aRows, poolSize, "PK collisions should bound table a")
-	require.LessOrEqual(t, bRows, poolSize, "PK collisions should bound table b")
 }
 
 func TestExecuteDelete(t *testing.T) {
@@ -184,7 +138,7 @@ func TestExecuteDelete(t *testing.T) {
 
 			dbName := "del_" + tc.name
 			discoverSchemaFromDDL(t, srv, sqlDB, dbName, tc.ddl)
-			setup := newShardSetup(t, srv, dbName, rng, 50)
+			setup := newShardSetup(t, srv, dbName, rng)
 
 			// Insert a row chain, then delete the same chain.
 			_, pks := setup.runUpsertOnce(t, rng)
@@ -234,7 +188,7 @@ func TestExecuteUpdate(t *testing.T) {
 
 			dbName := "upd_" + tc.name
 			discoverSchemaFromDDL(t, srv, sqlDB, dbName, tc.ddl)
-			setup := newShardSetup(t, srv, dbName, rng, 50)
+			setup := newShardSetup(t, srv, dbName, rng)
 
 			// Insert a chain so the UPDATE has a target row to hit.
 			_, pks := setup.runUpsertOnce(t, rng)
@@ -282,10 +236,10 @@ func TestExecuteUpdate_NoTargetRow(t *testing.T) {
 
 	const dbName = "upd_missing"
 	discoverSchemaFromDDL(t, srv, sqlDB, dbName, simplePairDDL)
-	setup := newShardSetup(t, srv, dbName, rng, 50)
+	setup := newShardSetup(t, srv, dbName, rng)
 
 	// Don't insert anything. Try to update; should return false.
-	pks, err := AssignPKs(rng, setup.sorted, setup.sub, setup.pool)
+	pks, err := AssignPKs(rng, setup.sorted, setup.sub)
 	require.NoError(t, err)
 
 	testDB := srv.ApplicationLayer().SQLConn(t, serverutils.DBName(dbName))
@@ -315,10 +269,10 @@ func TestExecuteDelete_RowNotPresent(t *testing.T) {
 
 	const dbName = "del_missing"
 	discoverSchemaFromDDL(t, srv, sqlDB, dbName, simplePairDDL)
-	setup := newShardSetup(t, srv, dbName, rng, 50)
+	setup := newShardSetup(t, srv, dbName, rng)
 
 	// Don't insert anything. Try to delete; should return false.
-	pks, err := AssignPKs(rng, setup.sorted, setup.sub, setup.pool)
+	pks, err := AssignPKs(rng, setup.sorted, setup.sub)
 	require.NoError(t, err)
 
 	testDB := srv.ApplicationLayer().SQLConn(t, serverutils.DBName(dbName))
