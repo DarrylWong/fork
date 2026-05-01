@@ -332,7 +332,9 @@ func registerLogicalDataReplicationTests(r registry.Registry) {
 				},
 			},
 			ldrConfig: ldrConfig{mode: ModeTransactional},
-			run:       TestLDRFKTxn,
+			// transactional mode landed in 26.3; predecessors don't recognize it.
+			mixedVersionMinimum: clusterversion.Latest,
+			run:                 TestLDRFKTxn,
 		},
 	}
 
@@ -647,14 +649,44 @@ func TestLDRFKTxn(
 
 	monitor.Go(func(ctx context.Context) error {
 		defer close(workloadDoneCh)
+		// {pgurl:N:system} expands to a system-tenant URL on the workload
+		// node. fktxn uses the connection's current database, so override
+		// the URL's database via the `db` query param.
 		return c.RunE(ctx, option.WithNodes(setup.workloadNode),
-			fmt.Sprintf("./cockroach workload run fktxn --workers=8 --duration=%s %q",
-				duration, setup.left.PgURLForDatabase(dbName)))
+			fmt.Sprintf("./cockroach workload run fktxn --workers=8 --duration=%s --db=%s {pgurl:%d:system}",
+				duration, dbName, setup.left.nodes[0]))
 	})
 
 	monitor.Wait()
 	validateLatency()
-	VerifyCorrectness(ctx, c, t, setup, leftJobID, rightJobID, 2*time.Minute, ldrWorkload)
+	verifyFKTxnCorrectness(ctx, t, setup, leftJobID, rightJobID, ldrWorkload)
+}
+
+// verifyFKTxnCorrectness waits for both sides to catch up and asserts that
+// per-table fingerprints match. Unlike VerifyCorrectness, it skips the DLQ
+// check: transactional-mode LDR doesn't create DLQ tables, and the standard
+// CheckEmptyDLQs helper errors when none exist.
+func verifyFKTxnCorrectness(
+	ctx context.Context,
+	t test.Test,
+	setup multiClusterSetup,
+	leftJobID, rightJobID int,
+	ldrWorkload LDRWorkload,
+) {
+	now := timeutil.Now()
+	t.Status("waiting for replicated times to catchup before verifying left and right clusters")
+	if leftJobID != 0 {
+		waitForReplicatedTimeToReachTimestamp(t, leftJobID, setup.left.db, getLogicalDataReplicationJobInfo, 2*time.Minute, now)
+	}
+	waitForReplicatedTimeToReachTimestamp(t, rightJobID, setup.right.db, getLogicalDataReplicationJobInfo, 2*time.Minute, now)
+
+	t.Status("verifying equality of left and right clusters")
+	for _, tableName := range ldrWorkload.tableNames {
+		fpQuery := fmt.Sprintf("SHOW EXPERIMENTAL_FINGERPRINTS FROM TABLE %s.%s", ldrWorkload.dbName, tableName)
+		left := setup.left.sysSQL.QueryStr(t, fpQuery)
+		right := setup.right.sysSQL.QueryStr(t, fpQuery)
+		require.Equal(t, left, right, "fingerprint mismatch for table %s", tableName)
+	}
 }
 
 // fkTxnLDRJobs holds the LDR job IDs returned by a successful setup attempt.
@@ -681,12 +713,27 @@ func initFKTxnAndStartLDR(
 ) (fkTxnLDRJobs, error) {
 	for _, side := range []*clusterInfo{setup.left, setup.right} {
 		initCmd := fmt.Sprintf(
-			"./cockroach workload init fktxn --seed=%d --num-tables=%d --fk-density=%g %q",
-			seed, numTables, fkDensity, side.PgURLForDatabase(dbName),
+			"./cockroach workload init fktxn --seed=%d --num-tables=%d --fk-density=%g --db=%s {pgurl:%d:system}",
+			seed, numTables, fkDensity, dbName, side.nodes[0],
 		)
 		if err := c.RunE(ctx, option.WithNodes(setup.workloadNode), initCmd); err != nil {
 			return fkTxnLDRJobs{}, errors.Wrap(err, "fktxn init")
 		}
+	}
+
+	// Reject seeds whose generated schema has no FK constraints. The workload
+	// requires at least one FK; a schema with zero would pass LDR setup but
+	// fail at `workload run` startup.
+	var fkCount int
+	if err := setup.left.db.QueryRowContext(ctx, fmt.Sprintf(
+		"SELECT count(*) FROM %s.information_schema.table_constraints "+
+			"WHERE constraint_type = 'FOREIGN KEY'", dbName,
+	)).Scan(&fkCount); err != nil {
+		return fkTxnLDRJobs{}, errors.Wrap(err, "counting FK constraints")
+	}
+	t.L().Printf("seed %d schema has %d FK constraints", seed, fkCount)
+	if fkCount == 0 {
+		return fkTxnLDRJobs{}, errors.New("schema has no FK constraints")
 	}
 
 	tableNamesStr := "(" + dbName + "." + tableNames[0]
