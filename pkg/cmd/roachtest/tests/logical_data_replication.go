@@ -32,6 +32,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/randutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	workloadrand "github.com/cockroachdb/cockroach/pkg/workload/rand"
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,6 +73,17 @@ func (ycsb ycsbWorkload) runDriver(
 	workloadCtx context.Context, c cluster.Cluster, t test.Test, setup *c2cSetup,
 ) error {
 	return defaultWorkloadDriver(workloadCtx, setup, c, ycsb)
+}
+
+// fkTxnTableNames returns the table names fktxn will produce for numTables.
+// The workload uses randgen.RandCreateTables with prefix "t" and a 1-based
+// table index, so names are deterministic and independent of the seed.
+func fkTxnTableNames(numTables int) []string {
+	names := make([]string, numTables)
+	for i := range names {
+		names[i] = fmt.Sprintf("t%d", i+1)
+	}
+	return names
 }
 
 type LDRWorkload struct {
@@ -306,6 +318,21 @@ func registerLogicalDataReplicationTests(r registry.Registry) {
 			mixedVersionMinimum: clusterversion.V26_2,
 			run:                 TestLDRUniqueConstraintUpdate,
 			monitor:             true,
+		},
+		{
+			name: "ldr/fktxn",
+			clusterSpec: multiClusterSpec{
+				leftNodes:  3,
+				rightNodes: 3,
+				clusterOpts: []spec.Option{
+					spec.CPU(4),
+					spec.WorkloadNode(),
+					spec.WorkloadNodeCPU(4),
+					spec.VolumeSize(100),
+				},
+			},
+			ldrConfig: ldrConfig{mode: ModeTransactional},
+			run:       TestLDRFKTxn,
 		},
 	}
 
@@ -545,6 +572,217 @@ func TestLDRConflict(
 
 	t.Status("verifying results")
 	verifyConflictCorrectness(ctx, t, setup, leftJobID, rightJobID)
+}
+
+// TestLDRFKTxn exercises LDR replication of FK-bearing tables. The fktxn
+// workload generates a random schema with FK constraints (deterministic from
+// the seed) and drives concurrent transactions against it. Both clusters are
+// inited from the same seed so their schemas match; the standard LDR
+// scaffolding takes over from there.
+//
+// fktxn schemas come from randgen and may include features LDR rejects
+// (e.g. virtual computed columns, unsupported types). Try seeds in
+// sequence and keep the first one whose schema both inits and accepts a
+// CREATE LOGICAL REPLICATION STREAM. On failure, drop and recreate the
+// fktxn database on both clusters before the next attempt.
+//
+// The destination is responsible for FK-aware apply ordering. The test
+// passes if replication reaches steady state without DLQ entries and the
+// per-table fingerprints match.
+func TestLDRFKTxn(
+	ctx context.Context, t test.Test, c cluster.Cluster, setup multiClusterSetup, ldrConfig ldrConfig,
+) {
+	duration := 10 * time.Minute
+	const numTables = 6
+	if c.IsLocal() {
+		duration = 2 * time.Minute
+	}
+
+	const dbName = "fktxn"
+	const fkDensity = 0.4
+	const maxSeedAttempts = 10
+
+	tableNames := fkTxnTableNames(numTables)
+	ldrWorkload := LDRWorkload{
+		dbName:     dbName,
+		tableNames: tableNames,
+	}
+
+	var seed int64
+	var leftJobID, rightJobID int
+	var lastErr error
+	for attempt := 1; attempt <= maxSeedAttempts; attempt++ {
+		seed = int64(attempt)
+		t.L().Printf("attempt %d: trying fktxn schema with seed=%d", attempt, seed)
+
+		// Reset both clusters to a clean slate. Cancel any LDR jobs from a
+		// prior attempt before dropping the database — CASCADE drops tables
+		// but won't stop the jobs that reference them.
+		cancelAllLDRJobs(t, setup.left.sysSQL)
+		cancelAllLDRJobs(t, setup.right.sysSQL)
+		setup.left.sysSQL.Exec(t, fmt.Sprintf("DROP DATABASE IF EXISTS %s CASCADE", dbName))
+		setup.right.sysSQL.Exec(t, fmt.Sprintf("DROP DATABASE IF EXISTS %s CASCADE", dbName))
+		setup.left.sysSQL.Exec(t, fmt.Sprintf("CREATE DATABASE %s", dbName))
+		setup.right.sysSQL.Exec(t, fmt.Sprintf("CREATE DATABASE %s", dbName))
+
+		jobs, err := initFKTxnAndStartLDR(ctx, t, c, setup, dbName, tableNames, seed, numTables, fkDensity, ldrConfig)
+		if err != nil {
+			lastErr = err
+			t.L().Printf("attempt %d failed: %v", attempt, err)
+			continue
+		}
+		leftJobID, rightJobID = jobs.left, jobs.right
+		t.L().Printf("attempt %d succeeded with seed=%d", attempt, seed)
+		break
+	}
+	if leftJobID == 0 && rightJobID == 0 {
+		t.Fatalf("no fktxn schema accepted by LDR after %d attempts; last error: %v",
+			maxSeedAttempts, lastErr)
+	}
+
+	workloadDoneCh := make(chan struct{})
+	maxExpectedLatency := 3 * time.Minute
+	monitor := c.NewDeprecatedMonitor(ctx, setup.CRDBNodes())
+	validateLatency := setupLatencyVerifiers(ctx, t, c, monitor, leftJobID, rightJobID, setup, workloadDoneCh, maxExpectedLatency)
+
+	monitor.Go(func(ctx context.Context) error {
+		defer close(workloadDoneCh)
+		return c.RunE(ctx, option.WithNodes(setup.workloadNode),
+			fmt.Sprintf("./cockroach workload run fktxn --workers=8 --duration=%s %q",
+				duration, setup.left.PgURLForDatabase(dbName)))
+	})
+
+	monitor.Wait()
+	validateLatency()
+	VerifyCorrectness(ctx, c, t, setup, leftJobID, rightJobID, 2*time.Minute, ldrWorkload)
+}
+
+// fkTxnLDRJobs holds the LDR job IDs returned by a successful setup attempt.
+type fkTxnLDRJobs struct {
+	left, right int
+}
+
+// initFKTxnAndStartLDR runs `cockroach workload init fktxn` on both clusters
+// and issues bidirectional CREATE LOGICAL REPLICATION STREAM. If any step
+// fails, returns the error so the caller can drop the database and try a
+// different seed. Both clusters must already have the target database
+// created.
+func initFKTxnAndStartLDR(
+	ctx context.Context,
+	t test.Test,
+	c cluster.Cluster,
+	setup multiClusterSetup,
+	dbName string,
+	tableNames []string,
+	seed int64,
+	numTables int,
+	fkDensity float64,
+	ldrConfig ldrConfig,
+) (fkTxnLDRJobs, error) {
+	for _, side := range []*clusterInfo{setup.left, setup.right} {
+		initCmd := fmt.Sprintf(
+			"./cockroach workload init fktxn --seed=%d --num-tables=%d --fk-density=%g %q",
+			seed, numTables, fkDensity, side.PgURLForDatabase(dbName),
+		)
+		if err := c.RunE(ctx, option.WithNodes(setup.workloadNode), initCmd); err != nil {
+			return fkTxnLDRJobs{}, errors.Wrap(err, "fktxn init")
+		}
+	}
+
+	tableNamesStr := "(" + dbName + "." + tableNames[0]
+	for _, name := range tableNames[1:] {
+		tableNamesStr += ", " + dbName + "." + name
+	}
+	tableNamesStr += ")"
+
+	externalConnCmd := "CREATE EXTERNAL CONNECTION IF NOT EXISTS '%s' AS '%s'"
+	setup.right.sysSQL.Exec(t, fmt.Sprintf(externalConnCmd, leftExternalConn.Host, setup.left.PgURLForDatabase(dbName)))
+	setup.left.sysSQL.Exec(t, fmt.Sprintf(externalConnCmd, rightExternalConn.Host, setup.right.PgURLForDatabase(dbName)))
+
+	options := ""
+	if ldrConfig.mode != Default {
+		options = fmt.Sprintf("WITH mode='%s'", ldrConfig.mode)
+	}
+	startLDR := func(targetDB *gosql.DB, sourceURL string) (int, error) {
+		if _, err := targetDB.ExecContext(ctx, fmt.Sprintf("USE %s", dbName)); err != nil {
+			return 0, errors.Wrap(err, "USE database")
+		}
+		ldrCmd := fmt.Sprintf("CREATE LOGICAL REPLICATION STREAM FROM TABLES %s ON $1 INTO TABLES %s %s",
+			tableNamesStr, tableNamesStr, options)
+		var jobID int
+		if err := targetDB.QueryRowContext(ctx, ldrCmd, sourceURL).Scan(&jobID); err != nil {
+			return 0, errors.Wrap(err, "CREATE LOGICAL REPLICATION STREAM")
+		}
+		return jobID, nil
+	}
+
+	rightJobID, err := startLDR(setup.right.db, leftExternalConn.String())
+	if err != nil {
+		return fkTxnLDRJobs{}, errors.Wrap(err, "starting right→left LDR")
+	}
+	leftJobID, err := startLDR(setup.left.db, rightExternalConn.String())
+	if err != nil {
+		return fkTxnLDRJobs{}, errors.Wrap(err, "starting left→right LDR")
+	}
+
+	initialScanTimeout := 2 * time.Minute
+	if ldrConfig.initialScanTimeout != 0 {
+		initialScanTimeout = ldrConfig.initialScanTimeout
+	}
+	if err := waitForReplicatedTimeE(ctx, leftJobID, setup.left.db, initialScanTimeout); err != nil {
+		return fkTxnLDRJobs{}, errors.Wrap(err, "waiting for left initial scan")
+	}
+	if err := waitForReplicatedTimeE(ctx, rightJobID, setup.right.db, initialScanTimeout); err != nil {
+		return fkTxnLDRJobs{}, errors.Wrap(err, "waiting for right initial scan")
+	}
+	return fkTxnLDRJobs{left: leftJobID, right: rightJobID}, nil
+}
+
+// cancelAllLDRJobs cancels every running LDR job on the cluster and waits
+// for each to reach a terminal state. Used between attempts in TestLDRFKTxn
+// so a failed CREATE LOGICAL REPLICATION STREAM can leave behind a partial
+// job without blocking the next attempt.
+//
+// NB: we must block on SHOW JOB WHEN COMPLETE before returning. CANCEL JOB
+// is async — it marks the job for cancellation but doesn't wait for the
+// resumer's goroutines to unwind. If we return early and the caller drops
+// the fktxn database, an LDR processor still spinning up can race with the
+// drop and try to lease a freshly-deleted destination descriptor.
+func cancelAllLDRJobs(t test.Test, sql *sqlutils.SQLRunner) {
+	rows := sql.QueryStr(t, "SELECT job_id FROM [SHOW JOBS] WHERE job_type = 'LOGICAL REPLICATION' AND status IN ('running', 'pending', 'paused')")
+	for _, row := range rows {
+		sql.Exec(t, fmt.Sprintf("CANCEL JOB %s", row[0]))
+	}
+	for _, row := range rows {
+		sql.Exec(t, fmt.Sprintf("SHOW JOB WHEN COMPLETE %s", row[0]))
+	}
+}
+
+// waitForReplicatedTimeE polls the LDR job's progress until it reports a
+// non-zero high-water mark or wait elapses. Returns an error on timeout
+// instead of failing the test, so the caller can retry with a different
+// seed.
+func waitForReplicatedTimeE(
+	ctx context.Context, jobID int, db *gosql.DB, wait time.Duration,
+) error {
+	deadline := timeutil.Now().Add(wait)
+	for {
+		info, err := getLogicalDataReplicationJobInfo(db, jobID)
+		if err == nil && !info.GetHighWater().IsZero() {
+			return nil
+		}
+		if timeutil.Now().After(deadline) {
+			if err != nil {
+				return errors.Wrapf(err, "job %d never reached non-zero high-water within %s", jobID, wait)
+			}
+			return errors.Newf("job %d never reached non-zero high-water within %s", jobID, wait)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
 }
 
 // verifyConflictCorrectness waits for replication to catch up, checks DLQs,
@@ -1018,6 +1256,8 @@ func (m mode) String() string {
 		return "immediate"
 	case ModeValidated:
 		return "validated"
+	case ModeTransactional:
+		return "transactional"
 	default:
 		return "default"
 	}
@@ -1027,6 +1267,7 @@ const (
 	Default = iota
 	ModeImmediate
 	ModeValidated
+	ModeTransactional
 )
 
 type multiClusterSpec struct {
