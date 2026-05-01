@@ -744,45 +744,35 @@ func initFKTxnAndStartLDR(
 
 	externalConnCmd := "CREATE EXTERNAL CONNECTION IF NOT EXISTS '%s' AS '%s'"
 	setup.right.sysSQL.Exec(t, fmt.Sprintf(externalConnCmd, leftExternalConn.Host, setup.left.PgURLForDatabase(dbName)))
-	setup.left.sysSQL.Exec(t, fmt.Sprintf(externalConnCmd, rightExternalConn.Host, setup.right.PgURLForDatabase(dbName)))
 
+	// Unidirectional LDR: left is the source, right is the sink. The
+	// workload only writes on the left, so a left→right reverse stream
+	// would just re-replicate the right's just-applied writes back, racing
+	// with conflict resolution and clobbering rows.
 	options := ""
 	if ldrConfig.mode != Default {
 		options = fmt.Sprintf("WITH mode='%s'", ldrConfig.mode)
 	}
-	startLDR := func(targetDB *gosql.DB, sourceURL string) (int, error) {
-		if _, err := targetDB.ExecContext(ctx, fmt.Sprintf("USE %s", dbName)); err != nil {
-			return 0, errors.Wrap(err, "USE database")
-		}
-		ldrCmd := fmt.Sprintf("CREATE LOGICAL REPLICATION STREAM FROM TABLES %s ON $1 INTO TABLES %s %s",
-			tableNamesStr, tableNamesStr, options)
-		var jobID int
-		if err := targetDB.QueryRowContext(ctx, ldrCmd, sourceURL).Scan(&jobID); err != nil {
-			return 0, errors.Wrap(err, "CREATE LOGICAL REPLICATION STREAM")
-		}
-		return jobID, nil
+	if _, err := setup.right.db.ExecContext(ctx, fmt.Sprintf("USE %s", dbName)); err != nil {
+		return fkTxnLDRJobs{}, errors.Wrap(err, "USE database on right")
 	}
-
-	rightJobID, err := startLDR(setup.right.db, leftExternalConn.String())
-	if err != nil {
-		return fkTxnLDRJobs{}, errors.Wrap(err, "starting right→left LDR")
-	}
-	leftJobID, err := startLDR(setup.left.db, rightExternalConn.String())
-	if err != nil {
-		return fkTxnLDRJobs{}, errors.Wrap(err, "starting left→right LDR")
+	ldrCmd := fmt.Sprintf("CREATE LOGICAL REPLICATION STREAM FROM TABLES %s ON $1 INTO TABLES %s %s",
+		tableNamesStr, tableNamesStr, options)
+	var rightJobID int
+	if err := setup.right.db.QueryRowContext(ctx, ldrCmd, leftExternalConn.String()).Scan(&rightJobID); err != nil {
+		return fkTxnLDRJobs{}, errors.Wrap(err, "CREATE LOGICAL REPLICATION STREAM")
 	}
 
 	initialScanTimeout := 2 * time.Minute
 	if ldrConfig.initialScanTimeout != 0 {
 		initialScanTimeout = ldrConfig.initialScanTimeout
 	}
-	if err := waitForReplicatedTimeE(ctx, leftJobID, setup.left.db, initialScanTimeout); err != nil {
-		return fkTxnLDRJobs{}, errors.Wrap(err, "waiting for left initial scan")
-	}
 	if err := waitForReplicatedTimeE(ctx, rightJobID, setup.right.db, initialScanTimeout); err != nil {
 		return fkTxnLDRJobs{}, errors.Wrap(err, "waiting for right initial scan")
 	}
-	return fkTxnLDRJobs{left: leftJobID, right: rightJobID}, nil
+	// leftJobID = 0 signals to the latency verifier and VerifyCorrectness
+	// helpers that no left→right job exists.
+	return fkTxnLDRJobs{right: rightJobID}, nil
 }
 
 // cancelAllLDRJobs cancels every running LDR job on the cluster and waits
