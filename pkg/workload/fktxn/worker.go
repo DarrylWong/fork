@@ -36,8 +36,8 @@ type WorkerConfig struct {
 	// when the chain is in the Exists state. Gone always advances via Upsert.
 	Mix OpMix
 
-	// MinChainLen and MaxChainLen bound the number of events per chain.
-	// A chain runs MinChainLen + rng.Intn(MaxChainLen-MinChainLen+1) events
+	// MinChainLen and MaxChainLen bound the number of txns per chain. A
+	// chain runs MinChainLen + rng.Intn(MaxChainLen-MinChainLen+1) txns
 	// against a single PK assignment before fresh PKs are picked. Longer
 	// chains build up more per-row history (UPSERT → UPDATE → DELETE →
 	// UPSERT) within a single worker stream, which the destination must
@@ -64,7 +64,7 @@ func NewWorker(cfg WorkerConfig, rng *rand.Rand) *Worker {
 	return &Worker{cfg: cfg, rng: rng}
 }
 
-// ChainResult summarizes one Run: how many events the chain attempted, how
+// ChainResult summarizes one Run: how many txns the chain attempted, how
 // many committed, and any source error that ended the chain early. The
 // committed/attempted ratio is the success ratio under contention; the
 // FailedEvent + FailErr fields let the caller categorize what kind of
@@ -72,11 +72,11 @@ func NewWorker(cfg WorkerConfig, rng *rand.Rand) *Worker {
 type ChainResult struct {
 	Attempted int
 	Committed int
-	// FailedEvent is the event that ended the chain on a tolerated source
-	// error. Nil if the chain ran to completion. Useful for breaking down
-	// contention failures by op type (which event types most often abort).
+	// FailedEvent is the FSM event whose action returned the source error
+	// that ended the chain. Nil if the chain ran to completion. Useful for
+	// breaking down contention failures by op type.
 	FailedEvent fsm.Event
-	// FailErr is the underlying error returned by the failed event. Nil
+	// FailErr is the underlying error returned by the failed action. Nil
 	// when the chain ran to completion. Used for classifying the contention
 	// type (FK violation vs. serialization vs. unique violation, etc.).
 	FailErr error
@@ -92,7 +92,7 @@ func (r ChainResult) FailureClass() string {
 }
 
 // Run executes one chain: pick a fresh PK assignment, then drive the FSM
-// through MinChainLen..MaxChainLen events. Each event runs in its own
+// through MinChainLen..MaxChainLen txns. Each FSM event runs in its own
 // transaction so the chain produces a sequence of separately-committed
 // txns the destination must apply in order.
 //

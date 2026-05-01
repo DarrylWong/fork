@@ -79,9 +79,9 @@ var fkConflictMeta = workload.Meta{
 		g.flags.IntVar(&g.workers, `workers`, 8,
 			`Concurrent worker goroutines.`)
 		g.flags.IntVar(&g.minChainLen, `min-chain-len`, 1,
-			`Minimum events per chain (one transaction per event).`)
+			`Minimum txns per chain.`)
 		g.flags.IntVar(&g.maxChainLen, `max-chain-len`, 5,
-			`Maximum events per chain.`)
+			`Maximum txns per chain.`)
 		g.flags.IntVar(&g.subdagRotateChains, `subdag-rotate-chains`, 1000,
 			`Re-pick the sub-DAG every N chains. 0 disables rotation.`)
 		g.flags.IntVar(&g.updatePct, `update-pct`, 70,

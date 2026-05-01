@@ -188,6 +188,16 @@ func (o *orchestrator) makeWorkerFn(rng *rand.Rand) func(context.Context) error 
 		res, err := w.Run(ctx)
 		elapsed := timeutil.Since(start)
 		o.hists.Get(`chain`).Record(elapsed)
+		// Record one observation per committed txn so the workload's ops/sec
+		// reflects committed transactions rather than chain attempts (which
+		// includes chains that died on the first txn). Use the chain's mean
+		// per-txn latency since we don't track per-event latency separately.
+		if res.Committed > 0 {
+			perTxn := elapsed / time.Duration(res.Committed)
+			for i := 0; i < res.Committed; i++ {
+				o.hists.Get(`committed_txn`).Record(perTxn)
+			}
+		}
 		if class := res.FailureClass(); class != "" {
 			o.hists.Get(class).Record(elapsed)
 		}
