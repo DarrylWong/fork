@@ -9,6 +9,7 @@ import (
 	"context"
 	"math/rand"
 
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/colinfo"
 	"github.com/cockroachdb/cockroach/pkg/sql/randgen"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/workload"
@@ -19,12 +20,16 @@ import (
 // entries that init applies via CREATE TABLE, and the ALTER TABLE FK
 // statements to apply afterward (collected for the PostLoad hook).
 //
-// FK actions are stripped to NO ACTION because the workload's transaction
-// generator drives explicit child-first deletes and parent-first inserts —
-// it does not branch on CASCADE / SET NULL / SET DEFAULT behavior. Letting
-// randgen emit those actions would silently violate the workload's
-// invariant.
-func generateSchema(seed int64, numTables int) ([]workload.Table, []tree.Statement) {
+// FKs are added by fkConflictMutator, a per-pair-probability mutator that
+// always emits NO ACTION. fkDensity is the per-ordered-pair probability of
+// attempting an FK; with N tables there are N*(N-1) ordered pairs (self-refs
+// excluded), so E[F] = N*(N-1)*fkDensity. Stock randgen.ForeignKeyMutator
+// uses a geometric outer loop that produces ~1 FK per call regardless of
+// table count, which leaves most tables in singleton FKGraphs after sub-DAG
+// trimming.
+func generateSchema(
+	seed int64, numTables int, fkDensity float64,
+) ([]workload.Table, []tree.Statement) {
 	rng := rand.New(rand.NewSource(seed))
 	stmts := randgen.RandCreateTables(
 		context.Background(),
@@ -32,7 +37,7 @@ func generateSchema(seed int64, numTables int) ([]workload.Table, []tree.Stateme
 		"t",
 		numTables,
 		[]randgen.TableOption{randgen.WithPrimaryIndexRequired()},
-		randgen.ForeignKeyMutator,
+		fkConflictMutator{density: fkDensity},
 	)
 
 	var tables []workload.Table
@@ -47,28 +52,233 @@ func generateSchema(seed int64, numTables int) ([]workload.Table, []tree.Stateme
 				Schema: fmtCtx.CloseAndGetString(),
 			})
 		case *tree.AlterTable:
-			stripFKActions(s)
 			fkStmts = append(fkStmts, s)
 		}
 	}
 	return tables, fkStmts
 }
 
-// stripFKActions clears ON DELETE / ON UPDATE actions on every FK constraint
-// in the ALTER TABLE statement. randgen.ForeignKeyMutator picks any of
-// CASCADE / SET NULL / SET DEFAULT / NO ACTION / RESTRICT, but the workload
-// only handles NO ACTION (the default). Zeroing out Actions falls back to
-// NO ACTION on both sides.
-func stripFKActions(alter *tree.AlterTable) {
-	for _, cmd := range alter.Cmds {
-		add, ok := cmd.(*tree.AlterTableAddConstraint)
-		if !ok {
-			continue
+// fkConflictMutator adds FK constraints to a list of CREATE TABLE statements.
+// It mirrors stock randgen.ForeignKeyMutator's column-matching and cycle
+// detection but replaces the geometric outer loop with an explicit per-pair
+// probability so callers can control coverage.
+//
+// Compared to the stock mutator:
+//   - Per ordered (child, parent) pair, attempt one FK with probability
+//     density. Stock uses `for rng.Intn(2) == 0` which is geometric in the
+//     number of FKs, independent of table count.
+//   - Always emits NO ACTION on both ON DELETE / ON UPDATE. The workload's
+//     transaction generator drives explicit child-first deletes and parent-
+//     first inserts and does not branch on reference action type; emitting
+//     CASCADE / SET NULL / SET DEFAULT would silently violate that
+//     invariant.
+//   - No self-refs and no cycles. Both are deferred to a future Phase 6
+//     mutator that adds nullability handling.
+type fkConflictMutator struct {
+	density float64
+}
+
+// Mutate implements randgen.Mutator.
+func (m fkConflictMutator) Mutate(
+	rng *rand.Rand, stmts []tree.Statement,
+) (mutated []tree.Statement, changed bool) {
+	// Index tables by name; collect their non-virtual columns. Same shape as
+	// stock foreignKeyMutator so the column-matching logic below is a direct
+	// port.
+	var cols [][]*tree.ColumnTableDef
+	var tableNames []tree.TableName
+	tableNameToColIdx := func(t tree.TableName) (int, bool) {
+		for i, name := range tableNames {
+			if t == name {
+				return i, true
+			}
 		}
-		fk, ok := add.ConstraintDef.(*tree.ForeignKeyConstraintTableDef)
-		if !ok {
-			continue
-		}
-		fk.Actions = tree.ReferenceActions{}
+		return 0, false
 	}
+	byName := map[tree.TableName]*tree.CreateTable{}
+	usedCols := map[tree.TableName]map[tree.Name]bool{}
+	dependsOn := map[tree.TableName]map[tree.TableName]bool{}
+
+	var tables []*tree.CreateTable
+	for _, stmt := range stmts {
+		table, ok := stmt.(*tree.CreateTable)
+		if !ok {
+			continue
+		}
+		// Skip partitioned tables; stock mutator skips them too because FK
+		// constraints + partitioning don't yield a usable filter.
+		var skip bool
+		for _, def := range table.Defs {
+			switch def := def.(type) {
+			case *tree.IndexTableDef:
+				if def.PartitionByIndex != nil {
+					skip = true
+				}
+			case *tree.UniqueConstraintTableDef:
+				if def.IndexTableDef.PartitionByIndex != nil {
+					skip = true
+				}
+			}
+		}
+		if skip {
+			continue
+		}
+		tables = append(tables, table)
+		byName[table.Table] = table
+		usedCols[table.Table] = map[tree.Name]bool{}
+		dependsOn[table.Table] = map[tree.TableName]bool{}
+		idx := len(cols)
+		cols = append(cols, nil)
+		tableNames = append(tableNames, table.Table)
+		for _, def := range table.Defs {
+			c, ok := def.(*tree.ColumnTableDef)
+			if !ok {
+				continue
+			}
+			if c.Computed.Virtual {
+				// Stock mutator skips virtual columns (#59671).
+				continue
+			}
+			cols[idx] = append(cols[idx], c)
+		}
+	}
+	if len(tables) == 0 {
+		return stmts, false
+	}
+
+	// For each ordered (child, parent) pair (excluding self-pairs), attempt
+	// one FK with probability density. Stock mutator's `for rng.Intn(2) == 0`
+	// produces ~1 FK total regardless of table count; this loop scales with
+	// N*(N-1) pairs and gives the caller direct coverage control.
+	for ci, child := range tables {
+		for pi, parent := range tables {
+			if ci == pi {
+				continue
+			}
+			if rng.Float64() >= m.density {
+				continue
+			}
+			if m.tryAddFK(rng, child, parent, cols, tableNameToColIdx, usedCols, dependsOn, byName, &stmts) {
+				changed = true
+			}
+		}
+	}
+	return stmts, changed
+}
+
+// tryAddFK attempts to add one FK from child to parent. Returns true if an
+// edge was added. Mirrors the column-matching and cycle-detection logic in
+// stock foreignKeyMutator.
+func (m fkConflictMutator) tryAddFK(
+	rng *rand.Rand,
+	child, parent *tree.CreateTable,
+	cols [][]*tree.ColumnTableDef,
+	tableNameToColIdx func(tree.TableName) (int, bool),
+	usedCols map[tree.TableName]map[tree.Name]bool,
+	dependsOn map[tree.TableName]map[tree.TableName]bool,
+	byName map[tree.TableName]*tree.CreateTable,
+	stmts *[]tree.Statement,
+) bool {
+	// Cycle check: if parent transitively depends on child, adding child→parent
+	// would close a cycle. Stock mutator does the same walk.
+	stack := []tree.TableName{parent.Table}
+	for i := 0; i < len(stack); i++ {
+		cur := stack[i]
+		if cur == child.Table {
+			return false
+		}
+		for t := range dependsOn[cur] {
+			stack = append(stack, t)
+		}
+	}
+
+	childIdx, _ := tableNameToColIdx(child.Table)
+	parentIdx, _ := tableNameToColIdx(parent.Table)
+
+	// Build the candidate FK column list for child: all non-virtual columns
+	// not already used by another FK on this table.
+	var fkCols []*tree.ColumnTableDef
+	for _, c := range cols[childIdx] {
+		if usedCols[child.Table][c.Name] {
+			continue
+		}
+		fkCols = append(fkCols, c)
+	}
+	if len(fkCols) == 0 {
+		return false
+	}
+	rng.Shuffle(len(fkCols), func(i, j int) { fkCols[i], fkCols[j] = fkCols[j], fkCols[i] })
+
+	// Geometric short-prefix: 50% one column, 25% two, etc. Same as stock.
+	prefixLen := 1
+	for len(fkCols) > prefixLen && rng.Intn(2) == 0 {
+		prefixLen++
+	}
+	fkCols = fkCols[:prefixLen]
+
+	if len(cols[parentIdx]) < len(fkCols) {
+		return false
+	}
+
+	// Match each fkCol to a type-identical parent column. Stock uses
+	// Type.Equivalent which is family-only and pairs INT2↔INT8 / FLOAT4↔FLOAT8
+	// / etc. The workload then propagates the parent's wider value into the
+	// child column unchanged and the driver-side encode step rejects it. Use
+	// Identical for an exact width/locale match instead.
+	availCols := append([]*tree.ColumnTableDef(nil), cols[parentIdx]...)
+	var usingCols []*tree.ColumnTableDef
+	for _, fkCol := range fkCols {
+		fkColType := tree.MustBeStaticallyKnownType(fkCol.Type)
+		found := false
+		for refI, refCol := range availCols {
+			if refCol.Computed.Virtual {
+				continue
+			}
+			refColType := tree.MustBeStaticallyKnownType(refCol.Type)
+			if fkColType.Identical(refColType) && colinfo.ColumnTypeIsIndexable(refColType) {
+				usingCols = append(usingCols, refCol)
+				availCols = append(availCols[:refI], availCols[refI+1:]...)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+
+	// Append a UNIQUE constraint to the parent on the referenced columns so
+	// the FK has something to reference. Stock mutator does the same — even
+	// when one already exists, the duplicate is harmless (#unneeded-unique).
+	refColumns := make(tree.IndexElemList, len(usingCols))
+	names := make(tree.NameList, len(usingCols))
+	for i, c := range usingCols {
+		refColumns[i].Column = c.Name
+		names[i] = c.Name
+	}
+	parent.Defs = append(parent.Defs, &tree.UniqueConstraintTableDef{
+		IndexTableDef: tree.IndexTableDef{Columns: refColumns},
+	})
+
+	fromNames := make(tree.NameList, len(fkCols))
+	for i, c := range fkCols {
+		fromNames[i] = c.Name
+		usedCols[child.Table][c.Name] = true
+	}
+	dependsOn[child.Table][parent.Table] = true
+
+	*stmts = append(*stmts, &tree.AlterTable{
+		Table: child.Table.ToUnresolvedObjectName(),
+		Cmds: tree.AlterTableCmds{&tree.AlterTableAddConstraint{
+			ConstraintDef: &tree.ForeignKeyConstraintTableDef{
+				Table:    byName[parent.Table].Table,
+				FromCols: fromNames,
+				ToCols:   names,
+				// NO ACTION on both sides — see fkConflictMutator doc.
+				Actions: tree.ReferenceActions{},
+				Match:   tree.MatchSimple,
+			},
+		}},
+	})
+	return true
 }
