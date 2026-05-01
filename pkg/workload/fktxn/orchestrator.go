@@ -8,8 +8,11 @@ package fktxn
 import (
 	"context"
 	gosql "database/sql"
+	"fmt"
 	"math/rand"
 	mathrandv2 "math/rand/v2"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -148,6 +151,7 @@ func newOrchestrator(
 		return workload.QueryLoad{}, errors.Wrap(err, "building initial sub-DAG")
 	}
 	o.state = state
+	logSubDAG(ctx, state)
 
 	workerFns := make([]func(context.Context) error, cfg.Workers)
 	for i := range workerFns {
@@ -198,6 +202,17 @@ func (o *orchestrator) makeWorkerFn(rng *rand.Rand) func(context.Context) error 
 				o.hists.Get(`committed_txn`).Record(perTxn)
 			}
 		}
+		// Record one observation per pivot attempt / success. The latency is
+		// the chain's elapsed time — pivot work isn't separately timed, but
+		// using the chain elapsed keeps the histograms comparable to the
+		// `chain` metric and the rate column (ops/sec) is what matters for
+		// pivot-effectiveness analysis.
+		for i := 0; i < res.PivotAttempted; i++ {
+			o.hists.Get(`pivot_attempted`).Record(elapsed)
+		}
+		for i := 0; i < res.PivotSucceeded; i++ {
+			o.hists.Get(`pivot_succeeded`).Record(elapsed)
+		}
 		if class := res.FailureClass(); class != "" {
 			o.hists.Get(class).Record(elapsed)
 		}
@@ -243,6 +258,36 @@ func (o *orchestrator) maybeRotate(ctx context.Context, count uint64) {
 		return
 	}
 	o.state = state
+	logSubDAG(ctx, state)
+}
+
+// logSubDAG emits one info line summarizing a sub-DAG selection. Used to
+// diagnose post-rotation behavior (e.g. when a rotation collapses the sub-DAG
+// down to a single table and the workload starts hitting unique violations
+// that look like an FK ordering bug).
+func logSubDAG(ctx context.Context, state *sharedState) {
+	tables := make([]string, 0, len(state.sub.Tables))
+	for name := range state.sub.Tables {
+		tables = append(tables, name)
+	}
+	sort.Strings(tables)
+	edges := make([]string, 0, len(state.sub.Edges))
+	for _, e := range state.sub.Edges {
+		edges = append(edges, fmt.Sprintf("%s->%s", e.ReferencingTable, e.ReferencedTable))
+	}
+	sort.Strings(edges)
+	dropped := make([]string, 0, len(state.dropped))
+	for _, e := range state.dropped {
+		dropped = append(dropped, fmt.Sprintf("%s->%s", e.ReferencingTable, e.ReferencedTable))
+	}
+	sort.Strings(dropped)
+	log.Dev.Infof(ctx,
+		"fktxn: sub-DAG generation=%d tables=[%s] edges=[%s] dropped=[%s]",
+		state.generation,
+		strings.Join(tables, ","),
+		strings.Join(edges, ","),
+		strings.Join(dropped, ","),
+	)
 }
 
 // buildState picks a random FK graph and derives a random sub-DAG. Caller

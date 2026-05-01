@@ -37,9 +37,16 @@ import (
 //   - WithPrimaryIndexFilter (ldrSafePK): rejects PKs containing
 //     composite-encoded columns (FLOAT/DECIMAL/JSON/COLLATEDSTRING/...) or
 //     virtual computed columns. LDR refuses both shapes.
+//
+// generateSchema returns ok=false when any generated table's primary key
+// contains a computed column. PK-as-computed breaks the workload's
+// client-side PK assignment and FK propagation; the caller (ensureSchema)
+// retries with a fresh seed. Non-PK computed columns are accepted — the txn
+// generator skips them in writes and reads back FK-referenced ones after
+// parent UPSERTs.
 func generateSchema(
 	seed int64, numTables int, fkDensity float64,
-) ([]workload.Table, []tree.Statement) {
+) (tables []workload.Table, fkStmts []tree.Statement, ok bool) {
 	rng := rand.New(rand.NewSource(seed))
 	stmts := randgen.RandCreateTables(
 		context.Background(),
@@ -51,15 +58,17 @@ func generateSchema(
 			randgen.WithSkipColumnFamilyMutations(),
 			randgen.WithColumnFilter(ldrSafeColumn),
 			randgen.WithPrimaryIndexFilter(ldrSafePK),
+			randgen.WithIndexFilter(ComputedColumnFilter),
 		},
 		fkConflictMutator{density: fkDensity},
 	)
 
-	var tables []workload.Table
-	var fkStmts []tree.Statement
 	for _, stmt := range stmts {
 		switch s := stmt.(type) {
 		case *tree.CreateTable:
+			if hasComputedPKColumn(s) {
+				return nil, nil, false
+			}
 			fmtCtx := tree.NewFmtCtx(tree.FmtParsable)
 			s.FormatBody(fmtCtx)
 			tables = append(tables, workload.Table{
@@ -70,7 +79,7 @@ func generateSchema(
 			fkStmts = append(fkStmts, s)
 		}
 	}
-	return tables, fkStmts
+	return tables, fkStmts, true
 }
 
 // ldrSafePK returns false if the candidate primary index contains a column
@@ -97,8 +106,42 @@ func ldrSafePK(_ *tree.IndexTableDef, columns []*tree.ColumnTableDef) bool {
 	return true
 }
 
+// ComputedColumnFilter rejects unique indexes whose key references a
+// computed column, either explicitly or via an expression key (which creates
+// a hidden virtual computed column). LDR's lock synthesis hashes datums from
+// the rangefeed-decoded row, which does not include computed columns —
+// hashing them yields a zero hash that collides arbitrarily, breaking
+// dependency tracking. Non-unique indexes don't participate in lock
+// synthesis, so they're left alone.
+func ComputedColumnFilter(def tree.TableDef, columns []*tree.ColumnTableDef) bool {
+	uc, ok := def.(*tree.UniqueConstraintTableDef)
+	if !ok {
+		return true
+	}
+	computed := make(map[tree.Name]bool, len(columns))
+	for _, c := range columns {
+		if c.Computed.Computed {
+			computed[c.Name] = true
+		}
+	}
+	for _, elem := range uc.Columns {
+		if elem.Expr != nil {
+			return false
+		}
+		if computed[elem.Column] {
+			return false
+		}
+	}
+	return true
+}
+
 // ldrSafeColumn returns false for column types LDR refuses to replicate at
 // all. RefCursor is the known offender today; add others here as we hit them.
+//
+// Computed columns are intentionally NOT filtered here: randgen falls back to
+// generating computed columns whenever the column-filter rejects a candidate,
+// so rejecting them here would loop forever. Tables containing any computed
+// column are dropped after generation by hasComputedColumn instead.
 func ldrSafeColumn(c *tree.ColumnTableDef) bool {
 	typ, ok := tree.GetStaticallyKnownType(c.Type)
 	if !ok {
@@ -109,6 +152,42 @@ func ldrSafeColumn(c *tree.ColumnTableDef) bool {
 		return false
 	}
 	return true
+}
+
+// hasComputedPKColumn reports whether the CREATE TABLE statement's primary
+// key contains any computed column. The workload pre-assigns PK values
+// client-side (AssignPKs) so it can coordinate diamond-shaped FK chains; a
+// computed PK column has no client-known value and breaks that flow.
+//
+// Non-PK computed columns are fine: the txn generator skips them in writes,
+// and FK-referenced computed UC columns get read back after the parent
+// UPSERT (see readBackComputedFKTargets).
+func hasComputedPKColumn(ct *tree.CreateTable) bool {
+	pkCols := make(map[tree.Name]bool)
+	for _, def := range ct.Defs {
+		switch d := def.(type) {
+		case *tree.ColumnTableDef:
+			if d.PrimaryKey.IsPrimaryKey {
+				pkCols[d.Name] = true
+			}
+		case *tree.UniqueConstraintTableDef:
+			if d.PrimaryKey {
+				for _, c := range d.Columns {
+					pkCols[c.Column] = true
+				}
+			}
+		}
+	}
+	for _, def := range ct.Defs {
+		c, ok := def.(*tree.ColumnTableDef)
+		if !ok {
+			continue
+		}
+		if c.Computed.Computed && pkCols[c.Name] {
+			return true
+		}
+	}
+	return false
 }
 
 // fkConflictMutator adds FK constraints to a list of CREATE TABLE statements.

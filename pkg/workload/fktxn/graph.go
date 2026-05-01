@@ -17,6 +17,12 @@ import (
 type Column struct {
 	Name     string
 	Nullable bool
+	// Computed is true when the column is a stored or virtual generated
+	// column. The txn generator skips computed columns in INSERT/UPSERT
+	// column lists (the DB rejects writes to them) and reads them back via
+	// SELECT after the parent UPSERT when downstream FKs depend on their
+	// values.
+	Computed bool
 	// Type is the column's SQL type. Used by the txn generator to produce
 	// type-appropriate random values via randgen.RandDatum. May be nil for
 	// columns whose type could not be parsed (e.g. user-defined types); the

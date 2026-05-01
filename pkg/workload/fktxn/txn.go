@@ -138,12 +138,107 @@ func ExecuteUpsertWithPinned(
 		if err := execUpsertRow(ctx, tx, t, row); err != nil {
 			return emitted, &UpsertError{Table: t.Name, Row: row, Err: err}
 		}
+		// If any in-sub child FK references a computed column on t, read it
+		// back so downstream buildRow calls can resolve the FK value.
+		if err := readBackComputedFKTargets(ctx, tx, t, sub, pkVals, row); err != nil {
+			return emitted, errors.Wrapf(err, "reading back computed FK targets for %s", t.Name)
+		}
 	}
 
 	if err := patchDroppedEdges(ctx, tx, sorted, droppedEdges, emitted); err != nil {
 		return emitted, errors.Wrap(err, "patching dropped edges")
 	}
 	return emitted, nil
+}
+
+// readBackComputedFKTargets fills computed columns on t into row when the
+// columns are referenced by any in-sub FK. Without this, downstream child
+// UPSERTs can't resolve their FK values — the parent's computed column was
+// populated by the DB on the just-executed UPSERT, but the workload never
+// chose a value for it client-side.
+//
+// Issues one SELECT per parent table that has at least one FK-referenced
+// computed column. The SELECT runs against the same tx as the UPSERT, so it
+// observes the just-written row.
+func readBackComputedFKTargets(
+	ctx context.Context, tx dbTx, t *Table, sub *FKGraph, pkVals []interface{}, row emittedRow,
+) error {
+	computed := make(map[string]bool)
+	for _, c := range t.Columns {
+		if c.Computed {
+			computed[c.Name] = true
+		}
+	}
+	if len(computed) == 0 {
+		return nil
+	}
+
+	// Collect computed columns on t that are referenced by some in-sub FK.
+	needed := make(map[string]bool)
+	for _, e := range sub.Edges {
+		if e.ReferencedTable != t.Name {
+			continue
+		}
+		for _, refCol := range e.ReferencedColumns {
+			if computed[refCol] {
+				needed[refCol] = true
+			}
+		}
+	}
+	if len(needed) == 0 {
+		return nil
+	}
+
+	pkCols := primaryKeyColumns(t)
+	if len(pkVals) != len(pkCols) {
+		return errors.AssertionFailedf(
+			"table %s expects %d PK values, got %d", t.Name, len(pkCols), len(pkVals),
+		)
+	}
+	colNames := make([]string, 0, len(needed))
+	for c := range needed {
+		colNames = append(colNames, c)
+	}
+	sort.Strings(colNames)
+	selectCols := make([]string, len(colNames))
+	for i, c := range colNames {
+		selectCols[i] = tree.NameString(c)
+	}
+	whereClauses := make([]string, len(pkCols))
+	args := make([]interface{}, len(pkCols))
+	for i, c := range pkCols {
+		whereClauses[i] = fmt.Sprintf("%s = $%d", tree.NameString(c), i+1)
+		args[i] = pkVals[i]
+	}
+	stmt := fmt.Sprintf(
+		"SELECT %s FROM %s WHERE %s",
+		strings.Join(selectCols, ", "),
+		tree.NameString(t.Name),
+		strings.Join(whereClauses, " AND "),
+	)
+	rows, err := tx.QueryContext(ctx, stmt, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return errors.AssertionFailedf(
+			"no row found in %s after UPSERT (PK=%v); read-back of computed columns failed",
+			t.Name, pkVals,
+		)
+	}
+	dest := make([]interface{}, len(colNames))
+	for i := range dest {
+		var v interface{}
+		dest[i] = &v
+	}
+	if err := rows.Scan(dest...); err != nil {
+		return err
+	}
+	for i, c := range colNames {
+		row[c] = *(dest[i].(*interface{}))
+	}
+	return rows.Err()
 }
 
 // UpsertError tags an ExecuteUpsert failure with the table that hit the
@@ -200,6 +295,13 @@ func buildRow(
 
 	row := make(emittedRow, len(t.Columns))
 	for _, col := range t.Columns {
+		// Computed columns are populated by the database; the workload
+		// neither writes them nor pre-computes their values. Downstream FKs
+		// that reference them are filled in by readBackComputedColumns after
+		// the parent UPSERT.
+		if col.Computed {
+			continue
+		}
 		fkVal, fkOk := fkValueByCol[col.Name]
 		switch {
 		case fkOk:

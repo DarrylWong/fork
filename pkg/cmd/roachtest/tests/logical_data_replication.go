@@ -595,9 +595,21 @@ func TestLDRFKTxn(
 	ctx context.Context, t test.Test, c cluster.Cluster, setup multiClusterSetup, ldrConfig ldrConfig,
 ) {
 	duration := 10 * time.Minute
-	const numTables = 6
+	// 10 tables (90 ordered pairs × 0.4 density ≈ 36 attempted FKs) gives
+	// the workload's `--require-min-fks=5` requirement enough headroom to
+	// land a usable schema after the computed-PK seed rejection. Smaller
+	// table counts cause init to exhaust the retry cap and fail.
+	const numTables = 10
+	// 32 workers on a 4-CPU workload node drives heavy cross-worker
+	// contention on shared parent rows, which is what surfaces FK-ordering
+	// bugs in the destination's apply path. The workload is mostly DB-bound
+	// (each event is one network round-trip), so over-subscribing the
+	// workload node's CPU is fine. Local runs stay at the workload's
+	// default of 8.
+	workers := 32
 	if c.IsLocal() {
 		duration = 2 * time.Minute
+		workers = 8
 	}
 
 	const dbName = "fktxn"
@@ -610,11 +622,16 @@ func TestLDRFKTxn(
 		tableNames: tableNames,
 	}
 
+	// NB: NewPseudoRand honors COCKROACH_RANDOM_SEED, so calling it inside
+	// the retry loop returns the same seed every iteration when the env var
+	// is set (which roachtest does for reproducibility). Draw the per-attempt
+	// seed from a single rng instead so each attempt tries a fresh schema.
+	rng, _ := randutil.NewPseudoRand()
 	var seed int64
 	var leftJobID, rightJobID int
 	var lastErr error
 	for attempt := 1; attempt <= maxSeedAttempts; attempt++ {
-		seed = int64(attempt)
+		seed = rng.Int63()
 		t.L().Printf("attempt %d: trying fktxn schema with seed=%d", attempt, seed)
 
 		// Reset both clusters to a clean slate. Cancel any LDR jobs from a
@@ -649,12 +666,14 @@ func TestLDRFKTxn(
 
 	monitor.Go(func(ctx context.Context) error {
 		defer close(workloadDoneCh)
-		// {pgurl:N:system} expands to a system-tenant URL on the workload
-		// node. fktxn uses the connection's current database, so override
-		// the URL's database via the `db` query param.
+		// {pgurl%s:system} expands to a comma-separated list of system-tenant
+		// URLs across all left-cluster nodes so connections round-robin and
+		// node 1 doesn't become the gateway hotspot. fktxn uses the
+		// connection's current database, so override the URL's database via
+		// the `db` query param.
 		return c.RunE(ctx, option.WithNodes(setup.workloadNode),
-			fmt.Sprintf("./cockroach workload run fktxn --workers=8 --duration=%s --db=%s {pgurl:%d:system}",
-				duration, dbName, setup.left.nodes[0]))
+			fmt.Sprintf("./cockroach workload run fktxn --workers=%d --duration=%s --db=%s {pgurl%s:system}",
+				workers, duration, dbName, setup.left.nodes))
 	})
 
 	monitor.Wait()
@@ -719,21 +738,6 @@ func initFKTxnAndStartLDR(
 		if err := c.RunE(ctx, option.WithNodes(setup.workloadNode), initCmd); err != nil {
 			return fkTxnLDRJobs{}, errors.Wrap(err, "fktxn init")
 		}
-	}
-
-	// Reject seeds whose generated schema has no FK constraints. The workload
-	// requires at least one FK; a schema with zero would pass LDR setup but
-	// fail at `workload run` startup.
-	var fkCount int
-	if err := setup.left.db.QueryRowContext(ctx, fmt.Sprintf(
-		"SELECT count(*) FROM %s.information_schema.table_constraints "+
-			"WHERE constraint_type = 'FOREIGN KEY'", dbName,
-	)).Scan(&fkCount); err != nil {
-		return fkTxnLDRJobs{}, errors.Wrap(err, "counting FK constraints")
-	}
-	t.L().Printf("seed %d schema has %d FK constraints", seed, fkCount)
-	if fkCount == 0 {
-		return fkTxnLDRJobs{}, errors.New("schema has no FK constraints")
 	}
 
 	tableNamesStr := "(" + dbName + "." + tableNames[0]

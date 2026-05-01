@@ -19,7 +19,10 @@ import (
 // invariant.
 func TestGenerateSchemaEmitsNoActionFKs(t *testing.T) {
 	for _, seed := range []int64{1, 7, 42, 100, 12345} {
-		tables, fkStmts := generateSchema(seed, 6, 0.4)
+		tables, fkStmts, ok := generateSchema(seed, 6, 0.4)
+		if !ok {
+			continue
+		}
 		require.NotEmpty(t, tables, "seed %d produced no tables", seed)
 
 		for _, stmt := range fkStmts {
@@ -49,8 +52,12 @@ func TestGenerateSchemaEmitsNoActionFKs(t *testing.T) {
 // guards the in-process cache, but the determinism contract is what makes
 // repro on a fresh process possible.
 func TestGenerateSchemaDeterministic(t *testing.T) {
-	tablesA, fksA := generateSchema(99, 5, 0.4)
-	tablesB, fksB := generateSchema(99, 5, 0.4)
+	tablesA, fksA, okA := generateSchema(99, 5, 0.4)
+	tablesB, fksB, okB := generateSchema(99, 5, 0.4)
+	require.Equal(t, okA, okB)
+	if !okA {
+		t.Skip("seed 99 produced computed columns")
+	}
 	require.Equal(t, len(tablesA), len(tablesB))
 	for i := range tablesA {
 		require.Equal(t, tablesA[i].Name, tablesB[i].Name)
@@ -74,7 +81,10 @@ func TestGenerateSchemaDensityScales(t *testing.T) {
 	count := func(density float64) int {
 		var total int
 		for seed := int64(0); seed < trials; seed++ {
-			_, fks := generateSchema(seed, numTables, density)
+			_, fks, ok := generateSchema(seed, numTables, density)
+			if !ok {
+				continue
+			}
 			total += len(fks)
 		}
 		return total

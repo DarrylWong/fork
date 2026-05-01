@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
+	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/workload"
 	"github.com/cockroachdb/cockroach/pkg/workload/histogram"
 	"github.com/cockroachdb/errors"
@@ -32,6 +33,7 @@ type fkConflict struct {
 
 	numTables          int
 	fkDensity          float64
+	requireMinFKs      int
 	workers            int
 	minChainLen        int
 	maxChainLen        int
@@ -46,6 +48,10 @@ type fkConflict struct {
 	schemaOnce sync.Once
 	tables     []workload.Table
 	fkStmts    []tree.Statement
+	// schemaErr captures the failure (if any) from the retry loop in
+	// ensureSchema. Tables() can't return an error, so we surface it through
+	// PostLoad and Ops instead.
+	schemaErr error
 }
 
 func init() {
@@ -76,13 +82,16 @@ var fkConflictMeta = workload.Meta{
 		g.flags.Float64Var(&g.fkDensity, `fk-density`, 0.4,
 			`Per-ordered-pair probability of an FK during schema generation. `+
 				`E[F] = num-tables*(num-tables-1)*fk-density.`)
+		g.flags.IntVar(&g.requireMinFKs, `require-min-fks`, 5,
+			`Minimum FK constraints the generated schema must contain. `+
+				`Init retries with seed+1, seed+2, ... up to a cap until satisfied.`)
 		g.flags.IntVar(&g.workers, `workers`, 8,
 			`Concurrent worker goroutines.`)
 		g.flags.IntVar(&g.minChainLen, `min-chain-len`, 1,
 			`Minimum txns per chain.`)
 		g.flags.IntVar(&g.maxChainLen, `max-chain-len`, 5,
 			`Maximum txns per chain.`)
-		g.flags.IntVar(&g.subdagRotateChains, `subdag-rotate-chains`, 1000,
+		g.flags.IntVar(&g.subdagRotateChains, `subdag-rotate-chains`, 10000,
 			`Re-pick the sub-DAG every N chains. 0 disables rotation.`)
 		g.flags.IntVar(&g.updatePct, `update-pct`, 70,
 			`Op-mix weight for UPDATE in the Exists state.`)
@@ -118,6 +127,9 @@ func (g *fkConflict) Hooks() workload.Hooks {
 // that the data load isn't subject to FK ordering constraints.
 func (g *fkConflict) postLoad(ctx context.Context, db *gosql.DB) error {
 	g.ensureSchema()
+	if g.schemaErr != nil {
+		return g.schemaErr
+	}
 	for _, stmt := range g.fkStmts {
 		if _, err := db.ExecContext(ctx, stmt.String()); err != nil {
 			return errors.Wrapf(err, "applying FK constraint: %s", stmt.String())
@@ -132,6 +144,9 @@ func (g *fkConflict) validate() error {
 	}
 	if g.fkDensity < 0 || g.fkDensity > 1 {
 		return errors.Newf("fk-density must be in [0, 1], got %f", g.fkDensity)
+	}
+	if g.requireMinFKs < 0 {
+		return errors.Newf("require-min-fks must be non-negative, got %d", g.requireMinFKs)
 	}
 	if g.workers <= 0 {
 		return errors.Newf("workers must be positive, got %d", g.workers)
@@ -169,9 +184,35 @@ func (g *fkConflict) Tables() []workload.Table {
 	return g.tables
 }
 
+// schemaRetryCap bounds the seed-bump loop in ensureSchema. Generation is
+// fast and deterministic, so a high cap is cheap; pick something well above
+// any realistic requirement-satisfaction probability.
+const schemaRetryCap = 100
+
 func (g *fkConflict) ensureSchema() {
 	g.schemaOnce.Do(func() {
-		g.tables, g.fkStmts = generateSchema(RandomSeed.Seed(), g.numTables, g.fkDensity)
+		baseSeed := RandomSeed.Seed()
+		for attempt := 0; attempt < schemaRetryCap; attempt++ {
+			seed := baseSeed + int64(attempt)
+			tables, fkStmts, ok := generateSchema(seed, g.numTables, g.fkDensity)
+			if !ok || len(fkStmts) < g.requireMinFKs {
+				continue
+			}
+			g.tables, g.fkStmts = tables, fkStmts
+			if attempt > 0 {
+				log.Dev.Infof(context.Background(),
+					"fktxn: schema accepted at seed=%d (attempt %d) with %d FKs",
+					seed, attempt+1, len(fkStmts))
+			}
+			return
+		}
+		// No seed in the search range produced an acceptable schema. Record
+		// the failure for postLoad/Ops to surface; do not fall back to a
+		// partial schema. Callers (LDR roachtest) handle init failure by
+		// retrying with a different base seed.
+		g.schemaErr = errors.Newf(
+			"no schema satisfied require-min-fks=%d after %d attempts starting at seed=%d",
+			g.requireMinFKs, schemaRetryCap, baseSeed)
 	})
 }
 

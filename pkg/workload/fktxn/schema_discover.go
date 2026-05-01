@@ -34,7 +34,7 @@ func DiscoverSchema(db *gosql.DB, dbName string) (*Schema, error) {
 
 func discoverColumns(db *gosql.DB, dbName string, s *Schema) error {
 	rows, err := db.Query(`
-		SELECT table_name, column_name, is_nullable, crdb_sql_type, ordinal_position
+		SELECT table_name, column_name, is_nullable, crdb_sql_type, ordinal_position, is_generated
 		FROM information_schema.columns
 		WHERE table_catalog = $1
 		  AND table_schema = 'public'
@@ -47,9 +47,9 @@ func discoverColumns(db *gosql.DB, dbName string, s *Schema) error {
 	defer rows.Close()
 
 	for rows.Next() {
-		var tableName, colName, isNullable, sqlType string
+		var tableName, colName, isNullable, sqlType, isGenerated string
 		var ordinal int
-		if err := rows.Scan(&tableName, &colName, &isNullable, &sqlType, &ordinal); err != nil {
+		if err := rows.Scan(&tableName, &colName, &isNullable, &sqlType, &ordinal, &isGenerated); err != nil {
 			return err
 		}
 
@@ -61,6 +61,7 @@ func discoverColumns(db *gosql.DB, dbName string, s *Schema) error {
 		col := Column{
 			Name:     colName,
 			Nullable: isNullable == "YES",
+			Computed: isGenerated == "ALWAYS",
 		}
 		// Parse the column's SQL type. crdb_sql_type round-trips through the
 		// parser. We only retain types that resolve to a built-in *types.T —
