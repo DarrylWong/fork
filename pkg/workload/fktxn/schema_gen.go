@@ -12,6 +12,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/colinfo"
 	"github.com/cockroachdb/cockroach/pkg/sql/randgen"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
+	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/workload"
 )
 
@@ -27,6 +28,15 @@ import (
 // uses a geometric outer loop that produces ~1 FK per call regardless of
 // table count, which leaves most tables in singleton FKGraphs after sub-DAG
 // trimming.
+//
+// LDR-targeted constraints applied during generation:
+//   - WithSkipColumnFamilyMutations: LDR rejects tables with multiple
+//     column families.
+//   - WithColumnFilter (ldrSafeColumn): drops columns of types LDR refuses
+//     to replicate (e.g. RefCursor).
+//   - WithPrimaryIndexFilter (ldrSafePK): rejects PKs containing
+//     composite-encoded columns (FLOAT/DECIMAL/JSON/COLLATEDSTRING/...) or
+//     virtual computed columns. LDR refuses both shapes.
 func generateSchema(
 	seed int64, numTables int, fkDensity float64,
 ) ([]workload.Table, []tree.Statement) {
@@ -36,7 +46,12 @@ func generateSchema(
 		rng,
 		"t",
 		numTables,
-		[]randgen.TableOption{randgen.WithPrimaryIndexRequired()},
+		[]randgen.TableOption{
+			randgen.WithPrimaryIndexRequired(),
+			randgen.WithSkipColumnFamilyMutations(),
+			randgen.WithColumnFilter(ldrSafeColumn),
+			randgen.WithPrimaryIndexFilter(ldrSafePK),
+		},
 		fkConflictMutator{density: fkDensity},
 	)
 
@@ -56,6 +71,44 @@ func generateSchema(
 		}
 	}
 	return tables, fkStmts
+}
+
+// ldrSafePK returns false if the candidate primary index contains a column
+// LDR can't accept as a PK column:
+//   - Composite-encoded types (FLOAT, DECIMAL, JSON, COLLATEDSTRING, ...).
+//   - Virtual computed columns.
+//
+// LDR rejects either shape with "table T has a primary key column ... with
+// composite encoding" or "table T has a virtual computed column ... that
+// appears in the primary key".
+func ldrSafePK(_ *tree.IndexTableDef, columns []*tree.ColumnTableDef) bool {
+	for _, c := range columns {
+		if c.Computed.Virtual {
+			return false
+		}
+		typ, ok := tree.GetStaticallyKnownType(c.Type)
+		if !ok {
+			return false
+		}
+		if colinfo.CanHaveCompositeKeyEncoding(typ) {
+			return false
+		}
+	}
+	return true
+}
+
+// ldrSafeColumn returns false for column types LDR refuses to replicate at
+// all. RefCursor is the known offender today; add others here as we hit them.
+func ldrSafeColumn(c *tree.ColumnTableDef) bool {
+	typ, ok := tree.GetStaticallyKnownType(c.Type)
+	if !ok {
+		return true
+	}
+	switch typ.Family() {
+	case types.RefCursorFamily:
+		return false
+	}
+	return true
 }
 
 // fkConflictMutator adds FK constraints to a list of CREATE TABLE statements.
