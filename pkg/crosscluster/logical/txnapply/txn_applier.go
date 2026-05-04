@@ -95,6 +95,7 @@ type Checkpoint struct{ Timestamp hlc.Timestamp }
 type Applier struct {
 	id          ldrdecoder.ApplierID
 	depResolver DependencyResolver
+	metrics     *Metrics
 
 	mu struct {
 		syncutil.Mutex
@@ -137,13 +138,16 @@ type Applier struct {
 // on error they are closed before returning. allApplierIDs must include all
 // applier IDs in the system (including this applier's own ID) so that the
 // applier can initialize the frontier map used to track when all appliers have
-// advanced past an EventHorizon.
+// advanced past an EventHorizon. metrics is shared across all appliers in the
+// job and is updated directly from the applier's mutating paths; it must be
+// non-nil.
 func NewApplier(
 	ctx context.Context,
 	id ldrdecoder.ApplierID,
 	writers []txnwriter.TransactionWriter,
 	depResolver DependencyResolver,
 	allApplierIDs []ldrdecoder.ApplierID,
+	metrics *Metrics,
 ) (_ *Applier, retErr error) {
 	defer func() {
 		if retErr != nil {
@@ -158,9 +162,13 @@ func NewApplier(
 	if depResolver == nil {
 		return nil, errors.New("dependency resolver must not be nil")
 	}
+	if metrics == nil {
+		return nil, errors.New("metrics must not be nil")
+	}
 	a := &Applier{
 		id:                id,
 		depResolver:       depResolver,
+		metrics:           metrics,
 		txnWriters:        writers,
 		localResolvedTime: MakeLatest[hlc.Timestamp](),
 	}
@@ -316,6 +324,7 @@ func (a *Applier) recordTransaction(transaction ScheduledTransaction) (bool, err
 
 	if transaction.remainingDeps == 0 {
 		if transaction.EventHorizon.LessEq(a.getGlobalFrontierLocked()) {
+			a.metrics.ReadyTxns.Inc(1)
 			return true, nil
 		}
 		heap.Push(&a.mu.horizonWaiting, horizonWaiter{
@@ -324,6 +333,7 @@ func (a *Applier) recordTransaction(transaction ScheduledTransaction) (bool, err
 		})
 		a.registerHorizonWaitLocked(transaction.EventHorizon)
 	}
+	a.metrics.BlockedTxns.Inc(1)
 	return false, nil
 }
 
@@ -454,7 +464,10 @@ func (a *Applier) recordCompletion(
 	delete(a.mu.localWaiting, completedID)
 
 	a.mu.committed.Resolve(completedID)
-	delete(a.mu.transactions, completedID)
+	if _, ok := a.mu.transactions[completedID]; ok {
+		delete(a.mu.transactions, completedID)
+		a.metrics.ReadyTxns.Dec(1)
+	}
 
 	// Advance the resolved time by draining applied txns from the front
 	// of the ordered txnIDs buffer.
@@ -508,6 +521,8 @@ func (a *Applier) resolveDependencyLocked(
 		if waitingTxn.remainingDeps == 0 {
 			if waitingTxn.EventHorizon.LessEq(a.getGlobalFrontierLocked()) {
 				readyBuffer.AddLast(waitingTxn.Transaction)
+				a.metrics.BlockedTxns.Dec(1)
+				a.metrics.ReadyTxns.Inc(1)
 			} else {
 				heap.Push(&a.mu.horizonWaiting, horizonWaiter{
 					txnID:   waitingID,
@@ -564,6 +579,8 @@ func (a *Applier) drainSatisfiedHorizonWaitersLocked(
 		heap.Pop(&a.mu.horizonWaiting)
 		txn := a.mu.transactions[top.txnID]
 		readyBuffer.AddLast(txn.Transaction)
+		a.metrics.BlockedTxns.Dec(1)
+		a.metrics.ReadyTxns.Inc(1)
 	}
 }
 

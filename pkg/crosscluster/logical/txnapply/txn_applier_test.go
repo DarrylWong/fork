@@ -18,6 +18,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
 	"github.com/cockroachdb/cockroach/pkg/util/randutil"
+	"github.com/cockroachdb/cockroach/pkg/util/ring"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/require"
@@ -367,6 +368,119 @@ func TestTxnApplierIndependent(t *testing.T) {
 	}
 }
 
+// TestWaitingTxnMetrics tests that the BlockedTxns and ReadyTxns metrics
+// are working as intended.
+func TestWaitingTxnMetrics(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	ctx := context.Background()
+	const localID ldrdecoder.ApplierID = 1
+	allIDs := []ldrdecoder.ApplierID{localID}
+
+	newApplier := func(t *testing.T) (*Applier, *Metrics) {
+		metrics := MakeMetrics()
+		writers := []txnwriter.TransactionWriter{&benchWriter{}}
+		a, err := NewApplier(ctx, localID, writers,
+			NewDependencyTracker(allIDs), allIDs, metrics)
+		require.NoError(t, err)
+		t.Cleanup(func() { a.Close(ctx) })
+		return a, metrics
+	}
+
+	newTxn := func(t *testing.T, a *Applier, ts, eventHorizon int64, deps ...ldrdecoder.TxnID) (bool, ldrdecoder.TxnID) {
+		id := ldrdecoder.TxnID{ApplierID: localID, Timestamp: hlc.Timestamp{WallTime: ts}}
+		appliable, err := a.recordTransaction(ScheduledTransaction{
+			Transaction:  ldrdecoder.Transaction{TxnID: id},
+			Dependencies: deps,
+			EventHorizon: hlc.Timestamp{WallTime: eventHorizon},
+		})
+		require.NoError(t, err)
+		return appliable, id
+	}
+
+	resolveDep := func(t *testing.T, a *Applier, completedID ldrdecoder.TxnID) {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		err := a.resolveDependencyLocked(completedID, a.mu.localWaiting[completedID],
+			new(ring.MakeBuffer[ldrdecoder.Transaction](nil)))
+		require.NoError(t, err)
+	}
+
+	t.Run("basic", func(t *testing.T) {
+		a, m := newApplier(t)
+
+		// Add a txn with no dependencies, should immediately be placed on the
+		// ready buffer.
+		appliable, txn1 := newTxn(t, a, 1, 0)
+		require.True(t, appliable)
+		require.EqualValues(t, 0, m.BlockedTxns.Value())
+		require.EqualValues(t, 1, m.ReadyTxns.Value())
+
+		// Add a txn that's blocked on the first txn.
+		appliable, txn2 := newTxn(t, a, 2, 0, txn1)
+		require.False(t, appliable)
+		require.EqualValues(t, 1, m.BlockedTxns.Value())
+		require.EqualValues(t, 1, m.ReadyTxns.Value())
+
+		// Mark the dependency as resolved for the first txn, which should mark the second txn as ready.
+		resolveDep(t, a, txn1)
+		require.EqualValues(t, 0, m.BlockedTxns.Value())
+		require.EqualValues(t, 2, m.ReadyTxns.Value())
+
+		// Complete both txns, gauges should drop to 0.
+		for _, id := range []ldrdecoder.TxnID{txn1, txn2} {
+			err := a.recordCompletion(ctx,
+				appliedTransaction{Transaction: ldrdecoder.Transaction{TxnID: id}},
+				new(ring.MakeBuffer[ldrdecoder.Transaction](nil)))
+			require.NoError(t, err)
+		}
+		require.EqualValues(t, 0, m.BlockedTxns.Value())
+		require.EqualValues(t, 0, m.ReadyTxns.Value())
+	})
+
+	// Test that a txn that's blocked on multiple dependencies isn't
+	// marked as ready until we've resolved all dependencies.
+	t.Run("multiple dependencies", func(t *testing.T) {
+		a, m := newApplier(t)
+		_, dep1 := newTxn(t, a, 1, 0)
+		_, dep2 := newTxn(t, a, 2, 0)
+		_, dep3 := newTxn(t, a, 3, 0)
+
+		_, _ = newTxn(t, a, 4, 0, dep1, dep2, dep3)
+		require.EqualValues(t, 1, m.BlockedTxns.Value())
+
+		// Resolve two of three: blocked stays at 1, ready unchanged.
+		resolveDep(t, a, dep1)
+		resolveDep(t, a, dep2)
+		require.EqualValues(t, 1, m.BlockedTxns.Value())
+		require.EqualValues(t, 3, m.ReadyTxns.Value())
+
+		// Resolve the last dep, everything should be ready.
+		resolveDep(t, a, dep3)
+		require.EqualValues(t, 0, m.BlockedTxns.Value())
+		require.EqualValues(t, 4, m.ReadyTxns.Value())
+	})
+
+	t.Run("horizon blocked", func(t *testing.T) {
+		a, m := newApplier(t)
+		// Add a txn that's blocked on the Event Horizon to see its
+		// correctly marked as blocked.
+		appliable, _ := newTxn(t, a, 0, 10)
+		require.False(t, appliable, "horizon blocked txn should not be appliable")
+		require.EqualValues(t, 1, m.BlockedTxns.Value())
+		require.EqualValues(t, 0, m.ReadyTxns.Value())
+
+		// Advance the frontier so we are no longer blocked on the event horizon.
+		completedTxn, ok := a.processCheckpoint(hlc.Timestamp{WallTime: 11})
+		require.True(t, ok)
+		err := a.recordCompletion(ctx, completedTxn,
+			new(ring.MakeBuffer[ldrdecoder.Transaction](nil)))
+		require.NoError(t, err)
+		require.EqualValues(t, 0, m.BlockedTxns.Value())
+		require.EqualValues(t, 1, m.ReadyTxns.Value())
+	})
+}
+
 // mockCoordinator simulates the coordinator's checkpoint behavior in tests.
 // It sends a checkpoint at txn.timestamp-1 to all appliers when a txn's
 // EventHorizon exceeds the previous checkpoint (required for correctness),
@@ -468,7 +582,7 @@ func runDistributedApplier(
 		for i := range writers {
 			writers[i] = sharedWriter
 		}
-		a, err := NewApplier(ctx, id, writers, depTracker, ids)
+		a, err := NewApplier(ctx, id, writers, depTracker, ids, MakeMetrics())
 		require.NoError(t, err)
 
 		inputs[id] = make(chan ApplierEvent, 2*len(dag)+len(ids)+1)
@@ -620,7 +734,7 @@ func runBenchApplier(b *testing.B, dag []txnNode, numWritersPerApplier int, rngS
 		for i := range writers {
 			writers[i] = sharedWriter
 		}
-		a, err := NewApplier(ctx, id, writers, depTracker, ids)
+		a, err := NewApplier(ctx, id, writers, depTracker, ids, MakeMetrics())
 		require.NoError(b, err)
 		inputs[id] = make(chan ApplierEvent, 2*len(dag)+len(ids)+1)
 		appliers[id] = a

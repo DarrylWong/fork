@@ -12,6 +12,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/crosscluster/logical/txnapply"
 	"github.com/cockroachdb/cockroach/pkg/crosscluster/logical/txnmode"
 	"github.com/cockroachdb/cockroach/pkg/jobs"
+	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
 	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/errors"
@@ -77,6 +78,10 @@ func (r *logicalReplicationResumer) runTxnCoordinator(
 	heartbeatInterval := func() time.Duration {
 		return heartbeatFrequency.Get(&jobExecCtx.ExecCfg().Settings.SV)
 	}
-	coordinator := txnmode.NewTxnLdrCoordinator(jobExecCtx, r.job, client, heartbeatInterval, endTime)
+	metrics := jobExecCtx.ExecCfg().JobRegistry.MetricsStruct().
+		JobSpecificMetrics[jobspb.TypeLogicalReplication].(*Metrics)
+	coordinator := txnmode.NewTxnLdrCoordinator(
+		jobExecCtx, r.job, client, heartbeatInterval, endTime, metrics.TxnApplierMetrics,
+	)
 	return coordinator.Resume(ctx)
 }

@@ -8,6 +8,7 @@ package logical
 import (
 	"time"
 
+	"github.com/cockroachdb/cockroach/pkg/crosscluster/logical/txnapply"
 	"github.com/cockroachdb/cockroach/pkg/util/metric"
 	"github.com/cockroachdb/crlib/crstrings"
 )
@@ -268,6 +269,8 @@ type Metrics struct {
 	LabeledEventsDLQed    *metric.CounterVec
 	LabeledScanningRanges *metric.GaugeVec
 	LabeledCatchupRanges  *metric.GaugeVec
+
+	TxnApplierMetrics *txnapply.Metrics
 }
 
 // MetricStruct implements the metric.Struct interface.
@@ -317,5 +320,7 @@ func MakeMetrics(histogramWindow time.Duration) metric.Struct {
 		LabeledEventsDLQed:    metric.NewExportedCounterVec(metaLabeledEventsDLQed, []string{"label"}),
 		LabeledScanningRanges: metric.NewExportedGaugeVec(metaLabeledScanningRanges, []string{"label"}),
 		LabeledCatchupRanges:  metric.NewExportedGaugeVec(metaLabeledCatchupRanges, []string{"label"}),
+
+		TxnApplierMetrics: txnapply.MakeMetrics(),
 	}
 }

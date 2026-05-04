@@ -99,6 +99,8 @@ type TxnLdrCoordinator struct {
 	// strictly less than endTime and returns ErrEndTimeReached
 	// once the applier frontier reaches endTime.Prev().
 	endTime hlc.Timestamp
+
+	applierMetrics *txnapply.Metrics
 }
 
 func NewTxnLdrCoordinator(
@@ -107,6 +109,7 @@ func NewTxnLdrCoordinator(
 	client streamclient.Client,
 	heartbeatInterval func() time.Duration,
 	endTime hlc.Timestamp,
+	applierMetrics *txnapply.Metrics,
 ) *TxnLdrCoordinator {
 	payload := job.Details().(jobspb.LogicalReplicationDetails)
 	return &TxnLdrCoordinator{
@@ -116,6 +119,7 @@ func NewTxnLdrCoordinator(
 		client:            client,
 		heartbeatInterval: heartbeatInterval,
 		endTime:           endTime,
+		applierMetrics:    applierMetrics,
 	}
 }
 
@@ -166,7 +170,7 @@ func (p *TxnLdrCoordinator) Resume(ctx context.Context) error {
 	const applierID ldrdecoder.ApplierID = 1
 	allIDs := []ldrdecoder.ApplierID{applierID}
 	applierEvents := make(chan txnapply.ApplierEvent)
-	applier, err := txnapply.NewApplier(ctx, applierID, writers, txnapply.NewDependencyTracker(allIDs), allIDs)
+	applier, err := txnapply.NewApplier(ctx, applierID, writers, txnapply.NewDependencyTracker(allIDs), allIDs, p.applierMetrics)
 	if err != nil {
 		return errors.Wrap(err, "creating applier")
 	}
