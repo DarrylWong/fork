@@ -456,8 +456,18 @@ func (a *Applier) recordCompletion(
 	defer a.mu.Unlock()
 
 	completedID := completedTxn.TxnID
+	waiters := a.mu.localWaiting[completedID]
+	// A DLQ'd txn flows through here identically to a successful one: its
+	// dependents get unblocked and the resolved time advances past it. Log
+	// the propagation so we can correlate cascaded FK violations with the
+	// upstream DLQ that triggered them.
+	if completedTxn.applyResult.DlqReason != nil {
+		log.VEventf(ctx, 1,
+			"DLQ'd txn %s unblocking %d local dependents; reason=%v",
+			completedID, len(waiters), completedTxn.applyResult.DlqReason)
+	}
 	if err := a.resolveDependencyLocked(
-		completedID, a.mu.localWaiting[completedID], readyBuffer,
+		completedID, waiters, readyBuffer,
 	); err != nil {
 		return err
 	}

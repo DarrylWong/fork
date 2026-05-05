@@ -9,6 +9,8 @@ package txnmode
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/crosscluster"
@@ -361,6 +363,13 @@ func (p *TxnLdrCoordinator) stageSchedule(
 				// Derive locks for the transaction.
 				lockSet, err := lockSynthesizer.DeriveLocks(ctx, batch.transactions[i].WriteSet)
 				if err != nil {
+					if errors.Is(err, txnlock.ErrApplyCycle) && log.V(1) {
+						log.Dev.Infof(ctx,
+							"cycle detected for txn %s with %d rows: %s",
+							batch.transactions[i].TxnID,
+							len(batch.transactions[i].WriteSet),
+							formatWriteSet(batch.transactions[i].WriteSet))
+					}
 					return errors.Wrap(err, "deriving locks for transaction")
 				}
 				batch.transactions[i].WriteSet = lockSet.SortedRows
@@ -539,4 +548,30 @@ func (p *TxnLdrCoordinator) createTxnFeed(
 	sv := &p.execCtx.ExecCfg().Settings.SV
 	targetBatchKVs := int(txnBatchSize.Get(sv))
 	return txnfeed.NewMergeFeed(orderedSubs, coveringSpan, targetBatchKVs, p.endTime), nil
+}
+
+// formatWriteSet renders a transaction's WriteSet as a compact one-row-per-line
+// string for diagnostic logging on cycle errors. Each entry shows the op kind,
+// destination table ID, and the row + prev-row datums.
+func formatWriteSet(rows []ldrdecoder.DecodedRow) string {
+	var b strings.Builder
+	for i := range rows {
+		r := &rows[i]
+		var op string
+		switch {
+		case r.IsDeleteRow():
+			op = "DELETE"
+		case r.IsInsertRow():
+			op = "INSERT"
+		case r.IsUpdateRow():
+			op = "UPDATE"
+		case r.IsTombstoneUpdate():
+			op = "TOMBSTONE_UPDATE"
+		default:
+			op = "UNKNOWN"
+		}
+		fmt.Fprintf(&b, "\n  [%d] %s table=%d row=%v prev=%v",
+			i, op, r.TableID, r.Row, r.PrevRow)
+	}
+	return b.String()
 }

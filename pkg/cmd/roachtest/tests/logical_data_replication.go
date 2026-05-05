@@ -622,6 +622,13 @@ func TestLDRFKTxn(
 		tableNames: tableNames,
 	}
 
+	// Surface destination-side LDR diagnostics:
+	//  - txn_applier=1: log DLQ propagation through the dep tracker.
+	//  - txnmode=1: dump the WriteSet on apply-cycle errors.
+	// Set on the right cluster only since it's the unidirectional destination.
+	setup.right.sysSQL.Exec(t,
+		"SET CLUSTER SETTING server.debug.default_vmodule = 'txn_applier=1,txnmode=1'")
+
 	// NB: NewPseudoRand honors COCKROACH_RANDOM_SEED, so calling it inside
 	// the retry loop returns the same seed every iteration when the env var
 	// is set (which roachtest does for reproducibility). Draw the per-attempt
