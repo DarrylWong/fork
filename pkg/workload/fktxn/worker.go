@@ -263,7 +263,7 @@ func (w *Worker) pivotAndRetryUpsert(
 	if applyErr != nil {
 		// The retry hit another contention error. Roll back and let the
 		// caller report the original violation; the chain ends.
-		_ = tx.Rollback() //nolint:returnerrcheck
+		_ = tx.Rollback()   //nolint:returnerrcheck
 		return outcome, nil //nolint:returnerrcheck
 	}
 	if err := tx.Commit(); err != nil {
@@ -301,6 +301,14 @@ var sourceErrorClass = []struct {
 	{"unique_violation", []string{
 		"duplicate key value",
 		"violates unique constraint",
+	}},
+	// SQLSTATE 22003 covers any value the source can't represent: integer
+	// overflow (including expression-index sums of two near-max ints),
+	// out-of-range time/timestamp/interval, decimal precision/scale. The
+	// workload generates datums at the extremes of each type's domain via
+	// randgen.RandDatum, so these are tolerable source-side rejections.
+	{"out_of_range", []string{
+		"out of range",
 	}},
 }
 
