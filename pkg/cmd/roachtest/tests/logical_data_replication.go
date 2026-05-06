@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -667,7 +668,12 @@ func TestLDRFKTxn(
 	}
 
 	workloadDoneCh := make(chan struct{})
-	maxExpectedLatency := 3 * time.Minute
+	// fktxn produces dense source-side contention (FK violations, UC
+	// pivots, serialization retries) which can spike applier latency at
+	// the destination well past the 3m default used by other LDR tests.
+	// TODO(darryl): bump to 10m once we increase the workload duration so
+	// spikes have more headroom relative to the run length.
+	maxExpectedLatency := 6 * time.Minute
 	monitor := c.NewDeprecatedMonitor(ctx, setup.CRDBNodes())
 	validateLatency := setupLatencyVerifiers(ctx, t, c, monitor, leftJobID, rightJobID, setup, workloadDoneCh, maxExpectedLatency)
 
@@ -678,14 +684,65 @@ func TestLDRFKTxn(
 		// node 1 doesn't become the gateway hotspot. fktxn uses the
 		// connection's current database, so override the URL's database via
 		// the `db` query param.
-		return c.RunE(ctx, option.WithNodes(setup.workloadNode),
-			fmt.Sprintf("./cockroach workload run fktxn --workers=%d --duration=%s --db=%s {pgurl%s:system}",
-				workers, duration, dbName, setup.left.nodes))
+		cmd := fmt.Sprintf("./cockroach workload run fktxn --workers=%d --duration=%s --db=%s {pgurl%s:system}",
+			workers, duration, dbName, setup.left.nodes)
+		result, err := c.RunWithDetailsSingleNode(ctx, t.L(), option.WithNodes(setup.workloadNode), cmd)
+		if err != nil {
+			return err
+		}
+		logFKTxnFinalStats(t, result.Stdout)
+		return nil
 	})
 
 	monitor.Wait()
 	validateLatency()
 	verifyFKTxnCorrectness(ctx, t, setup, leftJobID, rightJobID, ldrWorkload)
+}
+
+// logFKTxnFinalStats extracts the per-metric summary block at the end of
+// the workload's stdout and prints it to the test log. The workload prints
+// one block per metric of the form:
+//
+//	_elapsed___errors_____ops(total)___ops/sec(cum)__avg(ms)__p50(ms)...
+//	  600.0s        0         137718          229.5    139.4    142.6...  chain
+//
+// We surface chain, committed_txn, and the failure-class counters so the
+// test log shows source-side throughput and contention shape without having
+// to dig into the workload run log.
+func logFKTxnFinalStats(t test.Test, stdout string) {
+	wanted := map[string]bool{
+		"chain":            true,
+		"committed_txn":    true,
+		"fk_violation":     true,
+		"unique_violation": true,
+		"out_of_range":     true,
+		"serialization":    true,
+		"pivot_attempted":  true,
+		"pivot_succeeded":  true,
+	}
+	// Walk lines in reverse so the last (final) summary entry per metric wins.
+	lines := strings.Split(stdout, "\n")
+	stats := make(map[string]string, len(wanted))
+	for i := len(lines) - 1; i >= 0; i-- {
+		fields := strings.Fields(lines[i])
+		if len(fields) == 0 {
+			continue
+		}
+		metric := fields[len(fields)-1]
+		if !wanted[metric] || stats[metric] != "" {
+			continue
+		}
+		stats[metric] = lines[i]
+	}
+	t.L().Printf("fktxn final stats:")
+	for _, m := range []string{
+		"chain", "committed_txn", "fk_violation", "unique_violation",
+		"out_of_range", "serialization", "pivot_attempted", "pivot_succeeded",
+	} {
+		if line, ok := stats[m]; ok {
+			t.L().Printf("  %s", strings.TrimSpace(line))
+		}
+	}
 }
 
 // verifyFKTxnCorrectness waits for both sides to catch up and asserts that
