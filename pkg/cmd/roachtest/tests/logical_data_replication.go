@@ -684,7 +684,14 @@ func TestLDRFKTxn(
 		// node 1 doesn't become the gateway hotspot. fktxn uses the
 		// connection's current database, so override the URL's database via
 		// the `db` query param.
-		cmd := fmt.Sprintf("./cockroach workload run fktxn --workers=%d --duration=%s --db=%s {pgurl%s:system}",
+		//
+		// --pk-pool-size=100 deliberately raises cross-worker PK overlap to
+		// produce source-side serialization conflicts (the cleanest signal
+		// that the destination is exercising real ordering). Tune via the
+		// final stats: target ~5-15% serialization rate. Lower N for more
+		// contention; higher N for less. With workers=32 and N=100, single-
+		// column-PK collision is ~27%/write; composite PKs collide much less.
+		cmd := fmt.Sprintf("./cockroach workload run fktxn --workers=%d --duration=%s --pk-pool-size=100 --db=%s {pgurl%s:system}",
 			workers, duration, dbName, setup.left.nodes)
 		result, err := c.RunWithDetailsSingleNode(ctx, t.L(), option.WithNodes(setup.workloadNode), cmd)
 		if err != nil {
