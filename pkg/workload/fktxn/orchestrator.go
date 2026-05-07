@@ -22,7 +22,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/workload"
 	"github.com/cockroachdb/cockroach/pkg/workload/histogram"
 	"github.com/cockroachdb/errors"
-	"github.com/jackc/pgx/v5/stdlib"
 )
 
 // orchestratorConfig is the static run-time configuration assembled by Ops()
@@ -30,7 +29,6 @@ import (
 // shape, and op mix.
 type orchestratorConfig struct {
 	URLs              []string
-	ConnFlags         *workload.ConnFlags
 	Workers           int
 	MinChainLen       int
 	MaxChainLen       int
@@ -51,20 +49,16 @@ type orchestratorConfig struct {
 // happens out-of-band when the chain count crosses the rotation threshold.
 //
 // Lifecycle:
-//   - newOrchestrator opens a pgx pool, discovers the schema, builds the
-//     initial sub-DAG/pool, and returns one WorkerFn per worker.
+//   - newOrchestrator opens one *sql.DB per worker (each round-robined onto
+//     a different URL), discovers the schema, builds the initial sub-DAG/
+//     pool, and returns one WorkerFn per worker.
 //   - Each WorkerFn runs one chain per call (the workload framework loops).
 //   - On chain rotation, the next worker to enter the rotation block swaps
 //     the shared state under a write lock; concurrent workers wait via the
 //     rwmutex so they pick up the new state on the very next chain.
-//   - Close() shuts down the connection pool.
+//   - Close() shuts down every per-worker *sql.DB.
 type orchestrator struct {
-	cfg orchestratorConfig
-	mcp *workload.MultiConnPool
-	// db is a *sql.DB view of mcp used for schema discovery and for the
-	// transaction handles workers acquire (each worker uses BeginTx on db
-	// so per-worker transactions are independent).
-	db     *gosql.DB
+	cfg    orchestratorConfig
 	dbName string
 	hists  *histogram.Histograms
 
@@ -102,39 +96,52 @@ type sharedState struct {
 	pkPool PKValuePool
 }
 
-// newOrchestrator wires up the connection pool, discovers the schema, builds
-// the initial sub-DAG and pool, and produces a QueryLoad with one worker
-// function per --workers. Each worker function runs exactly one chain per
-// invocation; the workload framework drives the loop.
+// newOrchestrator opens one *sql.DB per worker (each pinned to a different
+// URL via round-robin), discovers the schema, builds the initial sub-DAG
+// and pool, and produces a QueryLoad with one worker function per
+// --workers. Each worker function runs exactly one chain per invocation;
+// the workload framework drives the loop.
 func newOrchestrator(
 	ctx context.Context, cfg orchestratorConfig, reg *histogram.Registry,
 ) (workload.QueryLoad, error) {
-	poolCfg := workload.NewMultiConnPoolCfgFromFlags(cfg.ConnFlags)
-	// Each worker opens transactions concurrently; cap connections at
-	// workers + 1 to leave one connection for orchestrator-level work
-	// (schema re-discovery, future health checks).
-	poolCfg.MaxTotalConnections = cfg.Workers + 1
-	mcp, err := workload.NewMultiConnPool(ctx, poolCfg, cfg.URLs...)
-	if err != nil {
-		return workload.QueryLoad{}, err
+	if len(cfg.URLs) == 0 {
+		return workload.QueryLoad{}, errors.New("no URLs provided")
 	}
 
-	db := stdlib.OpenDBFromPool(mcp.Get())
+	closeAll := func(dbs []*gosql.DB) {
+		for _, db := range dbs {
+			_ = db.Close()
+		}
+	}
 
-	dbName, err := currentDatabase(ctx, db)
+	// One *sql.DB per worker, round-robined across URLs. Spreading workers
+	// across nodes matters: a single shared *sql.DB pins every worker to
+	// whichever node it first connected to, which concentrates load on one
+	// node and defeats the point of accepting multiple URLs.
+	workerDBs := make([]*gosql.DB, cfg.Workers)
+	for i := range workerDBs {
+		url := cfg.URLs[i%len(cfg.URLs)]
+		db, err := gosql.Open("cockroach", url)
+		if err != nil {
+			closeAll(workerDBs[:i])
+			return workload.QueryLoad{}, errors.Wrapf(err, "opening worker %d connection", i)
+		}
+		workerDBs[i] = db
+	}
+
+	dbName, err := currentDatabase(ctx, workerDBs[0])
 	if err != nil {
-		mcp.Close()
+		closeAll(workerDBs)
 		return workload.QueryLoad{}, errors.Wrap(err, "resolving current database")
 	}
-
-	schema, err := DiscoverSchema(db, dbName)
+	schema, err := DiscoverSchema(workerDBs[0], dbName)
 	if err != nil {
-		mcp.Close()
+		closeAll(workerDBs)
 		return workload.QueryLoad{}, errors.Wrap(err, "discovering schema")
 	}
 	graphs := BuildFKGraphs(schema)
 	if len(graphs) == 0 {
-		mcp.Close()
+		closeAll(workerDBs)
 		return workload.QueryLoad{}, errors.Newf(
 			"no FK graphs discovered in database %q; fktxn needs at least one FK constraint",
 			dbName,
@@ -143,8 +150,6 @@ func newOrchestrator(
 
 	o := &orchestrator{
 		cfg:    cfg,
-		mcp:    mcp,
-		db:     db,
 		dbName: dbName,
 		hists:  reg.GetHandle(),
 		graphs: graphs,
@@ -156,7 +161,7 @@ func newOrchestrator(
 
 	state, err := o.buildState(1)
 	if err != nil {
-		mcp.Close()
+		closeAll(workerDBs)
 		return workload.QueryLoad{}, errors.Wrap(err, "building initial sub-DAG")
 	}
 	o.state = state
@@ -167,14 +172,14 @@ func newOrchestrator(
 		// Per-worker RNG: stable across the run (so the same seed reproduces
 		// the same op sequence per worker), independent across workers.
 		rng := rand.New(rand.NewSource(cfg.Seed + int64(i) + 1))
-		workerFns[i] = o.makeWorkerFn(rng)
+		workerFns[i] = o.makeWorkerFn(workerDBs[i], rng)
 	}
 
 	return workload.QueryLoad{
 		WorkerFns: workerFns,
 		Close: func(_ context.Context) error {
-			mcp.Close()
-			return db.Close()
+			closeAll(workerDBs)
+			return nil
 		},
 	}, nil
 }
@@ -183,11 +188,11 @@ func newOrchestrator(
 // chain. Each call snapshots the shared state, runs one chain against it,
 // records latency and outcome, and (if the rotation threshold is crossed)
 // swaps the shared state for the next chain.
-func (o *orchestrator) makeWorkerFn(rng *rand.Rand) func(context.Context) error {
+func (o *orchestrator) makeWorkerFn(db *gosql.DB, rng *rand.Rand) func(context.Context) error {
 	return func(ctx context.Context) error {
 		state := o.snapshotState()
 		w := NewWorker(WorkerConfig{
-			DB:                o.db,
+			DB:                db,
 			Sorted:            state.sorted,
 			Sub:               state.sub,
 			Dropped:           state.dropped,

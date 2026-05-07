@@ -235,7 +235,6 @@ func (g *fkConflict) Ops(
 ) (workload.QueryLoad, error) {
 	cfg := orchestratorConfig{
 		URLs:              urls,
-		ConnFlags:         g.connFlags,
 		Workers:           g.workers,
 		MinChainLen:       g.minChainLen,
 		MaxChainLen:       g.maxChainLen,
