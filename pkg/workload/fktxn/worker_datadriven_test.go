@@ -171,7 +171,7 @@ func datadrivenWorker(
 
 	for c := 0; c < chains; c++ {
 		fmt.Fprintf(&out, "chain %d:\n", c+1)
-		pks, err := AssignPKs(rng, sorted, sub)
+		pks, err := AssignPKs(rng, sorted, sub, nil)
 		require.NoError(t, err)
 		fmt.Fprintf(&out, "  pks: %s\n", formatPKs(sorted, pks))
 

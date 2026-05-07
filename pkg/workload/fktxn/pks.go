@@ -17,21 +17,82 @@ import (
 	"github.com/cockroachdb/errors"
 )
 
-// AssignPKs builds a PKAssignment for one transaction by walking sorted in
-// topological order (parents before children). For each table it samples one
-// fresh PK value per PK column from the column's full type domain, then
-// patches any PK column that is also an FK column (to an in-sub parent) with
-// the value already chosen for the parent. The propagation is what makes
-// schemas like the diamond — where a shared composite-key component (e.g.
-// org_id) is threaded through multiple tables — produce coherent rows: the
-// shared column gets a single agreed value across all FKs that reference it.
+// PKValuePool holds a fixed set of pre-generated values per PK column, keyed
+// by table name and then column name. Workers that share a pool will sample
+// from the same N values per column, producing cross-worker PK overlaps and
+// the source-side serialization conflicts that come with them. A nil pool
+// preserves the original behavior of sampling from each column's full type
+// domain on every call (see AssignPKs).
+type PKValuePool map[string]map[string][]interface{}
+
+// BuildPKValuePool pre-generates poolSize values per PK column across all
+// tables in sorted, using rng for value generation. Callers should pass an
+// orchestrator-owned RNG so workers don't perturb pool contents. Returns an
+// error if any PK column lacks a discovered type.
 //
-// PKs come from the column's type domain (no shared pool), so cross-worker PK
-// collisions are statistically rare. The workload's role is to feed the
-// destination a stream of committed source transactions exercising FK
-// constraints; source-side write-write contention is incidental, not a goal.
-// See "Why no shared PK pool" in the design doc for the rationale.
-func AssignPKs(rng *rand.Rand, sorted []*Table, sub *FKGraph) (PKAssignment, error) {
+// poolSize must be > 0; callers that want pool-free behavior should pass a
+// nil pool to AssignPKs instead of building a zero-sized one.
+func BuildPKValuePool(rng *rand.Rand, sorted []*Table, poolSize int) (PKValuePool, error) {
+	if poolSize <= 0 {
+		return nil, errors.AssertionFailedf("BuildPKValuePool requires poolSize > 0, got %d", poolSize)
+	}
+	pool := make(PKValuePool, len(sorted))
+	for _, tbl := range sorted {
+		pkCols := primaryKeyColumns(tbl)
+		if len(pkCols) == 0 {
+			return nil, errors.Newf("table %s has no primary key", tbl.Name)
+		}
+		colByName := make(map[string]Column, len(tbl.Columns))
+		for _, c := range tbl.Columns {
+			colByName[c.Name] = c
+		}
+		tblPool := make(map[string][]interface{}, len(pkCols))
+		for _, pkCol := range pkCols {
+			col, ok := colByName[pkCol]
+			if !ok {
+				return nil, errors.AssertionFailedf(
+					"PK column %s.%s not found in column list", tbl.Name, pkCol,
+				)
+			}
+			if col.Type == nil {
+				return nil, errors.Newf(
+					"PK column %s.%s has no discovered type", tbl.Name, pkCol,
+				)
+			}
+			values := make([]interface{}, poolSize)
+			for i := 0; i < poolSize; i++ {
+				d := randgen.RandDatum(rng, col.Type, false /* nullOk */)
+				v, err := randworkload.DatumToGoSQL(d)
+				if err != nil {
+					return nil, errors.Wrapf(err, "converting PK datum for %s.%s", tbl.Name, pkCol)
+				}
+				values[i] = v
+			}
+			tblPool[pkCol] = values
+		}
+		pool[tbl.Name] = tblPool
+	}
+	return pool, nil
+}
+
+// AssignPKs builds a PKAssignment for one transaction by walking sorted in
+// topological order (parents before children). For each table it picks one PK
+// value per PK column, then patches any PK column that is also an FK column
+// (to an in-sub parent) with the value already chosen for the parent. The
+// propagation is what makes schemas like the diamond — where a shared
+// composite-key component (e.g. org_id) is threaded through multiple tables —
+// produce coherent rows: the shared column gets a single agreed value across
+// all FKs that reference it.
+//
+// When pool is nil, each PK column is sampled fresh from its full type domain
+// via randgen.RandDatum, so cross-worker collisions are statistically rare.
+// When pool is non-nil, each column is sampled (with replacement) from its
+// pre-built bucket of poolSize values, which deliberately raises the
+// cross-worker collision rate and the source-side serialization that comes
+// with it. See the design doc's "Knobs we should expose" for the rationale.
+func AssignPKs(
+	rng *rand.Rand, sorted []*Table, sub *FKGraph, pool PKValuePool,
+) (PKAssignment, error) {
 	subEdges := make(map[string]bool, len(sub.Edges))
 	for _, e := range sub.Edges {
 		subEdges[e.Name] = true
@@ -64,6 +125,10 @@ func AssignPKs(rng *rand.Rand, sorted []*Table, sub *FKGraph) (PKAssignment, err
 				return nil, errors.Newf(
 					"PK column %s.%s has no discovered type", tbl.Name, pkCol,
 				)
+			}
+			if values, ok := pool.lookup(tbl.Name, pkCol); ok {
+				picked[i] = values[rng.Intn(len(values))]
+				continue
 			}
 			d := randgen.RandDatum(rng, col.Type, false /* nullOk */)
 			v, err := randworkload.DatumToGoSQL(d)
@@ -101,12 +166,30 @@ func AssignPKs(rng *rand.Rand, sorted []*Table, sub *FKGraph) (PKAssignment, err
 	return pks, nil
 }
 
+// lookup returns the pool of pre-generated values for table.col, or
+// (nil, false) when the pool is nil or has no entry for that column. Used by
+// AssignPKs to decide whether to sample from the pool or fall back to fresh
+// type-domain generation.
+func (p PKValuePool) lookup(table, col string) ([]interface{}, bool) {
+	if p == nil {
+		return nil, false
+	}
+	tblPool, ok := p[table]
+	if !ok {
+		return nil, false
+	}
+	values, ok := tblPool[col]
+	if !ok || len(values) == 0 {
+		return nil, false
+	}
+	return values, true
+}
+
 // LookupExistingPK searches for a row in t whose values match the attempted
 // upsert on any non-PK unique constraint, and returns the existing row's PK
-// values in PK column order. The chain pivots to that row when an upsert
-// fails with a unique violation: the worker rewrites pks[t.Name] with the
-// returned PK and re-runs the upsert, which now hits the PK-update path
-// instead of insert+UC violation.
+// values in PK column order. The worker uses this on a unique-violation
+// upsert: it rewrites pks[t.Name] with the returned PK and re-runs the
+// upsert, which now hits the PK-update path instead of insert+UC violation.
 //
 // attempted is the row we tried to insert (column name → value); the lookup
 // uses each non-PK UC's columns to find a matching existing row. The first
@@ -191,10 +274,10 @@ func ucOverlapsPK(uc UniqueConstraint, pkSet map[string]bool) bool {
 // (nil, nil) if the result set is empty.
 func scanPKRow(
 	rows interface {
-	Next() bool
-	Scan(...interface{}) error
-	Close() error
-}, nCols int,
+		Next() bool
+		Scan(...interface{}) error
+		Close() error
+	}, nCols int,
 ) ([]interface{}, error) {
 	defer func() { _ = rows.Close() }()
 	if !rows.Next() {

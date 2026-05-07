@@ -79,7 +79,7 @@ func (s droppedEdgeSet) hasColumn(table, col string) bool {
 // Returns the set of rows emitted, which the caller can use to chain a
 // subsequent UPDATE/DELETE on the same transaction. On failure the partial
 // emitted set is returned alongside the error so callers can inspect what
-// was attempted (e.g. to pivot on a unique-violation collision).
+// was attempted (e.g. to retry on a unique-violation collision).
 func ExecuteUpsert(
 	ctx context.Context,
 	tx dbTx,
@@ -94,7 +94,7 @@ func ExecuteUpsert(
 
 // ExecuteUpsertWithPinned is ExecuteUpsert with an additional override map.
 // For any table in pinned, the pre-built row replaces what buildRow would
-// have produced — used by the worker's unique-violation pivot path to keep
+// have produced — used by the worker's unique-violation retry path to keep
 // the failing row's UC values stable across the retry while a fresh PK is
 // substituted.
 func ExecuteUpsertWithPinned(
@@ -118,7 +118,7 @@ func ExecuteUpsertWithPinned(
 		var row emittedRow
 		if pinnedRow, ok := pinned[t.Name]; ok {
 			// Use the caller's pre-built row, but ensure the PK columns reflect
-			// the (possibly pivoted) PK assignment.
+			// the (possibly retried) PK assignment.
 			row = make(emittedRow, len(pinnedRow))
 			for k, v := range pinnedRow {
 				row[k] = v
@@ -243,8 +243,8 @@ func readBackComputedFKTargets(
 
 // UpsertError tags an ExecuteUpsert failure with the table that hit the
 // error and the row we attempted to insert. The worker uses Table and Row
-// to look up the existing row's PK (via UC values) and pivot the chain on
-// a unique violation.
+// to look up the existing row's PK (via UC values) and retry the upsert
+// against that PK on a unique violation.
 type UpsertError struct {
 	Table string
 	Row   emittedRow

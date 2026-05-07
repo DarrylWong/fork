@@ -41,6 +41,7 @@ type fkConflict struct {
 	updatePct          int
 	deletePct          int
 	tolerateSrcErrors  bool
+	pkPoolSize         int
 
 	// schemaOnce guards lazy schema generation. Tables() and Hooks().PostLoad
 	// both consume the result and may be called in either order; generating
@@ -76,6 +77,7 @@ var fkConflictMeta = workload.Meta{
 			`update-pct`:           {RuntimeOnly: true},
 			`delete-pct`:           {RuntimeOnly: true},
 			`tolerate-src-errors`:  {RuntimeOnly: true},
+			`pk-pool-size`:         {RuntimeOnly: true},
 		}
 		g.flags.IntVar(&g.numTables, `num-tables`, 4,
 			`Number of random tables to generate during init.`)
@@ -99,6 +101,11 @@ var fkConflictMeta = workload.Meta{
 			`Op-mix weight for DELETE in the Exists state.`)
 		g.flags.BoolVar(&g.tolerateSrcErrors, `tolerate-src-errors`, true,
 			`Log and skip source-side errors (FK violations, serialization conflicts) instead of failing.`)
+		g.flags.IntVar(&g.pkPoolSize, `pk-pool-size`, 0,
+			`If >0, sample PK column values from a shared pool of N pre-generated `+
+				`values per column instead of from each column's full type domain. `+
+				`Smaller N raises cross-worker PK overlap and the source-side `+
+				`serialization rate that comes with it. 0 disables pooling.`)
 		RandomSeed.AddFlag(&g.flags)
 		g.connFlags = workload.NewConnFlags(&g.flags)
 		return g
@@ -169,6 +176,9 @@ func (g *fkConflict) validate() error {
 	if g.updatePct+g.deletePct == 0 {
 		return errors.New("at least one of update-pct or delete-pct must be positive")
 	}
+	if g.pkPoolSize < 0 {
+		return errors.Newf("pk-pool-size must be non-negative, got %d", g.pkPoolSize)
+	}
 	return nil
 }
 
@@ -233,6 +243,7 @@ func (g *fkConflict) Ops(
 		Mix:                OpMix{Update: g.updatePct, Delete: g.deletePct},
 		TolerateSrcErrors:  g.tolerateSrcErrors,
 		Seed:               RandomSeed.Seed(),
+		PKPoolSize:         g.pkPoolSize,
 	}
 	return newOrchestrator(ctx, cfg, reg)
 }

@@ -26,11 +26,18 @@ type WorkerConfig struct {
 	DB *gosql.DB
 
 	// Sorted, Sub, Dropped describe the sub-DAG the worker drives. All
-	// workers receive the same sub-DAG; PKs are sampled fresh per chain from
-	// each column's type domain, so cross-worker collisions are incidental.
+	// workers receive the same sub-DAG. Cross-worker PK overlap depends on
+	// PKPool: nil means each chain samples fresh from each column's full
+	// type domain (collisions are incidental); non-nil means sampling
+	// from a shared, bounded pool (collisions are deliberate).
 	Sorted  []*Table
 	Sub     *FKGraph
 	Dropped []FKEdge
+
+	// PKPool, when non-nil, is the orchestrator-built pool that AssignPKs
+	// samples from. All workers in a generation share the same pool so
+	// they collide on PK values across the same bounded keyspace.
+	PKPool PKValuePool
 
 	// Mix controls the relative frequency of Upsert/Update/Delete events
 	// when the chain is in the Exists state. Gone always advances via Upsert.
@@ -72,13 +79,19 @@ func NewWorker(cfg WorkerConfig, rng *rand.Rand) *Worker {
 type ChainResult struct {
 	Attempted int
 	Committed int
-	// PivotAttempted counts upsert events that hit a unique-violation from
-	// Gone and triggered a pivot lookup. PivotSucceeded counts the subset
-	// where the pivot retry committed. Together they expose how often the
-	// workload is running in the saturated UC-violation regime and how
-	// effective the pivot recovery is.
-	PivotAttempted int
-	PivotSucceeded int
+	// RowsWritten is the total number of rows written by committed events
+	// in this chain (one per table for upsert/delete walks, one for
+	// updates). Useful for tracking actual replication volume, since a
+	// committed_txn can range from 1 row (update) to |sub-DAG tables|
+	// (upsert/delete walk).
+	RowsWritten int
+	// RetryAttempted counts upsert events that hit a unique-violation from
+	// Gone and triggered a retry against the existing row's PK.
+	// RetrySucceeded counts the subset where the retry committed. Together
+	// they expose how often the workload is running in the saturated
+	// UC-violation regime and how effective the retry path is.
+	RetryAttempted int
+	RetrySucceeded int
 	// FailedEvent is the FSM event whose action returned the source error
 	// that ended the chain. Nil if the chain ran to completion. Useful for
 	// breaking down contention failures by op type.
@@ -108,7 +121,7 @@ func (r ChainResult) FailureClass() string {
 // doesn't drift from the database. The early-ended attempt still counts in
 // Attempted (it was tried) but not in Committed.
 func (w *Worker) Run(ctx context.Context) (ChainResult, error) {
-	pks, err := AssignPKs(w.rng, w.cfg.Sorted, w.cfg.Sub)
+	pks, err := AssignPKs(w.rng, w.cfg.Sorted, w.cfg.Sub, w.cfg.PKPool)
 	if err != nil {
 		return ChainResult{}, errors.Wrap(err, "assigning PKs")
 	}
@@ -129,12 +142,13 @@ func (w *Worker) Run(ctx context.Context) (ChainResult, error) {
 	for i := 0; i < chainLen; i++ {
 		event := w.cfg.Mix.pickEvent(w.rng, machine.CurState())
 		res.Attempted++
-		pivoted, err := w.applyEvent(ctx, &machine, ext, event)
-		if pivoted.attempted {
-			res.PivotAttempted++
+		ext.lastRowsWritten = 0
+		retried, err := w.applyEvent(ctx, &machine, ext, event)
+		if retried.attempted {
+			res.RetryAttempted++
 		}
-		if pivoted.succeeded {
-			res.PivotSucceeded++
+		if retried.succeeded {
+			res.RetrySucceeded++
 		}
 		if err != nil {
 			if w.cfg.TolerateSrcErrors && isSourceError(err) {
@@ -148,14 +162,15 @@ func (w *Worker) Run(ctx context.Context) (ChainResult, error) {
 			return res, err
 		}
 		res.Committed++
+		res.RowsWritten += ext.lastRowsWritten
 	}
 	return res, nil
 }
 
-// pivotOutcome reports whether applyEvent took the pivot path on a given
-// event. attempted is set whenever the pivot lookup fired; succeeded is the
+// retryOutcome reports whether applyEvent took the retry path on a given
+// event. attempted is set whenever the retry lookup fired; succeeded is the
 // subset where the retry committed.
-type pivotOutcome struct {
+type retryOutcome struct {
 	attempted bool
 	succeeded bool
 }
@@ -168,22 +183,22 @@ type pivotOutcome struct {
 // Special case: a unique-violation upsert from Gone means the row chain's
 // chosen non-PK unique values collided with an existing row. Rather than
 // abort the chain (which would waste the chain's setup and stall progress
-// once the keyspace saturates), the worker pivots to the existing row's PK
-// and retries the upsert once. The second upsert hits the PK-update path
-// instead of insert+UC violation.
+// once the keyspace saturates), the worker rewrites the failing table's PK
+// to the existing row's PK and retries the upsert once. The second upsert
+// hits the PK-update path instead of insert+UC violation.
 func (w *Worker) applyEvent(
 	ctx context.Context, m *fsm.Machine, ext *chainExtended, event fsm.Event,
-) (pivotOutcome, error) {
+) (retryOutcome, error) {
 	tx, err := w.cfg.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return pivotOutcome{}, errors.Wrap(err, "begin")
+		return retryOutcome{}, errors.Wrap(err, "begin")
 	}
 	ext.tx = tx
 
 	if err := m.Apply(ctx, event); err != nil {
 		_ = tx.Rollback()
 		if _, isUpsert := event.(eventUpsert); isUpsert && classifyError(err) == "unique_violation" {
-			outcome, perr := w.pivotAndRetryUpsert(ctx, m, ext, err)
+			outcome, perr := w.retryUpsert(ctx, m, ext, err)
 			if perr != nil {
 				return outcome, perr
 			}
@@ -192,24 +207,24 @@ func (w *Worker) applyEvent(
 			}
 			return outcome, err
 		}
-		return pivotOutcome{}, err
+		return retryOutcome{}, err
 	}
-	return pivotOutcome{}, tx.Commit()
+	return retryOutcome{}, tx.Commit()
 }
 
-// pivotAndRetryUpsert handles a unique-violation upsert from Gone by looking
-// up the existing row on the failing table (via one of its non-PK UCs) and
-// re-running the upsert with that row's PK swapped into ext.pks. The second
+// retryUpsert handles a unique-violation upsert from Gone by looking up the
+// existing row on the failing table (via one of its non-PK UCs) and re-
+// running the upsert with that row's PK swapped into ext.pks. The second
 // upsert hits the PK-update path instead of insert+UC violation. Returns
 // (true, nil) when the retry committed (caller treats the event as
-// successful), (false, nil) when no pivot was possible (caller propagates
+// successful), (false, nil) when no retry was possible (caller propagates
 // the original error), or (_, err) on a fatal secondary failure.
-func (w *Worker) pivotAndRetryUpsert(
+func (w *Worker) retryUpsert(
 	ctx context.Context, m *fsm.Machine, ext *chainExtended, origErr error,
-) (pivotOutcome, error) {
+) (retryOutcome, error) {
 	var ue *UpsertError
 	if !errors.As(origErr, &ue) {
-		return pivotOutcome{}, nil
+		return retryOutcome{}, nil
 	}
 	var failingTable *Table
 	for _, t := range ext.sorted {
@@ -219,33 +234,33 @@ func (w *Worker) pivotAndRetryUpsert(
 		}
 	}
 	if failingTable == nil {
-		return pivotOutcome{}, nil
+		return retryOutcome{}, nil
 	}
 
-	// Past this point we've committed to attempting a pivot — even if the
+	// Past this point we've committed to attempting a retry — even if the
 	// lookup or retry fails, the attempt counter advances so observers see
 	// the workload tried.
-	outcome := pivotOutcome{attempted: true}
+	outcome := retryOutcome{attempted: true}
 
 	// Use a short-lived read-only tx for the lookup so we don't entangle it
 	// with the upsert retry. Could share a tx, but keeping them separate
 	// makes the lookup independently retryable.
 	lookupTx, err := w.cfg.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return outcome, errors.Wrap(err, "pivot lookup begin")
+		return outcome, errors.Wrap(err, "retry lookup begin")
 	}
-	pivotPK, err := LookupExistingPK(ctx, lookupTx, failingTable, ue.Row)
+	existingPK, err := LookupExistingPK(ctx, lookupTx, failingTable, ue.Row)
 	_ = lookupTx.Rollback()
 	if err != nil {
-		return outcome, errors.Wrap(err, "pivot lookup")
+		return outcome, errors.Wrap(err, "retry lookup")
 	}
-	if pivotPK == nil {
+	if existingPK == nil {
 		return outcome, nil
 	}
-	ext.pks[failingTable.Name] = pivotPK
+	ext.pks[failingTable.Name] = existingPK
 
 	// Pin the original row so the retry preserves the UC values that
-	// already exist on the pivoted-to row. Without this, buildRow would
+	// already exist on the target row. Without this, buildRow would
 	// regenerate fresh random UC values that would likely collide again.
 	if ext.pinnedRows == nil {
 		ext.pinnedRows = make(map[string]emittedRow, 1)
@@ -256,7 +271,7 @@ func (w *Worker) pivotAndRetryUpsert(
 	// Restart the upsert in a fresh transaction.
 	tx, err := w.cfg.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return outcome, errors.Wrap(err, "pivot begin")
+		return outcome, errors.Wrap(err, "retry begin")
 	}
 	ext.tx = tx
 	applyErr := m.Apply(ctx, eventUpsert{})

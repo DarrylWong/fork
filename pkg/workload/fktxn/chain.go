@@ -48,7 +48,7 @@ func (eventDelete) Event() {}
 // wrapper can be substituted by tests; production sets it to a *sql.Tx.
 //
 // pinnedRows, if non-nil, lets the worker hand a pre-built row to the next
-// upsert for one or more tables. Used by the unique-violation pivot path:
+// upsert for one or more tables. Used by the unique-violation retry path:
 // after looking up the existing PK for a row that collided on a non-PK UC,
 // the worker pins the original attempted row (with the new PK substituted)
 // so the retry upsert preserves the UC values that already exist on that
@@ -62,6 +62,10 @@ type chainExtended struct {
 	dropped    []FKEdge
 	pks        PKAssignment
 	pinnedRows map[string]emittedRow
+	// lastRowsWritten is set by each runner to the number of rows written
+	// by its action (e.g. one per table for upsert/delete walks, one for
+	// update). Read and reset by the caller after each event commits.
+	lastRowsWritten int
 }
 
 // chainTransitions defines the valid (state, event) → (next state, action)
@@ -99,8 +103,12 @@ func runUpsert(a fsm.Args) error {
 	if !ok {
 		return errors.AssertionFailedf("chain action: bad extended state %T", a.Extended)
 	}
-	_, err := ExecuteUpsertWithPinned(a.Ctx, c.tx, c.rng, c.sorted, c.sub, c.dropped, c.pks, c.pinnedRows)
-	return err
+	emitted, err := ExecuteUpsertWithPinned(a.Ctx, c.tx, c.rng, c.sorted, c.sub, c.dropped, c.pks, c.pinnedRows)
+	if err != nil {
+		return err
+	}
+	c.lastRowsWritten = len(emitted)
+	return nil
 }
 
 func runUpdate(a fsm.Args) error {
@@ -108,8 +116,14 @@ func runUpdate(a fsm.Args) error {
 	if !ok {
 		return errors.AssertionFailedf("chain action: bad extended state %T", a.Extended)
 	}
-	_, err := ExecuteUpdate(a.Ctx, c.tx, c.rng, c.sorted, c.sub, c.pks)
-	return err
+	updated, err := ExecuteUpdate(a.Ctx, c.tx, c.rng, c.sorted, c.sub, c.pks)
+	if err != nil {
+		return err
+	}
+	if updated {
+		c.lastRowsWritten = 1
+	}
+	return nil
 }
 
 func runDelete(a fsm.Args) error {
@@ -117,8 +131,14 @@ func runDelete(a fsm.Args) error {
 	if !ok {
 		return errors.AssertionFailedf("chain action: bad extended state %T", a.Extended)
 	}
-	_, err := ExecuteDelete(a.Ctx, c.tx, c.sorted, c.pks)
-	return err
+	deleted, err := ExecuteDelete(a.Ctx, c.tx, c.sorted, c.pks)
+	if err != nil {
+		return err
+	}
+	if deleted {
+		c.lastRowsWritten = len(c.sorted)
+	}
+	return nil
 }
 
 // OpMix weights the choice between Update and Delete when the chain is in

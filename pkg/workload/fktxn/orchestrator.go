@@ -38,6 +38,11 @@ type orchestratorConfig struct {
 	Mix                OpMix
 	TolerateSrcErrors  bool
 	Seed               int64
+	// PKPoolSize, when > 0, makes AssignPKs sample from a shared pool of
+	// PKPoolSize pre-generated values per PK column instead of from each
+	// column's full type domain. Smaller values raise the cross-worker PK
+	// overlap rate and the source-side serialization that comes with it.
+	PKPoolSize int
 }
 
 // orchestrator owns the shared sub-DAG and PK pool that all workers operate
@@ -91,6 +96,10 @@ type sharedState struct {
 	sorted     []*Table
 	sub        *FKGraph
 	dropped    []FKEdge
+	// pkPool, when non-nil, is a shared per-PK-column value pool that
+	// workers in this generation sample from. Built fresh per rotation so
+	// each generation gets an independent keyspace. Nil when PKPoolSize=0.
+	pkPool PKValuePool
 }
 
 // newOrchestrator wires up the connection pool, discovers the schema, builds
@@ -182,6 +191,7 @@ func (o *orchestrator) makeWorkerFn(rng *rand.Rand) func(context.Context) error 
 			Sorted:            state.sorted,
 			Sub:               state.sub,
 			Dropped:           state.dropped,
+			PKPool:            state.pkPool,
 			Mix:               o.cfg.Mix,
 			MinChainLen:       o.cfg.MinChainLen,
 			MaxChainLen:       o.cfg.MaxChainLen,
@@ -202,16 +212,25 @@ func (o *orchestrator) makeWorkerFn(rng *rand.Rand) func(context.Context) error 
 				o.hists.Get(`committed_txn`).Record(perTxn)
 			}
 		}
-		// Record one observation per pivot attempt / success. The latency is
-		// the chain's elapsed time — pivot work isn't separately timed, but
+		// Record one observation per row written. ops/sec on rows_written
+		// reflects actual replication volume, which can differ markedly
+		// from committed_txn/sec depending on op mix and sub-DAG size.
+		if res.RowsWritten > 0 {
+			perRow := elapsed / time.Duration(res.RowsWritten)
+			for i := 0; i < res.RowsWritten; i++ {
+				o.hists.Get(`rows_written`).Record(perRow)
+			}
+		}
+		// Record one observation per retry attempt / success. The latency is
+		// the chain's elapsed time — retry work isn't separately timed, but
 		// using the chain elapsed keeps the histograms comparable to the
 		// `chain` metric and the rate column (ops/sec) is what matters for
-		// pivot-effectiveness analysis.
-		for i := 0; i < res.PivotAttempted; i++ {
-			o.hists.Get(`pivot_attempted`).Record(elapsed)
+		// retry-effectiveness analysis.
+		for i := 0; i < res.RetryAttempted; i++ {
+			o.hists.Get(`retry_attempted`).Record(elapsed)
 		}
-		for i := 0; i < res.PivotSucceeded; i++ {
-			o.hists.Get(`pivot_succeeded`).Record(elapsed)
+		for i := 0; i < res.RetrySucceeded; i++ {
+			o.hists.Get(`retry_succeeded`).Record(elapsed)
 		}
 		if class := res.FailureClass(); class != "" {
 			o.hists.Get(class).Record(elapsed)
@@ -298,12 +317,24 @@ func (o *orchestrator) buildState(generation uint64) (*sharedState, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "selecting sub-DAG")
 	}
-	return &sharedState{
+	state := &sharedState{
 		generation: generation,
 		sorted:     sorted,
 		sub:        sub,
 		dropped:    dropped,
-	}, nil
+	}
+	if o.cfg.PKPoolSize > 0 {
+		// BuildPKValuePool wants a math/rand v1 RNG (matching randgen's API).
+		// Seed it from orchRNG so pool generation is deterministic per
+		// generation and independent of worker RNGs.
+		poolRNG := rand.New(rand.NewSource(int64(o.orchRNG.Uint64())))
+		pool, err := BuildPKValuePool(poolRNG, sorted, o.cfg.PKPoolSize)
+		if err != nil {
+			return nil, errors.Wrap(err, "building PK value pool")
+		}
+		state.pkPool = pool
+	}
+	return state, nil
 }
 
 // currentDatabase returns the connection's current database name.

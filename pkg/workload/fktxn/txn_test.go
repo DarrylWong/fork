@@ -82,7 +82,7 @@ func (s *shardSetup) runUpsertOnce(t *testing.T, rng *rand.Rand) (emittedSet, PK
 	ctx := context.Background()
 	testDB := s.srv.ApplicationLayer().SQLConn(t, serverutils.DBName(s.dbName))
 
-	pks, err := AssignPKs(rng, s.sorted, s.sub)
+	pks, err := AssignPKs(rng, s.sorted, s.sub, nil)
 	require.NoError(t, err)
 
 	tx, err := testDB.BeginTx(ctx, nil)
@@ -239,7 +239,7 @@ func TestExecuteUpdate_NoTargetRow(t *testing.T) {
 	setup := newShardSetup(t, srv, dbName, rng)
 
 	// Don't insert anything. Try to update; should return false.
-	pks, err := AssignPKs(rng, setup.sorted, setup.sub)
+	pks, err := AssignPKs(rng, setup.sorted, setup.sub, nil)
 	require.NoError(t, err)
 
 	testDB := srv.ApplicationLayer().SQLConn(t, serverutils.DBName(dbName))
@@ -272,7 +272,7 @@ func TestExecuteDelete_RowNotPresent(t *testing.T) {
 	setup := newShardSetup(t, srv, dbName, rng)
 
 	// Don't insert anything. Try to delete; should return false.
-	pks, err := AssignPKs(rng, setup.sorted, setup.sub)
+	pks, err := AssignPKs(rng, setup.sorted, setup.sub, nil)
 	require.NoError(t, err)
 
 	testDB := srv.ApplicationLayer().SQLConn(t, serverutils.DBName(dbName))
