@@ -29,15 +29,15 @@ import (
 // and handed to the orchestrator. It owns the connection details, worker
 // shape, and op mix.
 type orchestratorConfig struct {
-	URLs               []string
-	ConnFlags          *workload.ConnFlags
-	Workers            int
-	MinChainLen        int
-	MaxChainLen        int
-	SubDAGRotateChains int
-	Mix                OpMix
-	TolerateSrcErrors  bool
-	Seed               int64
+	URLs              []string
+	ConnFlags         *workload.ConnFlags
+	Workers           int
+	MinChainLen       int
+	MaxChainLen       int
+	OpsPerRotation    int
+	Mix               OpMix
+	TolerateSrcErrors bool
+	Seed              int64
 	// PKPoolSize, when > 0, makes AssignPKs sample from a shared pool of
 	// PKPoolSize pre-generated values per PK column instead of from each
 	// column's full type domain. Smaller values raise the cross-worker PK
@@ -259,7 +259,7 @@ func (o *orchestrator) snapshotState() *sharedState {
 // performs the swap; concurrent observers re-check under the write lock and
 // no-op if the swap already happened.
 func (o *orchestrator) maybeRotate(ctx context.Context, count uint64) {
-	threshold := uint64(o.cfg.SubDAGRotateChains)
+	threshold := uint64(o.cfg.OpsPerRotation)
 	if threshold == 0 {
 		return
 	}

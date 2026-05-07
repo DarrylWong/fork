@@ -31,17 +31,17 @@ type fkConflict struct {
 	flags     workload.Flags
 	connFlags *workload.ConnFlags
 
-	numTables          int
-	fkDensity          float64
-	requireMinFKs      int
-	workers            int
-	minChainLen        int
-	maxChainLen        int
-	subdagRotateChains int
-	updatePct          int
-	deletePct          int
-	tolerateSrcErrors  bool
-	pkPoolSize         int
+	numTables         int
+	fkDensity         float64
+	requireMinFKs     int
+	workers           int
+	minChainLen       int
+	maxChainLen       int
+	opsPerRotation    int
+	updatePct         int
+	deletePct         int
+	tolerateSrcErrors bool
+	pkPoolSize        int
 
 	// schemaOnce guards lazy schema generation. Tables() and Hooks().PostLoad
 	// both consume the result and may be called in either order; generating
@@ -70,14 +70,14 @@ var fkConflictMeta = workload.Meta{
 		g.flags.FlagSet = pflag.NewFlagSet(`fktxn`, pflag.ContinueOnError)
 		// num-tables affects schema generation; the rest are runtime-only.
 		g.flags.Meta = map[string]workload.FlagMeta{
-			`workers`:              {RuntimeOnly: true},
-			`min-chain-len`:        {RuntimeOnly: true},
-			`max-chain-len`:        {RuntimeOnly: true},
-			`subdag-rotate-chains`: {RuntimeOnly: true},
-			`update-pct`:           {RuntimeOnly: true},
-			`delete-pct`:           {RuntimeOnly: true},
-			`tolerate-src-errors`:  {RuntimeOnly: true},
-			`pk-pool-size`:         {RuntimeOnly: true},
+			`workers`:             {RuntimeOnly: true},
+			`min-chain-len`:       {RuntimeOnly: true},
+			`max-chain-len`:       {RuntimeOnly: true},
+			`ops-per-rotation`:    {RuntimeOnly: true},
+			`update-pct`:          {RuntimeOnly: true},
+			`delete-pct`:          {RuntimeOnly: true},
+			`tolerate-src-errors`: {RuntimeOnly: true},
+			`pk-pool-size`:        {RuntimeOnly: true},
 		}
 		g.flags.IntVar(&g.numTables, `num-tables`, 4,
 			`Number of random tables to generate during init.`)
@@ -93,8 +93,8 @@ var fkConflictMeta = workload.Meta{
 			`Minimum txns per chain.`)
 		g.flags.IntVar(&g.maxChainLen, `max-chain-len`, 5,
 			`Maximum txns per chain.`)
-		g.flags.IntVar(&g.subdagRotateChains, `subdag-rotate-chains`, 10000,
-			`Re-pick the sub-DAG every N chains. 0 disables rotation.`)
+		g.flags.IntVar(&g.opsPerRotation, `ops-per-rotation`, 10000,
+			`Re-pick the sub-DAG every N committed chains. 0 disables rotation.`)
 		g.flags.IntVar(&g.updatePct, `update-pct`, 70,
 			`Op-mix weight for UPDATE in the Exists state.`)
 		g.flags.IntVar(&g.deletePct, `delete-pct`, 30,
@@ -229,21 +229,21 @@ func (g *fkConflict) ensureSchema() {
 // Ops implements the Opser interface. It connects to the database, discovers
 // the schema, and hands the static run config to a fresh orchestrator that
 // produces per-worker functions. All workers share one sub-DAG; rotation
-// happens in-band when --subdag-rotate-chains is positive.
+// happens in-band when --ops-per-rotation is positive.
 func (g *fkConflict) Ops(
 	ctx context.Context, urls []string, reg *histogram.Registry,
 ) (workload.QueryLoad, error) {
 	cfg := orchestratorConfig{
-		URLs:               urls,
-		ConnFlags:          g.connFlags,
-		Workers:            g.workers,
-		MinChainLen:        g.minChainLen,
-		MaxChainLen:        g.maxChainLen,
-		SubDAGRotateChains: g.subdagRotateChains,
-		Mix:                OpMix{Update: g.updatePct, Delete: g.deletePct},
-		TolerateSrcErrors:  g.tolerateSrcErrors,
-		Seed:               RandomSeed.Seed(),
-		PKPoolSize:         g.pkPoolSize,
+		URLs:              urls,
+		ConnFlags:         g.connFlags,
+		Workers:           g.workers,
+		MinChainLen:       g.minChainLen,
+		MaxChainLen:       g.maxChainLen,
+		OpsPerRotation:    g.opsPerRotation,
+		Mix:               OpMix{Update: g.updatePct, Delete: g.deletePct},
+		TolerateSrcErrors: g.tolerateSrcErrors,
+		Seed:              RandomSeed.Seed(),
+		PKPoolSize:        g.pkPoolSize,
 	}
 	return newOrchestrator(ctx, cfg, reg)
 }
