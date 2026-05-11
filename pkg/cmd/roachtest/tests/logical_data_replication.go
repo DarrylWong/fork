@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"math/rand"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -577,6 +579,21 @@ func TestLDRConflict(
 	verifyConflictCorrectness(ctx, t, setup, leftJobID, rightJobID)
 }
 
+// newFKTxnSchemaSeedSource returns a function that yields a schema seed per
+// call. When COCKROACH_RANDOM_SEED is set, every call returns that seed — the
+// retry loop will burn its budget on the same schema, which is what we want
+// when reproducing a specific failure. Otherwise each call draws a fresh seed
+// from a shared rng so the loop tries different schemas.
+func newFKTxnSchemaSeedSource() func() int64 {
+	if v, ok := os.LookupEnv("COCKROACH_RANDOM_SEED"); ok {
+		if seed, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return func() int64 { return seed }
+		}
+	}
+	rng, _ := randutil.NewPseudoRand()
+	return func() int64 { return rng.Int63() }
+}
+
 // TestLDRFKTxn exercises LDR replication of FK-bearing tables. The fktxn
 // workload generates a random schema with FK constraints (deterministic from
 // the seed) and drives concurrent transactions against it. Both clusters are
@@ -630,16 +647,12 @@ func TestLDRFKTxn(
 	setup.right.sysSQL.Exec(t,
 		"SET CLUSTER SETTING server.debug.default_vmodule = 'txn_applier=1,txnmode=1'")
 
-	// NB: NewPseudoRand honors COCKROACH_RANDOM_SEED, so calling it inside
-	// the retry loop returns the same seed every iteration when the env var
-	// is set (which roachtest does for reproducibility). Draw the per-attempt
-	// seed from a single rng instead so each attempt tries a fresh schema.
-	rng, _ := randutil.NewPseudoRand()
+	getSeed := newFKTxnSchemaSeedSource()
 	var seed int64
 	var leftJobID, rightJobID int
 	var lastErr error
 	for attempt := 1; attempt <= maxSeedAttempts; attempt++ {
-		seed = rng.Int63()
+		seed = getSeed()
 		t.L().Printf("attempt %d: trying fktxn schema with seed=%d", attempt, seed)
 
 		// Reset both clusters to a clean slate. Cancel any LDR jobs from a
