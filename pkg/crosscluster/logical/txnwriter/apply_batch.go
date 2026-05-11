@@ -7,9 +7,12 @@ package txnwriter
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/cockroachdb/cockroach/pkg/crosscluster/logical/ldrdecoder"
 	"github.com/cockroachdb/cockroach/pkg/crosscluster/logical/sqlwriter"
+	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/errors"
 )
 
@@ -41,11 +44,18 @@ func (tw *transactionWriter) ApplyBatch(
 		return tw.tryApply(ctx, transactions, results)
 	})
 	if err == nil {
+		// DNM: log DLQs from the first-attempt path.
+		logDLQs(ctx, "first-attempt", transactions, results)
 		return results, nil
 	}
 	if !errors.Is(err, sqlwriter.ErrStalePreviousValue) {
 		return nil, err
 	}
+
+	// DNM: log refresh-retry trigger.
+	log.Dev.Infof(ctx,
+		"DNM-apply: first attempt failed with stale previous value, refreshing batch of %d txns",
+		len(transactions))
 
 	err = tw.session.Txn(ctx, func(ctx context.Context) error {
 		clear(results)
@@ -59,7 +69,48 @@ func (tw *transactionWriter) ApplyBatch(
 		return nil, err
 	}
 
+	// DNM: surface any DLQ outcomes from the retry path so they can be
+	// correlated with the refresh log lines above.
+	logDLQs(ctx, "after-refresh", transactions, results)
+
 	return results, nil
+}
+
+// DNM: logDLQs prints one line per DLQ'd txn with its writeset shape so we can
+// correlate DLQ outcomes with refresh and decode-time logs.
+func logDLQs(
+	ctx context.Context, phase string, transactions []ldrdecoder.Transaction, results []ApplyResult,
+) {
+	for i := range results {
+		if results[i].DlqReason == nil {
+			continue
+		}
+		log.Dev.Infof(ctx,
+			"DNM-apply: phase=%s txn=%s DLQ: %v; writeset=%s",
+			phase, transactions[i].TxnID.Timestamp, results[i].DlqReason,
+			formatWriteSetForLog(transactions[i].WriteSet))
+	}
+}
+
+// DNM: formatWriteSetForLog renders a writeset for diagnostic logging.
+func formatWriteSetForLog(rows []ldrdecoder.DecodedRow) string {
+	parts := make([]string, len(rows))
+	for i, r := range rows {
+		op := "?"
+		switch {
+		case r.IsDeleteRow():
+			op = "DELETE"
+		case r.IsTombstoneUpdate():
+			op = "TOMBSTONE"
+		case r.IsInsertRow():
+			op = "INSERT"
+		case r.IsUpdateRow():
+			op = "UPDATE"
+		}
+		parts[i] = fmt.Sprintf("%s(table=%d row_len=%d prev_len=%d)",
+			op, r.TableID, len(r.Row), len(r.PrevRow))
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 func (tw *transactionWriter) tryApply(

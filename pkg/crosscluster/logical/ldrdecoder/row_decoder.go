@@ -19,6 +19,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
+	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/errors"
 )
 
@@ -132,13 +133,21 @@ func (t *tableDecoder) decodeEvent(
 		}
 	}
 
-	return DecodedRow{
+	dr := DecodedRow{
 		TableID:      dstTable.id,
 		IsDelete:     decodedRow.IsDeleted(),
 		RowTimestamp: event.KeyValue.Value.Timestamp,
 		Row:          row,
 		PrevRow:      prevRow,
-	}, decodedRow, nil
+	}
+	// DNM: log every delete event's PrevValue presence so we can tell whether
+	// rangefeed-source tombstone updates are reaching the consumer.
+	if dr.IsDelete {
+		log.Dev.Infof(ctx,
+			"DNM-decode: delete event table=%d ts=%s prev_value_present=%t prev_row_len=%d",
+			dr.TableID, dr.RowTimestamp, event.PrevValue.RawBytes != nil, len(dr.PrevRow))
+	}
+	return dr, decodedRow, nil
 }
 
 // toLocalDatums creates a row with the types of the datums converted to to the

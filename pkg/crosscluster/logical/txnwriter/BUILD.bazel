@@ -19,6 +19,7 @@ go_library(
         "//pkg/sql/catalog/lease",
         "//pkg/sql/isql",
         "//pkg/sql/sem/tree",
+        "//pkg/util/log",
         "@com_github_cockroachdb_errors//:errors",
     ],
 )

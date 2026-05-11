@@ -12,6 +12,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/crosscluster/logical/sqlwriter"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
+	"github.com/cockroachdb/cockroach/pkg/util/log"
 )
 
 // refresh reads local state for all rows in the batch and builds new
@@ -75,6 +76,10 @@ func (tw *transactionWriter) refresh(
 			pr, rowExists := priorRows[idx]
 
 			if rowExists && !pr.LogicalTimestamp.Less(transaction.TxnID.Timestamp) {
+				// DNM
+				log.Dev.Infof(ctx,
+					"DNM-refresh: txn=%s table=%d row=%d dropped as LWW loser (local_ts=%s)",
+					transaction.TxnID.Timestamp, row.TableID, rowIdx, pr.LogicalTimestamp)
 				results[txnIdx].LwwLoserRows++
 				continue
 			}
@@ -84,6 +89,17 @@ func (tw *transactionWriter) refresh(
 				refreshedRow.PrevRow = pr.Row
 			} else {
 				refreshedRow.PrevRow = nil
+			}
+			// DNM: surface refresh-induced PrevRow rewrites. The interesting case
+			// is a delete whose PrevRow is rewritten to nil — that turns it into
+			// a tombstone update, which the apply path silently no-ops.
+			origHadPrev := len(row.PrevRow) > 0
+			newHasPrev := len(refreshedRow.PrevRow) > 0
+			if origHadPrev != newHasPrev || row.IsDelete {
+				log.Dev.Infof(ctx,
+					"DNM-refresh: txn=%s table=%d row=%d is_delete=%t orig_prev_present=%t new_prev_present=%t row_exists_local=%t",
+					transaction.TxnID.Timestamp, row.TableID, rowIdx,
+					row.IsDelete, origHadPrev, newHasPrev, rowExists)
 			}
 			writeSet = append(writeSet, refreshedRow)
 		}
