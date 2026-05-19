@@ -381,6 +381,21 @@ func newCheckpointHandler(
 func (ch *checkpointHandler) handleMeta(
 	ctx context.Context, meta *execinfrapb.ProducerMetadata,
 ) error {
+	if meta.Err != nil {
+		// The broken applier and the coordinator deadlock on each other
+		// during shutdown. The broken applier's DrainHelper waits for its
+		// input RowChannel (fed by the coordinator) to close. That channel
+		// only closes when the coordinator's Run loop exits, which only
+		// happens when the coordinator's router aggregated status flips to
+		// DrainRequested — which requires every applier output stream to
+		// be draining. With N-1 healthy sibling appliers still in
+		// NeedMoreRows, that aggregated status stays NeedMoreRows
+		// indefinitely, so the coordinator keeps Pushing forever and the
+		// broken applier never finishes draining. Cancel the flow context
+		// here to break the deadlock via ctx.Done and gRPC stream closure.
+		ch.cancelFlow()
+		return nil
+	}
 	if meta.BulkProcessorProgress == nil {
 		return nil
 	}
@@ -400,34 +415,39 @@ func (ch *checkpointHandler) handleMeta(
 		return nil
 	}
 
-	if replicatedTime.LessEq(ch.replicatedTime) {
-		return nil
+	// Skip the persist + frontier broadcast if the frontier hasn't advanced,
+	// but always fall through to the endTime check below. On retry the
+	// resumer seeds replicatedTime to the prior captured conflict timestamp;
+	// the merge feed emits a synthetic checkpoint at that same timestamp,
+	// so the frontier never advances. Returning early here would mean the
+	// endTime check is never reached, and the job hangs instead of pausing.
+	if ch.replicatedTime.Less(replicatedTime) {
+		//lint:ignore SA1019 deprecated updater sets HighWater and ReplicatedTime on progress proto
+		if err := ch.job.DeprecatedNoTxn().Update(ctx,
+			func(txn isql.Txn, md jobs.DeprecatedJobMetadata, ju *jobs.DeprecatedJobUpdater) error {
+				if err := md.CheckRunningOrReverting(); err != nil {
+					return err
+				}
+				progress := md.Progress
+				prog := progress.Details.(*jobspb.Progress_LogicalReplication).LogicalReplication
+				prog.ReplicatedTime = replicatedTime
+				progress.Progress = &jobspb.Progress_HighWater{
+					HighWater: &replicatedTime,
+				}
+				ju.UpdateProgress(progress)
+				return nil
+			}); err != nil {
+			return err
+		}
+		ch.replicatedTime = replicatedTime
+
+		select {
+		case ch.frontierUpdates <- replicatedTime:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 
-	//lint:ignore SA1019 deprecated updater sets HighWater and ReplicatedTime on progress proto
-	if err := ch.job.DeprecatedNoTxn().Update(ctx,
-		func(txn isql.Txn, md jobs.DeprecatedJobMetadata, ju *jobs.DeprecatedJobUpdater) error {
-			if err := md.CheckRunningOrReverting(); err != nil {
-				return err
-			}
-			progress := md.Progress
-			prog := progress.Details.(*jobspb.Progress_LogicalReplication).LogicalReplication
-			prog.ReplicatedTime = replicatedTime
-			progress.Progress = &jobspb.Progress_HighWater{
-				HighWater: &replicatedTime,
-			}
-			ju.UpdateProgress(progress)
-			return nil
-		}); err != nil {
-		return err
-	}
-	ch.replicatedTime = replicatedTime
-
-	select {
-	case ch.frontierUpdates <- replicatedTime:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 	if !replicatedTime.Less(ch.endTime.Prev()) {
 		ch.cancelFlow()
 		log.Dev.Infof(ctx, "reached end time: %s", ch.endTime.GoTime())
