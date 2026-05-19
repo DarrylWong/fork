@@ -23,6 +23,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util/ctxgroup"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
+	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 	"github.com/cockroachdb/errors"
 	pbtypes "github.com/gogo/protobuf/types"
@@ -60,6 +61,11 @@ type ldrApplierProcessor struct {
 	// the Applier.Run() goroutine.
 	applierEvents chan txnapply.ApplierEvent
 
+	// errCh surfaces the first error from a background goroutine to Next(),
+	// which then moves the processor to draining. Buffered so non-blocking
+	// sendError calls never block; only the first error is retained.
+	errCh chan error
+
 	// grp manages the lifecycle of the input reader, applier, and
 	// backchannel forwarder goroutines. cancelGrp cancels the context
 	// used by grp, allowing close() to unblock goroutines waiting on
@@ -84,10 +90,15 @@ func (p *ldrApplierProcessor) Start(ctx context.Context) {
 	p.grpCtx = grpCtx
 	p.grp = ctxgroup.WithContext(grpCtx)
 
+	// TODO(darryl): explain why each goroutine routes its error through
+	// errCh and returns nil instead of letting ctxgroup propagate it.
+
 	// Read coordinator input rows, deserialize, and feed to the Applier.
 	p.grp.GoCtx(func(ctx context.Context) error {
 		defer close(p.applierEvents)
-		return p.runInputReader(ctx)
+		err := p.runInputReader(ctx)
+		p.sendError(ctx, err)
+		return nil
 	})
 
 	// Run the Applier's internal pipeline.
@@ -95,13 +106,17 @@ func (p *ldrApplierProcessor) Start(ctx context.Context) {
 		// Closing the applier here ensures the frontier channel closes, allowing
 		// Next() to proceed if the applier errrors.
 		defer p.applier.Close(ctx)
-		return p.applier.Run(ctx, p.applierEvents)
+		err := p.applier.Run(ctx, p.applierEvents)
+		p.sendError(ctx, err)
+		return nil
 	})
 
 	// Forward loopback updates from the dep resolver to the Receive()
 	// channel or to the output.
 	p.grp.GoCtx(func(ctx context.Context) error {
-		return p.depResolver.RunBackchannelForwarder(ctx, p.loopbackChs.updateCh)
+		err := p.depResolver.RunBackchannelForwarder(ctx, p.loopbackChs.updateCh)
+		p.sendError(ctx, err)
+		return nil
 	})
 }
 
@@ -156,38 +171,56 @@ func (p *ldrApplierProcessor) setup(ctx context.Context) error {
 	}
 
 	p.applierEvents = make(chan txnapply.ApplierEvent)
+	p.errCh = make(chan error, 1)
 
 	p.loopbackChs = ldrLoopback.lookupOrCreate(p.FlowCtx, p.spec.ApplierID)
 	return nil
 }
 
+// sendError records the first non-nil error from a background goroutine.
+// Subsequent errors are dropped — later goroutines typically fail with
+// context.Canceled once the grp tears down.
+func (p *ldrApplierProcessor) sendError(ctx context.Context, err error) {
+	if err == nil {
+		return
+	}
+	select {
+	case p.errCh <- err:
+	default:
+		log.Dev.VInfof(ctx, 2, "dropping additional error: %s", err)
+	}
+}
+
 // Next implements execinfra.RowSource. It multiplexes dep resolver output
 // rows and applier frontier metadata.
 func (p *ldrApplierProcessor) Next() (rowenc.EncDatumRow, *execinfrapb.ProducerMetadata) {
-	for p.State == execinfra.StateRunning {
-		select {
-		case ev, ok := <-p.depResolver.OutCh():
-			if !ok {
-				p.MoveToDraining(nil)
-				break
-			}
-			row, err := p.encodeDepResolverEvent(ev)
-			if err != nil {
-				p.MoveToDraining(errors.Wrap(err, "encoding dep resolver event"))
-				break
-			}
-			return row, nil
-
-		case frontier, ok := <-p.applier.Frontier():
-			if !ok {
-				p.MoveToDraining(nil)
-				break
-			}
-			meta := p.encodeFrontierMeta(frontier)
-			return nil, meta
-		}
+	if p.State != execinfra.StateRunning {
+		return nil, p.DrainHelper()
 	}
-	return nil, p.DrainHelper()
+	select {
+	case err := <-p.errCh:
+		p.MoveToDraining(err)
+		return nil, p.DrainHelper()
+
+	case ev, ok := <-p.depResolver.OutCh():
+		if !ok {
+			p.MoveToDraining(nil)
+			return nil, p.DrainHelper()
+		}
+		row, err := p.encodeDepResolverEvent(ev)
+		if err != nil {
+			p.MoveToDraining(errors.Wrap(err, "encoding dep resolver event"))
+			return nil, p.DrainHelper()
+		}
+		return row, nil
+
+	case frontier, ok := <-p.applier.Frontier():
+		if !ok {
+			p.MoveToDraining(nil)
+			return nil, p.DrainHelper()
+		}
+		return nil, p.encodeFrontierMeta(frontier)
+	}
 }
 
 func (p *ldrApplierProcessor) ConsumerClosed() {
@@ -195,12 +228,12 @@ func (p *ldrApplierProcessor) ConsumerClosed() {
 }
 
 // close cancels background goroutines, waits for them to exit, and cleans up
-// resources. It returns any non-cancellation error from the ctxgroup as
-// trailing metadata so the TrailingMetaCallback can plumb it back to the
-// distsql flow consumer.
-func (p *ldrApplierProcessor) close() []execinfrapb.ProducerMetadata {
+// resources. Background goroutine errors reach the consumer through errCh in
+// Next() rather than via trailing metadata, so grp.Wait() is only used to
+// synchronize on shutdown.
+func (p *ldrApplierProcessor) close() {
 	if p.Closed {
-		return nil
+		return
 	}
 
 	// Cancel the goroutine context to unblock any goroutines waiting on
@@ -208,13 +241,9 @@ func (p *ldrApplierProcessor) close() []execinfrapb.ProducerMetadata {
 	if p.cancelGrp != nil {
 		p.cancelGrp()
 	}
-	var meta []execinfrapb.ProducerMetadata
-	if err := p.grp.Wait(); err != nil && !errors.Is(err, context.Canceled) {
-		meta = append(meta, execinfrapb.ProducerMetadata{Err: err})
-	}
+	_ = p.grp.Wait()
 
 	p.InternalClose()
-	return meta
 }
 
 // runInputReader reads input rows from the coordinator, deserializes them
@@ -347,7 +376,8 @@ func init() {
 			execinfra.ProcStateOpts{
 				InputsToDrain: []execinfra.RowSource{input},
 				TrailingMetaCallback: func() []execinfrapb.ProducerMetadata {
-					return proc.close()
+					proc.close()
+					return nil
 				},
 			},
 		)
